@@ -1,0 +1,5 @@
+allowBuilds:
+  esbuild: true
+# The Agent SDK ships often; let new releases install without the age delay.
+minimumReleaseAgeExclude:
+  - '@anthropic-ai/claude-agent-sdk*'

@@ -1,0 +1,16 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --color-accent: #c96442;
+}
+
+html, body, #root { height: 100%; }
+body { @apply bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 antialiased; }
+
+.prose pre { @apply bg-zinc-100 text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 text-[13px]; }
+.prose :where(code):not(:where(pre *))::before,
+.prose :where(code):not(:where(pre *))::after { content: none; }
+.prose :where(code):not(:where(pre *)) { @apply rounded bg-zinc-100 px-1 py-0.5 font-normal dark:bg-zinc-800; }
