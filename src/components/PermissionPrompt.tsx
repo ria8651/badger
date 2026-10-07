@@ -1,10 +1,10 @@
-import { For, Match, Show, Switch, createSignal, splitProps, type JSX } from 'solid-js'
+import { For, Match, Show, Switch, createSignal, type JSX } from 'solid-js'
 import { createStore } from 'solid-js/store'
-import { ShieldQuestion } from 'lucide-solid'
 import type { PendingPermission, PermissionMode } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
 import { Markdown } from './Markdown.tsx'
 import { ToolInput, relPath, toolSummary } from './ToolCard.tsx'
+import { Button, inputClass } from './ui.tsx'
 
 export function PermissionPrompt(props: { sessionId: string; permission: PendingPermission; cwd?: string }) {
   const [feedback, setFeedback] = createSignal('')
@@ -32,11 +32,11 @@ export function PermissionPrompt(props: { sessionId: string; permission: Pending
           <ToolInput name={p().toolName} input={p().input} />
           <Show when={p().blockedPath}>
             {(path) => (
-              <p class="text-xs text-amber-700 dark:text-amber-400">Outside allowed directories: {relPath(path(), props.cwd)}</p>
+              <p class="text-xs text-danger">Outside allowed directories: {relPath(path(), props.cwd)}</p>
             )}
           </Show>
           <FeedbackInput value={feedback()} onChange={setFeedback} placeholder="Reason for denying (optional)" />
-          <div class="flex flex-wrap gap-2">
+          <div class="flex flex-wrap gap-2 pt-1">
             <Button primary onClick={() => respond('allow')}>Allow</Button>
             <Show when={p().canAlwaysAllow}>
               <Button onClick={() => respond('allow_always')}>Always allow</Button>
@@ -55,11 +55,11 @@ export function PermissionPrompt(props: { sessionId: string; permission: Pending
       </Match>
       <Match when={p().toolName === 'ExitPlanMode'}>
         <Shell title="Ready to leave plan mode?">
-          <div class="max-h-[50vh] overflow-auto rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
+          <div class="max-h-[50vh] overflow-auto border border-line px-4 py-3 rounded-lg">
             <Markdown text={String(p().input.plan ?? '')} />
           </div>
           <FeedbackInput value={feedback()} onChange={setFeedback} placeholder="Tell Claude what to change (optional)" />
-          <div class="flex flex-wrap gap-2">
+          <div class="flex flex-wrap gap-2 pt-1">
             <Button primary onClick={() => approvePlan('auto')}>Approve, auto mode</Button>
             <Button onClick={() => approvePlan('acceptEdits')}>Approve, auto-accept edits</Button>
             <Button onClick={() => approvePlan('default')}>Approve, ask before edits</Button>
@@ -100,22 +100,20 @@ function QuestionPrompt(props: {
     <Shell title="Claude has a question">
       <For each={questions()}>
         {(q) => (
-          <div class="space-y-1.5">
-            <p class="font-medium">{q.question}</p>
+          <div class="space-y-2">
+            <p class="text-fg">{q.question}</p>
             <div class="grid gap-1.5">
               <For each={q.options}>
                 {(o) => (
                   <button
                     onClick={() => toggle(q, o.label)}
-                    class={`rounded-md border px-3 py-2 text-left text-sm ${
-                      picked[q.question]?.includes(o.label)
-                        ? 'border-accent bg-accent/10'
-                        : 'border-zinc-200 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900'
+                    class={`border px-3 py-2 text-left transition-colors rounded-lg ${
+                      picked[q.question]?.includes(o.label) ? 'border-fg-3 bg-surface' : 'border-line hover:bg-surface/60'
                     }`}
                   >
-                    <div class="font-medium">{o.label}</div>
+                    <div class="text-fg">{o.label}</div>
                     <Show when={o.description}>
-                      <div class="text-xs text-zinc-500">{o.description}</div>
+                      <div class="mt-0.5 text-xs text-fg-3">{o.description}</div>
                     </Show>
                   </button>
                 )}
@@ -128,13 +126,13 @@ function QuestionPrompt(props: {
                   if (!q.multiSelect && value) setPicked(q.question, [])
                 }}
                 placeholder="Other…"
-                class="rounded-md border border-zinc-200 bg-transparent px-3 py-2 text-sm outline-none focus:border-accent dark:border-zinc-800"
+                class={inputClass}
               />
             </div>
           </div>
         )}
       </For>
-      <div class="flex gap-2">
+      <div class="flex gap-2 pt-1">
         <Button
           primary
           disabled={!complete()}
@@ -148,14 +146,15 @@ function QuestionPrompt(props: {
   )
 }
 
+/** Accent dot: this is waiting on you. */
 function Shell(props: { title: string; subtitle?: string; children: JSX.Element }) {
   return (
-    <div class="space-y-3 rounded-xl border border-accent/40 bg-accent/5 p-4 text-sm">
-      <div class="flex items-center gap-2">
-        <ShieldQuestion class="size-4 text-accent" />
-        <span class="font-semibold">{props.title}</span>
+    <div class="space-y-3 border border-edge p-4 text-[13px] rounded-2xl">
+      <div class="flex items-center gap-2.5">
+        <span class="size-1.5 shrink-0 rounded-full bg-accent" />
+        <span class="shrink-0 font-medium">{props.title}</span>
         <Show when={props.subtitle}>
-          <span class="min-w-0 truncate font-mono text-xs text-zinc-500">{props.subtitle}</span>
+          <span class="min-w-0 truncate font-mono text-xs text-fg-3">{props.subtitle}</span>
         </Show>
       </div>
       {props.children}
@@ -169,21 +168,7 @@ function FeedbackInput(props: { value: string; onChange: (v: string) => void; pl
       value={props.value}
       onInput={(e) => props.onChange(e.currentTarget.value)}
       placeholder={props.placeholder}
-      class="w-full rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-accent dark:border-zinc-800 dark:bg-zinc-950"
-    />
-  )
-}
-
-export function Button(props: JSX.ButtonHTMLAttributes<HTMLButtonElement> & { primary?: boolean }) {
-  const [local, rest] = splitProps(props, ['primary', 'class'])
-  return (
-    <button
-      {...rest}
-      class={`rounded-md px-3 py-1.5 text-sm font-medium disabled:opacity-40 ${
-        local.primary
-          ? 'bg-accent text-white hover:bg-accent/90'
-          : 'border border-zinc-300 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800'
-      } ${local.class ?? ''}`}
+      class={inputClass}
     />
   )
 }

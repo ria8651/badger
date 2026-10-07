@@ -13,9 +13,6 @@ const render = (text: string) => DOMPurify.sanitize(marked.parse(text, { gfm: tr
 
 export function Markdown(props: { text: string }) {
   return (
-    <div
-      class="prose prose-zinc dark:prose-invert max-w-none prose-p:my-2 prose-pre:my-2 prose-headings:mt-4 prose-headings:mb-2 prose-li:my-0.5 text-[15px] leading-relaxed"
-      innerHTML={render(props.text)}
-    />
+    <div class="md" innerHTML={render(props.text)} />
   )
 }

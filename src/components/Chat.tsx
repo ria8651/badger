@@ -1,17 +1,18 @@
 import { For, Show, createEffect, createSignal, on, onMount } from 'solid-js'
-import { ArrowUp, FolderOpen, Square } from 'lucide-solid'
+import { ArrowUp, Square } from 'lucide-solid'
 import type { PermissionMode } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
 import { createChat } from '../useChat.ts'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
 import { Transcript } from './Transcript.tsx'
+import { IconButton, LiveDot, Select, type Option } from './ui.tsx'
 
-const MODES: { value: PermissionMode; label: string }[] = [
-  { value: 'default', label: 'Ask before edits' },
-  { value: 'acceptEdits', label: 'Auto-accept edits' },
-  { value: 'auto', label: 'Auto mode' },
-  { value: 'plan', label: 'Plan mode' },
-  { value: 'bypassPermissions', label: 'Bypass permissions' },
+const MODES: Option<PermissionMode>[] = [
+  { value: 'default', label: 'Ask before edits', description: 'Claude asks before changing files or running commands.' },
+  { value: 'acceptEdits', label: 'Accept edits', description: 'File edits go through; commands still ask.' },
+  { value: 'auto', label: 'Auto', description: 'A classifier approves safe actions and asks about the rest.' },
+  { value: 'plan', label: 'Plan', description: 'Read and propose only. Nothing changes until you approve.' },
+  { value: 'bypassPermissions', label: 'Bypass permissions', description: 'Never asks. Anything can run.', tone: 'danger' },
 ]
 
 export function Chat(props: { sessionId: string; draftCwd?: string }) {
@@ -51,14 +52,6 @@ export function Chat(props: { sessionId: string; draftCwd?: string }) {
 
   return (
     <div class="flex h-full min-w-0 flex-1 flex-col">
-      <header class="flex items-center gap-2 border-b border-zinc-200 px-4 py-2 text-sm dark:border-zinc-800">
-        <FolderOpen class="size-4 shrink-0 text-zinc-400" />
-        <span class="min-w-0 flex-1 truncate font-mono text-xs text-zinc-500">{cwd() ?? '…'}</span>
-        <Show when={state.running}>
-          <span class="text-xs text-accent">Working…</span>
-        </Show>
-      </header>
-
       <div
         ref={scroller}
         onScroll={(e) => {
@@ -67,39 +60,38 @@ export function Chat(props: { sessionId: string; draftCwd?: string }) {
         }}
         class="flex-1 overflow-y-auto"
       >
-        <div class="mx-auto max-w-3xl px-4 py-6">
+        <div class="mx-auto max-w-3xl px-5 py-8">
           <Show
             when={!(state.loaded && state.messages.length === 0)}
             fallback={
-              <div class="pt-[20vh] text-center text-zinc-400">
-                <p class="text-lg">What are we working on?</p>
-                <p class="mt-1 font-mono text-xs">{cwd()}</p>
+              <div class="pt-[22vh] text-center">
+                <p class="text-base text-fg-2">What are we working on?</p>
+                <p class="mt-1.5 font-mono text-xs text-fg-3">{cwd()}</p>
               </div>
             }
           >
             <Transcript messages={state.messages} partial={state.partial} bashOutput={state.bashOutput} running={state.running} cwd={cwd()} />
           </Show>
           <Show when={state.running && !state.partial && state.permissions.length === 0}>
-            <div class="mt-3 flex gap-1">
-              <For each={[0, 150, 300]}>
-                {(d) => <span class="size-1.5 animate-bounce rounded-full bg-accent" style={{ 'animation-delay': `${d}ms` }} />}
-              </For>
+            <div class="mt-4 flex h-6 items-center gap-2 text-[13px] text-fg-3">
+              <LiveDot /> Working
             </div>
           </Show>
         </div>
       </div>
 
-      <div class="mx-auto w-full max-w-3xl space-y-2 px-4 pb-4">
+      {/* Fade the transcript out as it scrolls under the composer. */}
+      <div class="relative mx-auto w-full max-w-3xl space-y-2 px-5 pb-5 before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-bg">
         <For each={state.permissions}>
           {(p) => <PermissionPrompt sessionId={props.sessionId} permission={p} cwd={cwd()} />}
         </For>
         <Show when={state.error}>
-          <div class="flex items-start justify-between gap-2 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-            <span>{state.error}</span>
-            <button onClick={clearError} class="text-xs underline">Dismiss</button>
+          <div class="flex items-start gap-3 bg-danger/10 rounded-lg px-3 py-2 text-[13px] text-danger">
+            <span class="flex-1">{state.error}</span>
+            <button onClick={clearError} class="opacity-70 hover:opacity-100">Dismiss</button>
           </div>
         </Show>
-        <div class="rounded-2xl border border-zinc-300 bg-white shadow-sm focus-within:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900">
+        <div class="border border-edge transition-colors rounded-2xl focus-within:border-fg-3">
           <textarea
             ref={input}
             value={text()}
@@ -112,35 +104,25 @@ export function Chat(props: { sessionId: string; draftCwd?: string }) {
               if (e.key === 'Escape' && state.running) interrupt()
             }}
             rows={Math.min(10, Math.max(2, text().split('\n').length))}
-            placeholder={state.running ? 'Queue a message for Claude…' : 'Message Claude…'}
-            class="block w-full resize-none bg-transparent px-4 pt-3 outline-none placeholder:text-zinc-400"
+            placeholder={state.running ? 'Queue a message' : 'Message Claude'}
+            class="block w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed outline-none placeholder:text-fg-3"
           />
           <div class="flex items-center gap-2 px-2 pb-2">
-            <select
-              value={mode()}
-              onChange={(e) => changeMode(e.currentTarget.value as PermissionMode)}
-              class="rounded-md bg-transparent px-2 py-1 text-xs text-zinc-600 outline-none hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
-            >
-              <For each={MODES}>{(m) => <option value={m.value}>{m.label}</option>}</For>
-            </select>
+            <Select value={mode()} options={MODES} onChange={changeMode} title="Permission mode" />
             <div class="flex-1" />
-            <Show when={state.running}>
-              <button
-                onClick={interrupt}
-                title="Stop (Esc)"
-                class="rounded-full border border-zinc-300 p-2 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-              >
-                <Square class="size-3.5 fill-current" />
-              </button>
-            </Show>
-            <button
-              onClick={submit}
-              disabled={!text().trim()}
-              title="Send (Enter)"
-              class="rounded-full bg-accent p-2 text-white disabled:opacity-30"
+            {/* One slot: stop while running with nothing typed, otherwise send. */}
+            <Show
+              when={state.running && !text().trim()}
+              fallback={
+                <IconButton onClick={submit} disabled={!text().trim()} title="Send (Enter)">
+                  <ArrowUp class="size-4" />
+                </IconButton>
+              }
             >
-              <ArrowUp class="size-4" />
-            </button>
+              <IconButton onClick={interrupt} title="Stop (Esc)">
+                <Square class="size-3 fill-current" />
+              </IconButton>
+            </Show>
           </div>
         </div>
       </div>

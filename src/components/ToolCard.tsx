@@ -1,5 +1,5 @@
-import { For, Match, Show, Switch, createEffect, createSignal } from 'solid-js'
-import { Check, ChevronRight, Circle, CircleDot, Loader2, X } from 'lucide-solid'
+import { For, Match, Show, Switch, createEffect, createSignal, type JSX } from 'solid-js'
+import { Check, ChevronRight, Loader2 } from 'lucide-solid'
 
 export interface ToolResult {
   content: unknown
@@ -73,6 +73,37 @@ export function ToolInput(props: { name: string; input: Input }) {
   )
 }
 
+/**
+ * A quiet, expandable row: label, detail, trailing status. Shared by tool calls
+ * and thinking so everything Claude does between replies reads the same way.
+ */
+export function Disclosure(props: {
+  label: string
+  detail?: string
+  trailing?: JSX.Element
+  /** Shown under the row while collapsed. */
+  peek?: JSX.Element
+  children: JSX.Element
+}) {
+  const [open, setOpen] = createSignal(false)
+  return (
+    <div class="text-[13px]">
+      <button
+        onClick={() => setOpen(!open())}
+        class="group -mx-2 flex w-[calc(100%+1rem)] items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-surface"
+      >
+        <span class="shrink-0 text-fg-2 group-hover:text-fg">{props.label}</span>
+        <span class="min-w-0 flex-1 truncate font-mono text-xs text-fg-3">{props.detail}</span>
+        {props.trailing}
+        <ChevronRight class={`size-3.5 shrink-0 text-fg-3 transition-transform ${open() ? 'rotate-90' : ''}`} />
+      </button>
+      <Show when={open()} fallback={props.peek && <div class="mt-1 mb-2 ml-0.5 border-l border-line pl-4">{props.peek}</div>}>
+        <div class="mt-1 mb-2 ml-0.5 space-y-2 border-l border-line pl-4">{props.children}</div>
+      </Show>
+    </div>
+  )
+}
+
 export function ToolCard(props: {
   name: string
   input: Input
@@ -83,57 +114,43 @@ export function ToolCard(props: {
   cwd?: string
   subagentSteps?: number
 }) {
-  const [open, setOpen] = createSignal(false)
   const live = () => (!props.result && props.running ? props.liveOutput : undefined)
   const status = () => (props.result ? (props.result.isError ? 'error' : 'done') : props.running ? 'running' : 'stopped')
 
   return (
     <Show when={props.name !== 'TodoWrite'} fallback={<Todos todos={(props.input.todos as TodoItem[]) ?? []} />}>
-      <div class="my-1.5 rounded-lg border border-zinc-200 text-sm dark:border-zinc-800">
-        <button
-          onClick={() => setOpen(!open())}
-          class="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-zinc-50 dark:hover:bg-zinc-900"
-        >
-          <ChevronRight class={`size-3.5 shrink-0 text-zinc-400 transition-transform ${open() ? 'rotate-90' : ''}`} />
-          <span class="shrink-0 font-medium">{props.name}</span>
-          <span class="min-w-0 flex-1 truncate font-mono text-xs text-zinc-500">{toolSummary(props.name, props.input, props.cwd)}</span>
-          <Show when={props.subagentSteps}>
-            <span class="text-xs text-zinc-400">{props.subagentSteps} steps</span>
-          </Show>
-          <Switch>
-            <Match when={status() === 'running'}>
-              <Loader2 class="size-3.5 shrink-0 animate-spin text-zinc-400" />
-            </Match>
-            <Match when={status() === 'done'}>
-              <Check class="size-3.5 shrink-0 text-emerald-600" />
-            </Match>
-            <Match when={status() === 'error'}>
-              <X class="size-3.5 shrink-0 text-red-600" />
-            </Match>
-          </Switch>
-        </button>
-        <Show when={!open() && live()}>
-          {(text) => (
-            <div class="border-t border-zinc-200 p-2 dark:border-zinc-800">
-              <LiveOutput text={text()} class="max-h-40" />
-            </div>
-          )}
-        </Show>
-        <Show when={open()}>
-          <div class="space-y-2 border-t border-zinc-200 p-3 dark:border-zinc-800">
-            <ToolInput name={props.name} input={props.input} />
-            <Show when={live()}>{(text) => <LiveOutput text={text()} class="max-h-96" />}</Show>
-            <Show when={props.result}>
-              {(r) => (
-                <Pre text={resultText(r().content) || '(no output)'} class={r().isError ? 'text-red-700 dark:text-red-400' : ''} />
-              )}
+      <Disclosure
+        label={props.name}
+        detail={toolSummary(props.name, props.input, props.cwd)}
+        trailing={
+          <>
+            <Show when={props.subagentSteps}>
+              <span class="shrink-0 text-xs text-fg-3 tabular-nums">{props.subagentSteps} steps</span>
             </Show>
-          </div>
+            {/* Success is the norm and stays silent; only work in progress and failures show. */}
+            <Switch>
+              <Match when={status() === 'running'}>
+                <Loader2 class="size-3.5 shrink-0 animate-spin text-fg-3" />
+              </Match>
+              <Match when={status() === 'error'}>
+                <span class="shrink-0 text-xs text-danger">Failed</span>
+              </Match>
+            </Switch>
+          </>
+        }
+        peek={live() && <LiveOutput text={live()!} class="max-h-40" />}
+      >
+        <ToolInput name={props.name} input={props.input} />
+        <Show when={live()}>{(text) => <LiveOutput text={text()} class="max-h-96" />}</Show>
+        <Show when={props.result}>
+          {(r) => <Pre text={resultText(r().content) || '(no output)'} class={r().isError ? 'text-danger' : ''} />}
         </Show>
-      </div>
+      </Disclosure>
     </Show>
   )
 }
+
+const preClass = 'overflow-auto rounded-lg bg-surface px-3 py-2.5 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-fg-2'
 
 /** Streaming output that stays scrolled to the bottom unless the user scrolls up. */
 function LiveOutput(props: { text: string; class: string }) {
@@ -144,11 +161,7 @@ function LiveOutput(props: { text: string; class: string }) {
     if (pinned) el.scrollTop = el.scrollHeight
   })
   return (
-    <pre
-      ref={el}
-      onScroll={() => (pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 8)}
-      class={`overflow-auto rounded-md bg-zinc-50 p-2 font-mono text-xs whitespace-pre-wrap break-words dark:bg-zinc-900 ${props.class}`}
-    >
+    <pre ref={el} onScroll={() => (pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 8)} class={`${preClass} ${props.class}`}>
       {props.text}
     </pre>
   )
@@ -161,14 +174,12 @@ export function Pre(props: { text: string; class?: string }) {
   const long = () => props.text.length > LIMIT
   return (
     <div>
-      <pre
-        class={`max-h-96 overflow-auto rounded-md bg-zinc-50 p-2 font-mono text-xs whitespace-pre-wrap break-words dark:bg-zinc-900 ${props.class ?? ''}`}
-      >
+      <pre class={`max-h-96 ${preClass} ${props.class ?? ''}`}>
         {full() || !long() ? props.text : props.text.slice(0, LIMIT) + '\n…'}
       </pre>
       <Show when={long()}>
-        <button onClick={() => setFull(!full())} class="mt-1 text-xs text-zinc-500 hover:underline">
-          {full() ? 'Show less' : `Show all (${props.text.length.toLocaleString()} chars)`}
+        <button onClick={() => setFull(!full())} class="mt-1.5 text-xs text-fg-3 hover:text-fg-2">
+          {full() ? 'Show less' : `Show all ${props.text.length.toLocaleString()} characters`}
         </button>
       </Show>
     </div>
@@ -176,16 +187,16 @@ export function Pre(props: { text: string; class?: string }) {
 }
 
 function Diff(props: { before: string; after: string }) {
+  const line = (sign: string, l: string, tone: string) => (
+    <div class={`flex px-3 ${tone}`}>
+      <span class="w-4 shrink-0 select-none opacity-70">{sign}</span>
+      <span class="min-w-0 whitespace-pre-wrap break-words text-fg-2">{l}</span>
+    </div>
+  )
   return (
-    <div class="overflow-auto rounded-md font-mono text-xs">
-      <For each={props.before.split('\n')}>
-        {(l) => <div class="bg-red-50 px-2 whitespace-pre-wrap text-red-800 dark:bg-red-950/40 dark:text-red-300">- {l}</div>}
-      </For>
-      <For each={props.after.split('\n')}>
-        {(l) => (
-          <div class="bg-emerald-50 px-2 whitespace-pre-wrap text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">+ {l}</div>
-        )}
-      </For>
+    <div class="overflow-auto rounded-lg bg-surface py-2 font-mono text-xs leading-relaxed">
+      <For each={props.before.split('\n')}>{(l) => line('−', l, 'bg-danger/10 text-danger')}</For>
+      <For each={props.after.split('\n')}>{(l) => line('+', l, 'bg-ok/10 text-ok')}</For>
     </div>
   )
 }
@@ -198,19 +209,23 @@ interface TodoItem {
 
 function Todos(props: { todos: TodoItem[] }) {
   return (
-    <div class="my-1.5 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800">
+    <div class="my-1 space-y-1 text-[13px]">
       <For each={props.todos}>
         {(t) => (
-          <div class="flex items-start gap-2 py-0.5">
-            <Switch fallback={<Circle class="mt-0.5 size-3.5 shrink-0 text-zinc-400" />}>
-              <Match when={t.status === 'completed'}>
-                <Check class="mt-0.5 size-3.5 shrink-0 text-emerald-600" />
-              </Match>
-              <Match when={t.status === 'in_progress'}>
-                <CircleDot class="mt-0.5 size-3.5 shrink-0 text-accent" />
-              </Match>
-            </Switch>
-            <span class={t.status === 'completed' ? 'text-zinc-400 line-through' : t.status === 'in_progress' ? 'font-medium' : ''}>
+          <div class="flex items-start gap-2.5">
+            <span class="grid h-5 w-3.5 shrink-0 place-items-center">
+              <Switch fallback={<span class="size-2 rounded-full border border-fg-3" />}>
+                <Match when={t.status === 'completed'}>
+                  <Check class="size-3.5 text-fg-3" />
+                </Match>
+                <Match when={t.status === 'in_progress'}>
+                  <span class="size-2 rounded-full bg-accent" />
+                </Match>
+              </Switch>
+            </span>
+            <span
+              class={`leading-5 ${t.status === 'completed' ? 'text-fg-3 line-through decoration-fg-3/50' : t.status === 'in_progress' ? 'text-fg' : 'text-fg-2'}`}
+            >
               {t.status === 'in_progress' ? (t.activeForm ?? t.content) : t.content}
             </span>
           </div>

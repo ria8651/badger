@@ -1,10 +1,10 @@
-import { For, Show, createMemo, createSignal, type JSX } from 'solid-js'
+import { For, Show, createMemo, type JSX } from 'solid-js'
 import { unwrap } from 'solid-js/store'
-import { Brain, ChevronRight } from 'lucide-solid'
 import type { WireMessage } from '../../shared/protocol.ts'
 import type { Partial } from '../useChat.ts'
 import { Markdown } from './Markdown.tsx'
-import { ToolCard, type ToolResult } from './ToolCard.tsx'
+import { Disclosure, ToolCard, type ToolResult } from './ToolCard.tsx'
+import { LiveDot } from './ui.tsx'
 
 type Block = { type: string; text?: string; thinking?: string; id?: string; name?: string; input?: Record<string, unknown> }
 type ContentBlock = Block & { tool_use_id?: string; content?: unknown; is_error?: boolean }
@@ -110,16 +110,21 @@ export function Transcript(props: {
     return buildView(unwrap(props.messages))
   })
 
+  // Block layout so vertical margins collapse: prose breathes, tool rows stack tightly.
   const render = (item: Item): JSX.Element => {
     switch (item.kind) {
       case 'user':
         return (
-          <div class="flex justify-end">
-            <div class="max-w-[85%] rounded-2xl bg-zinc-100 px-4 py-2 whitespace-pre-wrap dark:bg-zinc-800">{item.text}</div>
+          <div class="mt-8 mb-4 flex justify-end first:mt-0">
+            <div class="max-w-[80%] bg-surface rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap">{item.text}</div>
           </div>
         )
       case 'text':
-        return <Markdown text={item.text} />
+        return (
+          <div class="my-4">
+            <Markdown text={item.text} />
+          </div>
+        )
       case 'thinking':
         return <Thinking text={item.text} />
       case 'tool':
@@ -136,49 +141,44 @@ export function Transcript(props: {
         )
       case 'result':
         return (
-          <div class={`text-xs ${item.ok ? 'text-zinc-400' : 'text-red-600'}`}>
-            {item.ok ? 'Done' : `Stopped: ${item.error}`} · {item.seconds}s{item.cost != null ? ` · $${item.cost.toFixed(4)}` : ''}
+          <div class={`mt-4 text-xs tabular-nums ${item.ok ? 'text-fg-3' : 'text-danger'}`}>
+            {item.ok ? '' : `Stopped: ${item.error} · `}
+            {item.seconds}s{item.cost != null ? ` · $${item.cost.toFixed(2)}` : ''}
           </div>
         )
       case 'divider':
         return (
-          <div class="flex items-center gap-3 text-xs text-zinc-400">
-            <div class="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
+          <div class="my-8 flex items-center gap-3 text-xs text-fg-3">
+            <div class="h-px flex-1 bg-line" />
             {item.text}
-            <div class="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
+            <div class="h-px flex-1 bg-line" />
           </div>
         )
     }
   }
 
   return (
-    <div class="space-y-3">
+    <div>
       <For each={view().items}>{render}</For>
       <Show when={props.partial?.type === 'text' && props.partial.text}>
-        <Markdown text={props.partial?.text ?? ''} />
+        <div class="my-4">
+          <Markdown text={props.partial?.text ?? ''} />
+        </div>
       </Show>
       <Show when={props.partial?.type === 'thinking'}>
         <Thinking text={props.partial?.text ?? ''} live />
       </Show>
       <Show when={props.partial?.type === 'tool_use'}>
-        <div class="text-sm text-zinc-500">Preparing {props.partial?.toolName}…</div>
+        <div class="flex h-7 items-center text-[13px] text-fg-3">{props.partial?.toolName}</div>
       </Show>
     </div>
   )
 }
 
 function Thinking(props: { text: string; live?: boolean }) {
-  const [open, setOpen] = createSignal(false)
   return (
-    <div class="text-sm text-zinc-500">
-      <button onClick={() => setOpen(!open())} class="flex items-center gap-1.5 hover:text-zinc-700 dark:hover:text-zinc-300">
-        <Brain class={`size-3.5 ${props.live ? 'animate-pulse' : ''}`} />
-        {props.live ? 'Thinking…' : 'Thought'}
-        <ChevronRight class={`size-3.5 transition-transform ${open() ? 'rotate-90' : ''}`} />
-      </button>
-      <Show when={open()}>
-        <div class="mt-1 border-l-2 border-zinc-200 pl-3 whitespace-pre-wrap dark:border-zinc-800">{props.text}</div>
-      </Show>
-    </div>
+    <Disclosure label={props.live ? 'Thinking' : 'Thought'} trailing={props.live && <LiveDot />}>
+      <div class="text-[13px] leading-relaxed whitespace-pre-wrap text-fg-2">{props.text}</div>
+    </Disclosure>
   )
 }

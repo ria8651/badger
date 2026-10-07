@@ -1,16 +1,99 @@
 @import "tailwindcss";
-@plugin "@tailwindcss/typography";
 
+/*
+ * The whole palette. Tailwind's stock colours are removed so every colour in
+ * the UI comes from this list.
+ *
+ *   bg       page background
+ *   surface  hover, selection, user messages, code
+ *   line     dividers
+ *   edge     borders on interactive controls
+ *   fg       primary text, primary buttons
+ *   fg-2     secondary text
+ *   fg-3     metadata, placeholders, icons
+ *   accent   only for "live" or "needs you": running chats, prompts
+ *   danger   errors, destructive modes, removed lines
+ *   ok       added lines in diffs
+ */
 @theme {
+  --color-*: initial;
+  --color-bg: #fafaf8;
+  --color-surface: #f0efeb;
+  --color-line: #e6e4df;
+  --color-edge: #d5d3cd;
+  --color-fg: #1b1a18;
+  --color-fg-2: #5f5d58;
+  --color-fg-3: #9a9892;
+  --color-accent: #c15f3c;
+  --color-danger: #c13a2e;
+  --color-ok: #3d7a4a;
+
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --color-accent: #c96442;
 }
 
-html, body, #root { height: 100%; }
-body { @apply bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 antialiased; }
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #141413;
+    --color-surface: #1f1e1c;
+    --color-line: #282725;
+    --color-edge: #3a3936;
+    --color-fg: #e9e7e2;
+    --color-fg-2: #a3a19b;
+    --color-fg-3: #6f6d68;
+    --color-accent: #d97757;
+    --color-danger: #e26d5f;
+    --color-ok: #7cb08a;
+  }
+}
 
-.prose pre { @apply bg-zinc-100 text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 text-[13px]; }
-.prose :where(code):not(:where(pre *))::before,
-.prose :where(code):not(:where(pre *))::after { content: none; }
-.prose :where(code):not(:where(pre *)) { @apply rounded bg-zinc-100 px-1 py-0.5 font-normal dark:bg-zinc-800; }
+@layer base {
+  html, body, #root { height: 100%; }
+  body {
+    @apply bg-bg text-fg text-sm antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-edge) transparent;
+  }
+  ::selection { background: color-mix(in srgb, var(--color-accent) 25%, transparent); }
+  :focus-visible { outline: 1.5px solid var(--color-fg-3); outline-offset: 2px; }
+  .lucide { stroke-width: 1.75; }
+}
+
+/* Popovers: in, and a quicker out. Reduced motion keeps the fade only. */
+@keyframes pop-in { from { opacity: 0; transform: translateY(4px) scale(0.98); } }
+@keyframes pop-out { to { opacity: 0; transform: translateY(4px) scale(0.98); } }
+@media (prefers-reduced-motion: reduce) {
+  @keyframes pop-in { from { opacity: 0; } }
+  @keyframes pop-out { to { opacity: 0; } }
+}
+
+/* Markdown from Claude. */
+.md { font-size: 15px; line-height: 1.65; overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md :where(p, ul, ol, pre, blockquote, table) { margin: 0.6em 0; }
+.md :where(h1, h2, h3, h4) { margin: 1.4em 0 0.5em; font-weight: 600; line-height: 1.3; }
+.md h1 { font-size: 1.25em; }
+.md h2 { font-size: 1.1em; }
+.md :where(h3, h4) { font-size: 1em; }
+.md strong { font-weight: 600; }
+.md a { text-decoration: underline; text-decoration-color: var(--color-edge); text-underline-offset: 3px; }
+.md a:hover { text-decoration-color: currentColor; }
+.md :where(ul, ol) { padding-left: 1.4em; }
+.md ul { list-style: disc; }
+.md ol { list-style: decimal; }
+.md li { margin: 0.2em 0; padding-left: 0.2em; }
+.md li::marker { color: var(--color-fg-3); }
+.md hr { margin: 1.5em 0; border-color: var(--color-line); }
+.md blockquote { padding-left: 1em; border-left: 2px solid var(--color-edge); color: var(--color-fg-2); }
+.md code { font-family: var(--font-mono); font-size: 0.86em; }
+.md :not(pre) > code { padding: 0.1em 0.35em; border-radius: 4px; background: var(--color-surface); }
+.md pre { padding: 0.85em 1em; border-radius: 8px; background: var(--color-surface); overflow-x: auto; font-size: 13px; line-height: 1.55; }
+.md pre code { font-size: inherit; }
+.md table { display: block; overflow-x: auto; border-collapse: collapse; font-size: 0.93em; }
+.md :where(th, td) { padding: 0.4em 0.9em 0.4em 0; border-bottom: 1px solid var(--color-line); text-align: left; }
+.md th { font-weight: 500; color: var(--color-fg-2); }
+.md img { max-width: 100%; border-radius: 8px; }
