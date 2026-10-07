@@ -6,7 +6,7 @@ import { api, socket } from './api.ts'
 import { Board } from './components/Board.tsx'
 import { CardView } from './components/CardView.tsx'
 import { Chat } from './components/Chat.tsx'
-import { LiveDot, Menu, ltr } from './components/ui.tsx'
+import { LiveDot } from './components/ui.tsx'
 
 /** crypto.randomUUID needs a secure context; fall back for plain-http hosts. */
 function uuid(): string {
@@ -44,6 +44,8 @@ export function App() {
   const [route, setRoute] = createSignal<Route>(routeFromPath())
   const [drafts, setDrafts] = createSignal<Record<string, string>>({})
   const [connected, setConnected] = createSignal(false)
+  // Home is a blank chat; it gets a real URL once its first message is sent.
+  const [homeId, setHomeId] = createSignal(uuid())
 
   const refresh = () => {
     api.sessions().then(setSessions)
@@ -85,7 +87,7 @@ export function App() {
   }
   const current = () => {
     const r = route()
-    return r.kind === 'chat' ? r.id : null
+    return r.kind === 'chat' ? r.id : r.kind === 'home' ? homeId() : null
   }
   const currentCard = () => {
     const r = route()
@@ -107,6 +109,17 @@ export function App() {
     if (cardId !== undefined) api.linkSession(cardId, id)
     go({ kind: 'chat', id })
   }
+  const newHomeChat = () => {
+    setHomeId(uuid())
+    go({ kind: 'home' })
+  }
+  /** The home chat's first message went out: give it its own URL and a fresh blank chat for next time. */
+  const startHomeChat = (id: string, cwd?: string) => {
+    if (cwd) setDrafts((d) => ({ ...d, [id]: cwd }))
+    history.replaceState(null, '', pathFor({ kind: 'chat', id }))
+    setRoute({ kind: 'chat', id })
+    setHomeId(uuid())
+  }
 
   return (
     <div class="flex h-full">
@@ -126,22 +139,14 @@ export function App() {
           >
             <Columns3 class="size-4" /> Board
           </button>
-          <Menu
-            items={projects().map((p) => ({ label: basename(p), description: p, mono: true }))}
-            onPick={(i) => newChat(projects()[i])}
-            placement="bottom"
-            class="w-60"
-            triggerClass={(open) =>
-              `flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[13px] transition-colors hover:bg-surface hover:text-fg ${
-                open ? 'bg-surface text-fg' : 'text-fg-2'
-              }`
-            }
-            trigger={() => (
-              <>
-                <Plus class="size-4" /> New chat
-              </>
-            )}
-          />
+          <button
+            onClick={newHomeChat}
+            class={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[13px] transition-colors hover:bg-surface hover:text-fg ${
+              route().kind === 'home' ? 'bg-surface text-fg' : 'text-fg-2'
+            }`}
+          >
+            <Plus class="size-4" /> New chat
+          </button>
         </div>
         <nav class="flex-1 overflow-y-auto px-2 py-2">
           <For each={sessions()}>
@@ -175,30 +180,21 @@ export function App() {
         </nav>
       </aside>
 
-      <Switch
-        fallback={
-          <div class="flex flex-1 items-center justify-center p-5">
-            <div class="w-full max-w-sm">
-              <p class="mb-3 px-3 text-[13px] text-fg-3">Start a chat in</p>
-              <div class="max-h-[60vh] overflow-y-auto">
-                <For each={projects()}>
-                  {(p) => (
-                    <button
-                      onClick={() => newChat(p)}
-                      class="group block w-full rounded-lg px-3 py-2 text-left transition-colors hover:bg-surface"
-                    >
-                      <div class="text-[13px] text-fg-2 group-hover:text-fg">{basename(p)}</div>
-                      <div class="truncate font-mono text-[11px] text-fg-3 text-left [direction:rtl]">{ltr(p)}</div>
-                    </button>
-                  )}
-                </For>
-              </div>
-            </div>
-          </div>
-        }
-      >
+      <Switch>
         <Match when={current()} keyed>
-          {(id) => <Chat sessionId={id} draftCwd={drafts()[id]} />}
+          {(id) => {
+            // Same component before and after the first send, so starting a chat doesn't remount it.
+            const home = () => route().kind === 'home'
+            return (
+              <Chat
+                sessionId={id}
+                draftCwd={drafts()[id] ?? (home() ? projects()[0] : undefined)}
+                projects={home() ? projects() : undefined}
+                onPickCwd={(cwd) => setDrafts((d) => ({ ...d, [id]: cwd }))}
+                onStart={() => home() && startHomeChat(id, drafts()[id] ?? projects()[0])}
+              />
+            )
+          }}
         </Match>
         <Match when={route().kind === 'board'}>
           <Board cards={cards()} sessions={sessions()} setCards={setCards} onOpen={(id) => go({ kind: 'card', id })} />

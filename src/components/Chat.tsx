@@ -1,11 +1,11 @@
 import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from 'solid-js'
-import { ArrowUp, Square } from 'lucide-solid'
+import { ArrowUp, ChevronDown, Square } from 'lucide-solid'
 import type { PermissionMode } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
 import { createChat } from '../useChat.ts'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
 import { Transcript } from './Transcript.tsx'
-import { IconButton, LiveDot, Select, type Option } from './ui.tsx'
+import { IconButton, LiveDot, Menu, Select, ltr, type Option } from './ui.tsx'
 
 const MODES: Option<PermissionMode>[] = [
   { value: 'default', label: 'Ask before edits', description: 'Claude asks before changing files or running commands.' },
@@ -15,9 +15,18 @@ const MODES: Option<PermissionMode>[] = [
   { value: 'bypassPermissions', label: 'Bypass permissions', description: 'Never asks. Anything can run.', tone: 'danger' },
 ]
 
-export function Chat(props: { sessionId: string; draftCwd?: string }) {
+export function Chat(props: {
+  sessionId: string
+  draftCwd?: string
+  /** Offered as a directory picker until the first message goes out. */
+  projects?: string[]
+  onPickCwd?: (cwd: string) => void
+  /** Called once, when the first message is sent. */
+  onStart?: () => void
+}) {
   const { state, clearError } = createChat(props.sessionId)
   const [text, setText] = createSignal('')
+  const [started, setStarted] = createSignal(false)
   const [mode, setMode] = createSignal<PermissionMode>('auto')
   let scroller!: HTMLDivElement
   let content!: HTMLDivElement
@@ -58,6 +67,10 @@ export function Chat(props: { sessionId: string; draftCwd?: string }) {
     const value = text().trim()
     if (!value) return
     socket.send({ type: 'send', sessionId: props.sessionId, text: value, cwd: cwd(), mode: mode() })
+    if (!started()) {
+      setStarted(true)
+      props.onStart?.()
+    }
     setText('')
     pinned = true
     toBottom()
@@ -85,7 +98,31 @@ export function Chat(props: { sessionId: string; draftCwd?: string }) {
             fallback={
               <div class="pt-[22vh] text-center">
                 <p class="text-base text-fg-2">What are we working on?</p>
-                <p class="mt-1.5 font-mono text-xs text-fg-3">{cwd()}</p>
+                <Show
+                  when={props.projects?.length && props.onPickCwd && !state.cwd && !started()}
+                  fallback={<p class="mt-1.5 font-mono text-xs text-fg-3">{cwd()}</p>}
+                >
+                  <div class="mt-1 inline-block text-left">
+                    <Menu
+                      items={props.projects!.map((p) => ({ label: basename(p), description: p, mono: true, selected: p === cwd() }))}
+                      onPick={(i) => props.onPickCwd!(props.projects![i])}
+                      placement="bottom"
+                      class="w-72"
+                      title="Directory"
+                      triggerClass={(open) =>
+                        `flex h-7 max-w-md items-center gap-1 rounded-md px-2 font-mono text-xs transition-colors hover:bg-surface hover:text-fg-2 ${
+                          open ? 'bg-surface text-fg-2' : 'text-fg-3'
+                        }`
+                      }
+                      trigger={(open) => (
+                        <>
+                          <span class="truncate text-left [direction:rtl]">{ltr(cwd() ?? '')}</span>
+                          <ChevronDown class={`size-3 shrink-0 transition-transform ${open() ? 'rotate-180' : ''}`} />
+                        </>
+                      )}
+                    />
+                  </div>
+                </Show>
               </div>
             }
           >
@@ -148,3 +185,5 @@ export function Chat(props: { sessionId: string; draftCwd?: string }) {
     </div>
   )
 }
+
+const basename = (path: string) => path.split('/').filter(Boolean).pop() ?? path
