@@ -1,4 +1,5 @@
-import { useEffect, useReducer } from 'react'
+import { onCleanup } from 'solid-js'
+import { createStore, produce } from 'solid-js/store'
 import type { PendingPermission, PermissionMode, ServerEvent, WireMessage } from '../shared/protocol.ts'
 import { socket } from './api.ts'
 
@@ -21,60 +22,46 @@ export interface ChatState {
   error: string | null
 }
 
-const initial: ChatState = {
-  loaded: false,
-  messages: [],
-  partial: null,
-  running: false,
-  mode: 'default',
-  permissions: [],
-  error: null,
-}
-
-type Action = ServerEvent | { type: 'reset' } | { type: 'clear_error' }
-
-function reducer(state: ChatState, action: Action): ChatState {
-  switch (action.type) {
-    case 'reset':
-      return initial
-    case 'clear_error':
-      return { ...state, error: null }
+function apply(state: ChatState, event: ServerEvent): void {
+  switch (event.type) {
     case 'snapshot':
-      return {
-        ...state,
-        loaded: true,
-        messages: action.messages,
-        running: action.running,
-        mode: action.mode,
-        cwd: action.cwd,
-        permissions: action.permissions,
-        partial: null,
-      }
+      state.loaded = true
+      state.messages = event.messages
+      state.running = event.running
+      state.mode = event.mode
+      state.cwd = event.cwd
+      state.permissions = event.permissions
+      state.partial = null
+      break
     case 'status':
-      return { ...state, running: action.running, mode: action.mode, partial: action.running ? state.partial : null }
+      state.running = event.running
+      state.mode = event.mode
+      if (!event.running) state.partial = null
+      break
     case 'permission_request':
-      return { ...state, permissions: [...state.permissions, action.permission] }
+      state.permissions.push(event.permission)
+      break
     case 'permission_resolved':
-      return { ...state, permissions: state.permissions.filter((p) => p.requestId !== action.requestId) }
+      state.permissions = state.permissions.filter((p) => p.requestId !== event.requestId)
+      break
     case 'error':
-      return { ...state, error: action.error }
+      state.error = event.error
+      break
     case 'message':
-      return applyMessage(state, action.message)
-    default:
-      return state
+      applyMessage(state, event.message)
+      break
   }
 }
 
-function applyMessage(state: ChatState, msg: WireMessage): ChatState {
+function applyMessage(state: ChatState, msg: WireMessage): void {
   if (msg.type === 'stream_event') {
-    if (msg.parent_tool_use_id) return state
-    return { ...state, partial: applyStreamEvent(state.partial, msg.event as StreamEvent) }
+    if (!msg.parent_tool_use_id) applyStreamEvent(state, msg.event as StreamEvent)
+    return
   }
-  if (msg.uuid && state.messages.some((m) => m.uuid === msg.uuid)) return state
-  let partial = state.partial
+  if (msg.uuid && state.messages.some((m) => m.uuid === msg.uuid)) return
   const id = (msg.message as { id?: string } | undefined)?.id
-  if ((msg.type === 'assistant' && id === partial?.messageId) || msg.type === 'result') partial = null
-  return { ...state, messages: [...state.messages, msg], partial }
+  if ((msg.type === 'assistant' && id === state.partial?.messageId) || msg.type === 'result') state.partial = null
+  state.messages.push(msg)
 }
 
 type StreamEvent =
@@ -85,39 +72,42 @@ type StreamEvent =
 
 let currentMessageId = ''
 
-function applyStreamEvent(partial: Partial | null, e: StreamEvent): Partial | null {
+function applyStreamEvent(state: ChatState, e: StreamEvent): void {
   if (e.type === 'message_start' && 'message' in e) {
     currentMessageId = e.message.id
-    return null
-  }
-  if (e.type === 'content_block_start' && 'content_block' in e) {
+    state.partial = null
+  } else if (e.type === 'content_block_start' && 'content_block' in e) {
     const t = e.content_block.type
-    if (t !== 'text' && t !== 'thinking' && t !== 'tool_use') return null
-    return { messageId: currentMessageId, type: t, text: '', toolName: e.content_block.name }
-  }
-  if (e.type === 'content_block_delta' && 'delta' in e && partial) {
+    state.partial =
+      t === 'text' || t === 'thinking' || t === 'tool_use'
+        ? { messageId: currentMessageId, type: t, text: '', toolName: e.content_block.name }
+        : null
+  } else if (e.type === 'content_block_delta' && 'delta' in e && state.partial) {
     const d = e.delta
-    const add = d.text ?? d.thinking ?? d.partial_json ?? ''
-    return { ...partial, text: partial.text + add }
+    state.partial.text += d.text ?? d.thinking ?? d.partial_json ?? ''
   }
-  return partial
 }
 
-export function useChat(sessionId: string | null) {
-  const [state, dispatch] = useReducer(reducer, initial)
+/** Subscribes to one session for the lifetime of the calling component. */
+export function createChat(sessionId: string) {
+  const [state, setState] = createStore<ChatState>({
+    loaded: false,
+    messages: [],
+    partial: null,
+    running: false,
+    mode: 'default',
+    permissions: [],
+    error: null,
+  })
 
-  useEffect(() => {
-    dispatch({ type: 'reset' })
-    if (!sessionId) return
-    const off = socket.on((event) => {
-      if ('sessionId' in event && event.sessionId === sessionId) dispatch(event)
-    })
-    socket.send({ type: 'subscribe', sessionId })
-    return () => {
-      off()
-      socket.send({ type: 'unsubscribe', sessionId })
-    }
-  }, [sessionId])
+  const off = socket.on((event) => {
+    if ('sessionId' in event && event.sessionId === sessionId) setState(produce((s) => apply(s, event)))
+  })
+  socket.send({ type: 'subscribe', sessionId })
+  onCleanup(() => {
+    off()
+    socket.send({ type: 'unsubscribe', sessionId })
+  })
 
-  return { state, clearError: () => dispatch({ type: 'clear_error' }) }
+  return { state, clearError: () => setState('error', null) }
 }

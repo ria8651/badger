@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Check, ChevronRight, Circle, CircleDot, Loader2, X } from 'lucide-react'
+import { For, Match, Show, Switch, createSignal } from 'solid-js'
+import { Check, ChevronRight, Circle, CircleDot, Loader2, X } from 'lucide-solid'
 
 export interface ToolResult {
   content: unknown
@@ -57,11 +57,20 @@ export function resultText(content: unknown): string {
   return content == null ? '' : JSON.stringify(content, null, 2)
 }
 
-export function ToolInput({ name, input }: { name: string; input: Input }) {
-  if (name === 'Bash') return <Pre>{str(input.command)}</Pre>
-  if (name === 'Edit') return <Diff before={str(input.old_string)} after={str(input.new_string)} />
-  if (name === 'Write') return <Pre>{str(input.content)}</Pre>
-  return <Pre>{JSON.stringify(input, null, 2)}</Pre>
+export function ToolInput(props: { name: string; input: Input }) {
+  return (
+    <Switch fallback={<Pre text={JSON.stringify(props.input, null, 2)} />}>
+      <Match when={props.name === 'Bash'}>
+        <Pre text={str(props.input.command)} />
+      </Match>
+      <Match when={props.name === 'Edit'}>
+        <Diff before={str(props.input.old_string)} after={str(props.input.new_string)} />
+      </Match>
+      <Match when={props.name === 'Write'}>
+        <Pre text={str(props.input.content)} />
+      </Match>
+    </Switch>
+  )
 }
 
 export function ToolCard(props: {
@@ -72,73 +81,81 @@ export function ToolCard(props: {
   cwd?: string
   subagentSteps?: number
 }) {
-  const { name, input, result, running, cwd, subagentSteps } = props
-  const [open, setOpen] = useState(false)
-
-  if (name === 'TodoWrite') return <Todos todos={(input.todos as TodoItem[]) ?? []} />
-
-  const status = result ? (result.isError ? 'error' : 'done') : running ? 'running' : 'stopped'
-  const output = result ? resultText(result.content) : ''
+  const [open, setOpen] = createSignal(false)
+  const status = () => (props.result ? (props.result.isError ? 'error' : 'done') : props.running ? 'running' : 'stopped')
 
   return (
-    <div className="my-1.5 rounded-lg border border-zinc-200 text-sm dark:border-zinc-800">
-      <button
-        onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-zinc-50 dark:hover:bg-zinc-900"
-      >
-        <ChevronRight className={`size-3.5 shrink-0 text-zinc-400 transition-transform ${open ? 'rotate-90' : ''}`} />
-        <span className="shrink-0 font-medium">{name}</span>
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-zinc-500">{toolSummary(name, input, cwd)}</span>
-        {subagentSteps ? <span className="text-xs text-zinc-400">{subagentSteps} steps</span> : null}
-        {status === 'running' && <Loader2 className="size-3.5 shrink-0 animate-spin text-zinc-400" />}
-        {status === 'done' && <Check className="size-3.5 shrink-0 text-emerald-600" />}
-        {status === 'error' && <X className="size-3.5 shrink-0 text-red-600" />}
-      </button>
-      {open && (
-        <div className="space-y-2 border-t border-zinc-200 p-3 dark:border-zinc-800">
-          <ToolInput name={name} input={input} />
-          {result && (
-            <Pre className={result.isError ? 'text-red-700 dark:text-red-400' : ''}>{output || '(no output)'}</Pre>
-          )}
-        </div>
-      )}
-    </div>
+    <Show when={props.name !== 'TodoWrite'} fallback={<Todos todos={(props.input.todos as TodoItem[]) ?? []} />}>
+      <div class="my-1.5 rounded-lg border border-zinc-200 text-sm dark:border-zinc-800">
+        <button
+          onClick={() => setOpen(!open())}
+          class="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-zinc-50 dark:hover:bg-zinc-900"
+        >
+          <ChevronRight class={`size-3.5 shrink-0 text-zinc-400 transition-transform ${open() ? 'rotate-90' : ''}`} />
+          <span class="shrink-0 font-medium">{props.name}</span>
+          <span class="min-w-0 flex-1 truncate font-mono text-xs text-zinc-500">{toolSummary(props.name, props.input, props.cwd)}</span>
+          <Show when={props.subagentSteps}>
+            <span class="text-xs text-zinc-400">{props.subagentSteps} steps</span>
+          </Show>
+          <Switch>
+            <Match when={status() === 'running'}>
+              <Loader2 class="size-3.5 shrink-0 animate-spin text-zinc-400" />
+            </Match>
+            <Match when={status() === 'done'}>
+              <Check class="size-3.5 shrink-0 text-emerald-600" />
+            </Match>
+            <Match when={status() === 'error'}>
+              <X class="size-3.5 shrink-0 text-red-600" />
+            </Match>
+          </Switch>
+        </button>
+        <Show when={open()}>
+          <div class="space-y-2 border-t border-zinc-200 p-3 dark:border-zinc-800">
+            <ToolInput name={props.name} input={props.input} />
+            <Show when={props.result}>
+              {(r) => (
+                <Pre text={resultText(r().content) || '(no output)'} class={r().isError ? 'text-red-700 dark:text-red-400' : ''} />
+              )}
+            </Show>
+          </div>
+        </Show>
+      </div>
+    </Show>
   )
 }
 
-export function Pre({ children, className = '' }: { children: string; className?: string }) {
-  const [full, setFull] = useState(false)
-  const LIMIT = 4000
-  const long = children.length > LIMIT
+const LIMIT = 4000
+
+export function Pre(props: { text: string; class?: string }) {
+  const [full, setFull] = createSignal(false)
+  const long = () => props.text.length > LIMIT
   return (
     <div>
       <pre
-        className={`max-h-96 overflow-auto rounded-md bg-zinc-50 p-2 font-mono text-xs whitespace-pre-wrap break-words dark:bg-zinc-900 ${className}`}
+        class={`max-h-96 overflow-auto rounded-md bg-zinc-50 p-2 font-mono text-xs whitespace-pre-wrap break-words dark:bg-zinc-900 ${props.class ?? ''}`}
       >
-        {full || !long ? children : children.slice(0, LIMIT) + '\n…'}
+        {full() || !long() ? props.text : props.text.slice(0, LIMIT) + '\n…'}
       </pre>
-      {long && (
-        <button onClick={() => setFull(!full)} className="mt-1 text-xs text-zinc-500 hover:underline">
-          {full ? 'Show less' : `Show all (${children.length.toLocaleString()} chars)`}
+      <Show when={long()}>
+        <button onClick={() => setFull(!full())} class="mt-1 text-xs text-zinc-500 hover:underline">
+          {full() ? 'Show less' : `Show all (${props.text.length.toLocaleString()} chars)`}
         </button>
-      )}
+      </Show>
     </div>
   )
 }
 
-function Diff({ before, after }: { before: string; after: string }) {
+function Diff(props: { before: string; after: string }) {
   return (
-    <div className="overflow-auto rounded-md font-mono text-xs">
-      {before.split('\n').map((l, i) => (
-        <div key={`a${i}`} className="bg-red-50 px-2 whitespace-pre-wrap text-red-800 dark:bg-red-950/40 dark:text-red-300">
-          - {l}
-        </div>
-      ))}
-      {after.split('\n').map((l, i) => (
-        <div key={`b${i}`} className="bg-emerald-50 px-2 whitespace-pre-wrap text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
-          + {l}
-        </div>
-      ))}
+    <div class="overflow-auto rounded-md font-mono text-xs">
+      <For each={props.before.split('\n')}>
+        {(l) => <div class="bg-red-50 px-2 whitespace-pre-wrap text-red-800 dark:bg-red-950/40 dark:text-red-300">- {l}</div>}
+      </For>
+      <For each={props.after.split('\n')}>
+        {(l) => (
+          <div class="bg-emerald-50 px-2 whitespace-pre-wrap text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">+ {l}</div>
+        )}
+      </For>
     </div>
   )
 }
@@ -149,23 +166,26 @@ interface TodoItem {
   activeForm?: string
 }
 
-function Todos({ todos }: { todos: TodoItem[] }) {
+function Todos(props: { todos: TodoItem[] }) {
   return (
-    <div className="my-1.5 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800">
-      {todos.map((t, i) => (
-        <div key={i} className="flex items-start gap-2 py-0.5">
-          {t.status === 'completed' ? (
-            <Check className="mt-0.5 size-3.5 shrink-0 text-emerald-600" />
-          ) : t.status === 'in_progress' ? (
-            <CircleDot className="mt-0.5 size-3.5 shrink-0 text-accent" />
-          ) : (
-            <Circle className="mt-0.5 size-3.5 shrink-0 text-zinc-400" />
-          )}
-          <span className={t.status === 'completed' ? 'text-zinc-400 line-through' : t.status === 'in_progress' ? 'font-medium' : ''}>
-            {t.status === 'in_progress' ? (t.activeForm ?? t.content) : t.content}
-          </span>
-        </div>
-      ))}
+    <div class="my-1.5 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800">
+      <For each={props.todos}>
+        {(t) => (
+          <div class="flex items-start gap-2 py-0.5">
+            <Switch fallback={<Circle class="mt-0.5 size-3.5 shrink-0 text-zinc-400" />}>
+              <Match when={t.status === 'completed'}>
+                <Check class="mt-0.5 size-3.5 shrink-0 text-emerald-600" />
+              </Match>
+              <Match when={t.status === 'in_progress'}>
+                <CircleDot class="mt-0.5 size-3.5 shrink-0 text-accent" />
+              </Match>
+            </Switch>
+            <span class={t.status === 'completed' ? 'text-zinc-400 line-through' : t.status === 'in_progress' ? 'font-medium' : ''}>
+              {t.status === 'in_progress' ? (t.activeForm ?? t.content) : t.content}
+            </span>
+          </div>
+        )}
+      </For>
     </div>
   )
 }
