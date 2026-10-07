@@ -121,8 +121,8 @@ export function Disclosure(props: {
         {props.trailing}
         <ChevronRight class={`size-3.5 shrink-0 text-fg-3 transition-transform ${open() ? 'rotate-90' : ''}`} />
       </button>
-      <Show when={open()} fallback={props.peek && <div class="mt-1 mb-2 ml-0.5 border-l border-line pl-4">{props.peek}</div>}>
-        <div class="mt-1 mb-2 ml-0.5 space-y-2 border-l border-line pl-4">{props.children}</div>
+      <Show when={open()} fallback={props.peek && <div class="mt-1 mb-2 pl-4">{props.peek}</div>}>
+        <div class="mt-1 mb-2 space-y-2 pl-4">{props.children}</div>
       </Show>
     </div>
   )
