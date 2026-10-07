@@ -14,7 +14,7 @@ type Item =
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; id: string; name: string; input: Record<string, unknown> }
-  | { kind: 'result'; ok: boolean; seconds: number; cost?: number; error?: string }
+  | { kind: 'result'; ok: boolean; seconds: number; tokens?: { input: number; output: number }; error?: string }
   | { kind: 'divider'; text: string }
 
 /**
@@ -53,7 +53,7 @@ function messageItems(m: WireMessage): Item[] {
         kind: 'result',
         ok,
         seconds: Math.round(Number(m.duration_ms ?? 0) / 1000),
-        cost: typeof m.total_cost_usd === 'number' ? m.total_cost_usd : undefined,
+        tokens: turnTokens(m.usage),
         error: ok ? undefined : String(m.subtype === 'success' ? (m.result ?? 'Error') : m.subtype),
       },
     ]
@@ -143,7 +143,8 @@ export function Transcript(props: {
         return (
           <div class={`mt-4 text-xs tabular-nums ${item.ok ? 'text-fg-3' : 'text-danger'}`}>
             {item.ok ? '' : `Stopped: ${item.error} · `}
-            {item.seconds}s{item.cost != null ? ` · $${item.cost.toFixed(2)}` : ''}
+            {item.seconds}s
+            {item.tokens ? ` · ${compact(item.tokens.input)} in · ${compact(item.tokens.output)} out` : ''}
           </div>
         )
       case 'divider':
@@ -184,3 +185,17 @@ function Thinking(props: { text: string; live?: boolean }) {
     </Disclosure>
   )
 }
+
+type Usage = { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
+
+/** Tokens for one turn, cached input included. Main agent only; subagents aren't counted. */
+function turnTokens(usage: unknown): { input: number; output: number } | undefined {
+  const u = usage as Usage | undefined
+  if (!u || typeof u.output_tokens !== 'number') return undefined
+  return {
+    input: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0),
+    output: u.output_tokens,
+  }
+}
+
+const compact = (n: number) => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
