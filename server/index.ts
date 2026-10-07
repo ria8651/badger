@@ -1,7 +1,6 @@
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage } from 'node:http'
 import { extname, join, resolve } from 'node:path'
-import { timingSafeEqual } from 'node:crypto'
 import { getSessionInfo, getSessionMessages, listSessions } from '@anthropic-ai/claude-agent-sdk'
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { ClientEvent, ServerEvent, SessionSummary, WireMessage } from '../shared/protocol.ts'
@@ -14,7 +13,6 @@ loadDotEnv()
 const PORT = Number(process.env.PORT ?? 3001)
 const HOST = process.env.HOST ?? '127.0.0.1'
 const WORKSPACE_DIR = resolve(process.env.WORKSPACE_DIR ?? process.cwd())
-const AUTH_TOKEN = process.env.AUTH_TOKEN || ''
 const DIST = resolve('dist')
 const DATA_DIR = resolve(process.env.DATA_DIR ?? 'data')
 
@@ -158,14 +156,6 @@ async function readJson(req: IncomingMessage): Promise<any> {
   }
 }
 
-function authorized(header: string | undefined, queryToken: string | null): boolean {
-  if (!AUTH_TOKEN) return true
-  const supplied = header?.replace(/^Bearer /, '') || queryToken || ''
-  const a = Buffer.from(supplied)
-  const b = Buffer.from(AUTH_TOKEN)
-  return a.length === b.length && timingSafeEqual(a, b)
-}
-
 const MIME: Record<string, string> = {
   '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
 }
@@ -178,9 +168,8 @@ const server = createServer(async (req, res) => {
     res.end(JSON.stringify(body))
   }
   try {
-    if (url.pathname === '/api/config') return json(200, { defaultCwd: WORKSPACE_DIR, authRequired: !!AUTH_TOKEN })
+    if (url.pathname === '/api/config') return json(200, { defaultCwd: WORKSPACE_DIR })
     if (url.pathname.startsWith('/api/')) {
-      if (!authorized(req.headers.authorization, null)) return json(401, { error: 'Unauthorized' })
       if (url.pathname === '/api/sessions') return json(200, await sessionList())
       const cards = await cardsApi(req.method ?? 'GET', url.pathname, req)
       if (cards) return json(...cards)
@@ -202,8 +191,8 @@ const wss = new WebSocketServer({ noServer: true })
 
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url ?? '/', 'http://x')
-  if (url.pathname !== '/ws' || !authorized(undefined, url.searchParams.get('token'))) {
-    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
+  if (url.pathname !== '/ws') {
+    socket.write('HTTP/1.1 404 Not Found\r\n\r\n')
     socket.destroy()
     return
   }
@@ -238,7 +227,7 @@ wss.on('connection', (ws: WebSocket) => {
 })
 
 server.listen(PORT, HOST, () => {
-  console.log(`badger server on http://${HOST}:${PORT} (workspace ${WORKSPACE_DIR}${AUTH_TOKEN ? ', auth on' : ''})`)
+  console.log(`badger server on http://${HOST}:${PORT} (workspace ${WORKSPACE_DIR})`)
 })
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {

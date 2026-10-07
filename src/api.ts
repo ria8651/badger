@@ -1,27 +1,9 @@
 import type { Card, CardStatus, ClientEvent, ServerEvent, SessionSummary } from '../shared/protocol.ts'
 
-const TOKEN_KEY = 'badger.token'
-
-export function getToken(): string {
-  try {
-    return localStorage.getItem(TOKEN_KEY) ?? ''
-  } catch {
-    return ''
-  }
-}
-
-export function setToken(token: string): void {
-  try {
-    localStorage.setItem(TOKEN_KEY, token)
-  } catch {
-    /* private mode */
-  }
-}
-
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
-    headers: { authorization: `Bearer ${getToken()}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+    headers: body ? { 'content-type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
   })
   if (!res.ok) {
@@ -36,7 +18,7 @@ const get = <T>(path: string) => request<T>('GET', path)
 type CardPatch = Partial<Pick<Card, 'title' | 'description' | 'status' | 'position'>>
 
 export const api = {
-  config: () => get<{ defaultCwd: string; authRequired: boolean }>('/api/config'),
+  config: () => get<{ defaultCwd: string }>('/api/config'),
   sessions: () => get<SessionSummary[]>('/api/sessions'),
   cards: () => get<Card[]>('/api/cards'),
   createCard: (card: { title: string; description?: string; status?: CardStatus }) => request<Card>('POST', '/api/cards', card),
@@ -64,7 +46,7 @@ class Socket {
   connect(): void {
     if (this.ws) return
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${proto}://${location.host}/ws?token=${encodeURIComponent(getToken())}`)
+    const ws = new WebSocket(`${proto}://${location.host}/ws`)
     this.ws = ws
     ws.onopen = () => {
       this.retry = 0

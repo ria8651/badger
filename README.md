@@ -5,7 +5,7 @@ A web chat interface for Claude Code running on a server. The browser talks to a
 ## Running
 
 ```bash
-cp .env.example .env   # set WORKSPACE_DIR, and AUTH_TOKEN if exposing beyond localhost
+cp .env.example .env   # set WORKSPACE_DIR
 pnpm install
 pnpm dev               # server on :3001, Vite on :5173
 ```
@@ -27,4 +27,4 @@ Protocol types: `shared/protocol.ts`.
 
 ## Security
 
-The server can run arbitrary commands as its user. It binds to `127.0.0.1` by default; set `AUTH_TOKEN` and put it behind TLS before exposing it.
+The server can run arbitrary commands as its user. It binds to `127.0.0.1` by default and has no authentication yet, so don't expose it beyond localhost.
