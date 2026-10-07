@@ -9,6 +9,7 @@ import { Transcript } from './Transcript.tsx'
 const MODES: { value: PermissionMode; label: string }[] = [
   { value: 'default', label: 'Ask before edits' },
   { value: 'acceptEdits', label: 'Auto-accept edits' },
+  { value: 'auto', label: 'Auto mode' },
   { value: 'plan', label: 'Plan mode' },
   { value: 'bypassPermissions', label: 'Bypass permissions' },
 ]

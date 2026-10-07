@@ -60,7 +60,8 @@ export function PermissionPrompt(props: { sessionId: string; permission: Pending
           </div>
           <FeedbackInput value={feedback()} onChange={setFeedback} placeholder="Tell Claude what to change (optional)" />
           <div class="flex flex-wrap gap-2">
-            <Button primary onClick={() => approvePlan('acceptEdits')}>Approve, auto-accept edits</Button>
+            <Button primary onClick={() => approvePlan('auto')}>Approve, auto mode</Button>
+            <Button onClick={() => approvePlan('acceptEdits')}>Approve, auto-accept edits</Button>
             <Button onClick={() => approvePlan('default')}>Approve, ask before edits</Button>
             <Button onClick={() => respond('deny')}>Keep planning</Button>
           </div>

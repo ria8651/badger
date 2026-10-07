@@ -18,7 +18,7 @@ Claude auth comes from `ANTHROPIC_API_KEY` if set, otherwise from the server use
 
 - **One live Claude Code process per chat** (`server/session.ts`). `query()` is fed by an async queue (`server/queue.ts`), so the process persists between turns and messages sent mid-turn are delivered at the next break. Idle processes close after 15 minutes; the next message resumes the session from disk.
 - **No database.** Transcripts live where Claude Code puts them (`~/.claude/projects`). The session list and history come from the SDK's `listSessions` / `getSessionMessages`, so CLI sessions show up too.
-- **Permissions in the browser.** `canUseTool` parks each request until a client answers. `AskUserQuestion` and `ExitPlanMode` get dedicated UIs. Pending prompts survive reloads via the snapshot sent on subscribe.
+- **Permissions in the browser.** `canUseTool` parks each request until a client answers. In auto mode Claude Code's classifier approves or denies calls itself and only the ones it can't decide reach the browser. `AskUserQuestion` and `ExitPlanMode` get dedicated UIs. Pending prompts survive reloads via the snapshot sent on subscribe.
 - **Multi-tab.** Any number of sockets can view a session; all receive the same stream.
 
 Protocol types: `shared/protocol.ts`.

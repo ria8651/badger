@@ -3,7 +3,7 @@
  * SDK messages are forwarded mostly verbatim; the client renders them.
  */
 
-export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
+export type PermissionMode = 'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypassPermissions'
 
 export interface PendingPermission {
   requestId: string
