@@ -17,7 +17,7 @@ const MODES: { value: PermissionMode; label: string }[] = [
 export function Chat(props: { sessionId: string; draftCwd?: string }) {
   const { state, clearError } = createChat(props.sessionId)
   const [text, setText] = createSignal('')
-  const [mode, setMode] = createSignal<PermissionMode>('default')
+  const [mode, setMode] = createSignal<PermissionMode>('auto')
   let scroller!: HTMLDivElement
   let input!: HTMLTextAreaElement
   let pinned = true

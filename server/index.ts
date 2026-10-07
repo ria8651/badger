@@ -40,7 +40,7 @@ async function snapshotFor(sessionId: string): Promise<ServerEvent> {
     sessionId,
     messages: messages as unknown as WireMessage[],
     running: false,
-    mode: 'default',
+    mode: 'auto',
     cwd: info?.cwd,
     permissions: [],
     bashOutput: {},

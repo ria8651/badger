@@ -104,7 +104,7 @@ export function createChat(sessionId: string) {
     messages: [],
     partial: null,
     running: false,
-    mode: 'default',
+    mode: 'auto',
     permissions: [],
     bashOutput: {},
     error: null,

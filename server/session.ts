@@ -288,7 +288,7 @@ export class SessionManager {
     const session = new LiveSession({
       id,
       cwd,
-      mode: opts.mode ?? 'default',
+      mode: opts.mode ?? 'auto',
       resume: !!info,
       onClose: () => {
         if (this.sessions.get(id) === session) this.sessions.delete(id)
