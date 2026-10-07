@@ -97,7 +97,13 @@ function userText(m: WireMessage): string {
   return raw
 }
 
-export function Transcript(props: { messages: WireMessage[]; partial: Partial | null; running: boolean; cwd?: string }) {
+export function Transcript(props: {
+  messages: WireMessage[]
+  partial: Partial | null
+  bashOutput: Record<string, string>
+  running: boolean
+  cwd?: string
+}) {
   // Track the array and its length, then walk the raw objects so the cache keys are stable.
   const view = createMemo(() => {
     void props.messages.length
@@ -122,6 +128,7 @@ export function Transcript(props: { messages: WireMessage[]; partial: Partial | 
             name={item.name}
             input={item.input}
             result={view().results.get(item.id)}
+            liveOutput={props.bashOutput[item.id]}
             running={props.running}
             cwd={props.cwd}
             subagentSteps={view().subagentSteps.get(item.id)}

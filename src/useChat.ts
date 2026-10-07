@@ -19,8 +19,13 @@ export interface ChatState {
   mode: PermissionMode
   cwd?: string
   permissions: PendingPermission[]
+  /** Live output of running Bash commands, by tool_use_id. */
+  bashOutput: Record<string, string>
   error: string | null
 }
+
+/** Live Bash output kept per command; the final tool_result has the full text. */
+const BASH_KEEP = 64 * 1024
 
 function apply(state: ChatState, event: ServerEvent): void {
   switch (event.type) {
@@ -31,6 +36,7 @@ function apply(state: ChatState, event: ServerEvent): void {
       state.mode = event.mode
       state.cwd = event.cwd
       state.permissions = event.permissions
+      state.bashOutput = event.bashOutput
       state.partial = null
       break
     case 'status':
@@ -43,6 +49,9 @@ function apply(state: ChatState, event: ServerEvent): void {
       break
     case 'permission_resolved':
       state.permissions = state.permissions.filter((p) => p.requestId !== event.requestId)
+      break
+    case 'bash_output':
+      state.bashOutput[event.toolUseId] = ((state.bashOutput[event.toolUseId] ?? '') + event.chunk).slice(-BASH_KEEP)
       break
     case 'error':
       state.error = event.error
@@ -97,6 +106,7 @@ export function createChat(sessionId: string) {
     running: false,
     mode: 'default',
     permissions: [],
+    bashOutput: {},
     error: null,
   })
 

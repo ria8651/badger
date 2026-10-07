@@ -43,6 +43,7 @@ async function snapshotFor(sessionId: string): Promise<ServerEvent> {
     mode: 'default',
     cwd: info?.cwd,
     permissions: [],
+    bashOutput: {},
   }
 }
 

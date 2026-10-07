@@ -10,6 +10,7 @@ import {
   type SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import type { PendingPermission, PermissionMode, ServerEvent, WireMessage } from '../shared/protocol.ts'
+import { BashStreams, streamEnv } from './bashStream.ts'
 import { MessageQueue } from './queue.ts'
 
 /** Close an idle Claude Code process after this long; the next message resumes it. */
@@ -39,6 +40,7 @@ export class LiveSession {
   /** Non-streaming messages seen since this process started, keyed for dedupe with disk. */
   private live: WireMessage[] = []
   private idleTimer: NodeJS.Timeout | null = null
+  private bash: BashStreams
   private onClose: () => void
 
   constructor(opts: { id: string; cwd: string; mode: PermissionMode; resume: boolean; onClose: () => void }) {
@@ -46,6 +48,9 @@ export class LiveSession {
     this.cwd = opts.cwd
     this.mode = opts.mode
     this.onClose = opts.onClose
+    this.bash = new BashStreams(this.id, (toolUseId, chunk) =>
+      this.emit({ type: 'bash_output', sessionId: this.id, toolUseId, chunk }),
+    )
 
     this.agent = query({
       prompt: this.queue,
@@ -58,6 +63,25 @@ export class LiveSession {
         systemPrompt: { type: 'preset', preset: 'claude_code' },
         settingSources: ['user', 'project', 'local'],
         canUseTool: this.canUseTool,
+        // Newer models omit thinking text by default; ask for summaries so it can stream.
+        thinking: { type: 'adaptive', display: 'summarized' },
+        env: streamEnv(),
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: 'Bash',
+              hooks: [
+                async (input) => {
+                  if (input.hook_event_name === 'PreToolUse') {
+                    const command = (input.tool_input as { command?: unknown })?.command
+                    if (typeof command === 'string') this.bash.track(input.tool_use_id, command)
+                  }
+                  return { continue: true }
+                },
+              ],
+            },
+          ],
+        },
       },
     })
     void this.pump()
@@ -82,6 +106,7 @@ export class LiveSession {
       mode: this.mode,
       cwd: this.cwd,
       permissions: [...this.pending.values()].map(publicPermission),
+      bashOutput: this.bash.outputs(),
     }
   }
 
@@ -134,6 +159,7 @@ export class LiveSession {
     if (this.idleTimer) clearTimeout(this.idleTimer)
     this.queue.close()
     this.agent.close()
+    this.bash.finishAll()
   }
 
   private canUseTool: CanUseTool = (toolName, input, { signal, suggestions, blockedPath, toolUseID }) =>
@@ -184,6 +210,8 @@ export class LiveSession {
         this.emitStatus()
       }
     }
+    if (msg.type === 'user') for (const id of toolResultIds(wire)) this.bash.finish(id)
+    if (msg.type === 'result') this.bash.finishAll()
     if (!isTranscriptMessage(msg)) return
     // The SDK may replay the user message we already echoed; skip the duplicate.
     if (msg.type === 'user' && wire.uuid && this.live.some((m) => m.uuid === wire.uuid)) return
@@ -218,6 +246,12 @@ export class LiveSession {
 function isTranscriptMessage(msg: SDKMessage): boolean {
   if (msg.type === 'user' || msg.type === 'assistant' || msg.type === 'result') return true
   return msg.type === 'system' && msg.subtype === 'compact_boundary'
+}
+
+function toolResultIds(m: WireMessage): string[] {
+  const content = (m.message as { content?: unknown } | undefined)?.content
+  if (!Array.isArray(content)) return []
+  return content.filter((b) => b?.type === 'tool_result' && b.tool_use_id).map((b) => b.tool_use_id as string)
 }
 
 function publicPermission({ resolve: _r, suggestions: _s, ...rest }: Pending): PendingPermission {

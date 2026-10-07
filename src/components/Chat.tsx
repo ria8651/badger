@@ -77,7 +77,7 @@ export function Chat(props: { sessionId: string; draftCwd?: string }) {
               </div>
             }
           >
-            <Transcript messages={state.messages} partial={state.partial} running={state.running} cwd={cwd()} />
+            <Transcript messages={state.messages} partial={state.partial} bashOutput={state.bashOutput} running={state.running} cwd={cwd()} />
           </Show>
           <Show when={state.running && !state.partial && state.permissions.length === 0}>
             <div class="mt-3 flex gap-1">

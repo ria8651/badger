@@ -1,4 +1,4 @@
-import { For, Match, Show, Switch, createSignal } from 'solid-js'
+import { For, Match, Show, Switch, createEffect, createSignal } from 'solid-js'
 import { Check, ChevronRight, Circle, CircleDot, Loader2, X } from 'lucide-solid'
 
 export interface ToolResult {
@@ -77,11 +77,14 @@ export function ToolCard(props: {
   name: string
   input: Input
   result?: ToolResult
+  /** Output streamed so far while a Bash command runs. */
+  liveOutput?: string
   running: boolean
   cwd?: string
   subagentSteps?: number
 }) {
   const [open, setOpen] = createSignal(false)
+  const live = () => (!props.result && props.running ? props.liveOutput : undefined)
   const status = () => (props.result ? (props.result.isError ? 'error' : 'done') : props.running ? 'running' : 'stopped')
 
   return (
@@ -109,9 +112,17 @@ export function ToolCard(props: {
             </Match>
           </Switch>
         </button>
+        <Show when={!open() && live()}>
+          {(text) => (
+            <div class="border-t border-zinc-200 p-2 dark:border-zinc-800">
+              <LiveOutput text={text()} class="max-h-40" />
+            </div>
+          )}
+        </Show>
         <Show when={open()}>
           <div class="space-y-2 border-t border-zinc-200 p-3 dark:border-zinc-800">
             <ToolInput name={props.name} input={props.input} />
+            <Show when={live()}>{(text) => <LiveOutput text={text()} class="max-h-96" />}</Show>
             <Show when={props.result}>
               {(r) => (
                 <Pre text={resultText(r().content) || '(no output)'} class={r().isError ? 'text-red-700 dark:text-red-400' : ''} />
@@ -121,6 +132,25 @@ export function ToolCard(props: {
         </Show>
       </div>
     </Show>
+  )
+}
+
+/** Streaming output that stays scrolled to the bottom unless the user scrolls up. */
+function LiveOutput(props: { text: string; class: string }) {
+  let el!: HTMLPreElement
+  let pinned = true
+  createEffect(() => {
+    void props.text
+    if (pinned) el.scrollTop = el.scrollHeight
+  })
+  return (
+    <pre
+      ref={el}
+      onScroll={() => (pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 8)}
+      class={`overflow-auto rounded-md bg-zinc-50 p-2 font-mono text-xs whitespace-pre-wrap break-words dark:bg-zinc-900 ${props.class}`}
+    >
+      {props.text}
+    </pre>
   )
 }
 

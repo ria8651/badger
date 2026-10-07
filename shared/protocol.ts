@@ -51,8 +51,12 @@ export type ServerEvent =
       mode: PermissionMode
       cwd?: string
       permissions: PendingPermission[]
+      /** Output so far of Bash commands still running, by tool_use_id. */
+      bashOutput: Record<string, string>
     }
   | { type: 'message'; sessionId: string; message: WireMessage }
+  /** Live output from a running Bash command; the tool_result still carries the final output. */
+  | { type: 'bash_output'; sessionId: string; toolUseId: string; chunk: string }
   | { type: 'status'; sessionId: string; running: boolean; mode: PermissionMode }
   | { type: 'permission_request'; sessionId: string; permission: PendingPermission }
   | { type: 'permission_resolved'; sessionId: string; requestId: string }
