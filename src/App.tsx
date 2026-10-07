@@ -162,7 +162,7 @@ export function App() {
               )}
             />
           </div>
-          <nav class="flex-1 overflow-y-auto border-t border-line px-2 py-2">
+          <nav class="flex-1 overflow-y-auto px-2 py-2">
             <For each={sessions()}>
               {(s) => (
                 <button
