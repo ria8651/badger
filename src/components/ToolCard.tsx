@@ -1,4 +1,4 @@
-import { For, Match, Show, Switch, createEffect, createSignal, type JSX } from 'solid-js'
+import { For, Match, Show, Switch, createEffect, createSignal, on, type JSX } from 'solid-js'
 import { Check, ChevronRight, Loader2 } from 'lucide-solid'
 
 export interface ToolResult {
@@ -83,9 +83,12 @@ export function Disclosure(props: {
   trailing?: JSX.Element
   /** Shown under the row while collapsed. */
   peek?: JSX.Element
+  /** Open while true, folding up once it turns false. */
+  live?: boolean
   children: JSX.Element
 }) {
-  const [open, setOpen] = createSignal(false)
+  const [open, setOpen] = createSignal(!!props.live)
+  createEffect(on(() => !!props.live, setOpen, { defer: true }))
   return (
     <div class="text-[13px]">
       <button
@@ -138,6 +141,7 @@ export function ToolCard(props: {
             </Switch>
           </>
         }
+        live={status() === 'running'}
         peek={live() && <LiveOutput text={live()!} class="max-h-40" />}
       >
         <ToolInput name={props.name} input={props.input} />

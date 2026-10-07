@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createSignal, on, onMount } from 'solid-js'
+import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from 'solid-js'
 import { ArrowUp, Square } from 'lucide-solid'
 import type { PermissionMode } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
@@ -20,20 +20,39 @@ export function Chat(props: { sessionId: string; draftCwd?: string }) {
   const [text, setText] = createSignal('')
   const [mode, setMode] = createSignal<PermissionMode>('auto')
   let scroller!: HTMLDivElement
+  let content!: HTMLDivElement
   let input!: HTMLTextAreaElement
   let pinned = true
+  let lastTop = 0
   const cwd = () => state.cwd ?? props.draftCwd
 
   createEffect(on(() => state.mode, setMode))
 
-  // Follow new output only while the user is already at the bottom.
-  createEffect(
-    on([() => state.messages.length, () => state.partial?.text, () => state.permissions.length], () => {
-      if (pinned) scroller.scrollTop = scroller.scrollHeight
-    }),
-  )
+  const fromBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
+  const toBottom = () => {
+    scroller.scrollTop = scroller.scrollHeight
+    lastTop = scroller.scrollTop
+  }
 
-  onMount(() => input.focus())
+  // Any upward move unsticks; reaching the bottom again resticks. Content
+  // shrinking clamps scrollTop down too, but leaves us at the bottom.
+  const onScroll = () => {
+    const top = scroller.scrollTop
+    if (top < lastTop - 0.5) {
+      if (fromBottom() > 1) pinned = false
+    } else if (fromBottom() < 24) pinned = true
+    lastTop = top
+  }
+
+  onMount(() => {
+    input.focus()
+    // Follow anything that changes size while stuck: messages, streaming, blocks opening, the composer.
+    const observer = new ResizeObserver(() => pinned && toBottom())
+    observer.observe(content)
+    observer.observe(scroller)
+    onCleanup(() => observer.disconnect())
+  })
+
 
   const submit = () => {
     const value = text().trim()
@@ -41,6 +60,7 @@ export function Chat(props: { sessionId: string; draftCwd?: string }) {
     socket.send({ type: 'send', sessionId: props.sessionId, text: value, cwd: cwd(), mode: mode() })
     setText('')
     pinned = true
+    toBottom()
   }
 
   const changeMode = (next: PermissionMode) => {
@@ -54,13 +74,12 @@ export function Chat(props: { sessionId: string; draftCwd?: string }) {
     <div class="flex h-full min-w-0 flex-1 flex-col">
       <div
         ref={scroller}
-        onScroll={(e) => {
-          const el = e.currentTarget
-          pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 80
-        }}
-        class="flex-1 overflow-y-auto"
+        onScroll={onScroll}
+        // Unstick on the gesture itself, before streamed content can push the bottom away.
+        onWheel={(e) => e.deltaY < 0 && scroller.scrollHeight > scroller.clientHeight && (pinned = false)}
+        class="flex-1 overflow-y-auto [overflow-anchor:none]"
       >
-        <div class="mx-auto max-w-3xl px-5 py-8">
+        <div ref={content} class="mx-auto max-w-3xl px-5 py-8">
           <Show
             when={!(state.loaded && state.messages.length === 0)}
             fallback={

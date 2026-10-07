@@ -3,7 +3,7 @@ import { unwrap } from 'solid-js/store'
 import type { WireMessage } from '../../shared/protocol.ts'
 import type { Partial } from '../useChat.ts'
 import { Markdown } from './Markdown.tsx'
-import { Disclosure, ToolCard, type ToolResult } from './ToolCard.tsx'
+import { Disclosure, Pre, ToolCard, type ToolResult } from './ToolCard.tsx'
 import { LiveDot } from './ui.tsx'
 
 type Block = { type: string; text?: string; thinking?: string; id?: string; name?: string; input?: Record<string, unknown> }
@@ -169,7 +169,9 @@ export function Transcript(props: {
         <Thinking text={props.partial?.text ?? ''} live />
       </Show>
       <Show when={props.partial?.type === 'tool_use'}>
-        <div class="flex h-7 items-center text-[13px] text-fg-3">{props.partial?.toolName}</div>
+        <Disclosure label={props.partial?.toolName ?? 'Tool'} trailing={<LiveDot />} live>
+          <Pre text={props.partial?.text ?? ''} />
+        </Disclosure>
       </Show>
     </div>
   )
@@ -177,7 +179,7 @@ export function Transcript(props: {
 
 function Thinking(props: { text: string; live?: boolean }) {
   return (
-    <Disclosure label={props.live ? 'Thinking' : 'Thought'} trailing={props.live && <LiveDot />}>
+    <Disclosure label={props.live ? 'Thinking' : 'Thought'} trailing={props.live && <LiveDot />} live={props.live}>
       <div class="text-[13px] leading-relaxed whitespace-pre-wrap text-fg-2">{props.text}</div>
     </Disclosure>
   )
