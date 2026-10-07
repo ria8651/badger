@@ -4,6 +4,7 @@ import {
   getSessionMessages,
   query,
   type CanUseTool,
+  type McpServerConfig,
   type PermissionResult,
   type PermissionUpdate,
   type Query,
@@ -17,6 +18,14 @@ import { MessageQueue } from './queue.ts'
 const IDLE_CLOSE_MS = 15 * 60 * 1000
 
 type Listener = (event: ServerEvent) => void
+
+/** Extra tools for one chat: MCP servers by name, and which of their tools skip the permission prompt. */
+export interface SessionTools {
+  mcpServers: Record<string, McpServerConfig>
+  allowedTools: string[]
+  /** Text to add to the conversation alongside the user's next message, if any. */
+  turnContext?: () => string | undefined
+}
 
 interface Pending extends PendingPermission {
   suggestions?: PermissionUpdate[]
@@ -43,7 +52,7 @@ export class LiveSession {
   private bash: BashStreams
   private onClose: () => void
 
-  constructor(opts: { id: string; cwd: string; mode: PermissionMode; resume: boolean; onClose: () => void }) {
+  constructor(opts: { id: string; cwd: string; mode: PermissionMode; resume: boolean; tools: SessionTools; onClose: () => void }) {
     this.id = opts.id
     this.cwd = opts.cwd
     this.mode = opts.mode
@@ -63,10 +72,23 @@ export class LiveSession {
         systemPrompt: { type: 'preset', preset: 'claude_code' },
         settingSources: ['user', 'project', 'local'],
         canUseTool: this.canUseTool,
+        mcpServers: opts.tools.mcpServers,
+        allowedTools: opts.tools.allowedTools,
         // Newer models omit thinking text by default; ask for summaries so it can stream.
         thinking: { type: 'adaptive', display: 'summarized' },
         env: streamEnv(),
         hooks: {
+          UserPromptSubmit: [
+            {
+              hooks: [
+                async () => {
+                  const additionalContext = opts.tools.turnContext?.()
+                  if (!additionalContext) return { continue: true }
+                  return { continue: true, hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } }
+                },
+              ],
+            },
+          ],
           PreToolUse: [
             {
               matcher: 'Bash',
@@ -262,7 +284,10 @@ function publicPermission({ resolve: _r, suggestions: _s, ...rest }: Pending): P
 export class SessionManager {
   private sessions = new Map<string, LiveSession>()
 
-  constructor(private onChange: () => void) {}
+  constructor(
+    private onChange: () => void,
+    private tools: (sessionId: string) => SessionTools,
+  ) {}
 
   get(id: string): LiveSession | undefined {
     return this.sessions.get(id)
@@ -290,6 +315,7 @@ export class SessionManager {
       cwd,
       mode: opts.mode ?? 'auto',
       resume: !!info,
+      tools: this.tools(id),
       onClose: () => {
         if (this.sessions.get(id) === session) this.sessions.delete(id)
         this.onChange()

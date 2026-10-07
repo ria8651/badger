@@ -23,6 +23,22 @@ export interface SessionSummary {
   running: boolean
 }
 
+export const CARD_STATUSES = ['backlog', 'todo', 'in_progress', 'review', 'done'] as const
+export type CardStatus = (typeof CARD_STATUSES)[number]
+
+/** A unit of work. Cards live in Badger's database, not a repo, so one card can hold chats from several repos. */
+export interface Card {
+  id: number
+  title: string
+  description: string
+  status: CardStatus
+  /** Sort order within the status column; fractional so a card can drop between two others. */
+  position: number
+  createdAt: number
+  updatedAt: number
+  sessionIds: string[]
+}
+
 /** Anything the SDK emits, or a transcript entry read back from disk. */
 export type WireMessage = { type: string; uuid?: string; [key: string]: unknown }
 
@@ -61,4 +77,5 @@ export type ServerEvent =
   | { type: 'permission_request'; sessionId: string; permission: PendingPermission }
   | { type: 'permission_resolved'; sessionId: string; requestId: string }
   | { type: 'sessions_changed' }
+  | { type: 'cards_changed' }
   | { type: 'error'; sessionId?: string; error: string }

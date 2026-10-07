@@ -1,7 +1,10 @@
-import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
-import { Plus } from 'lucide-solid'
-import type { SessionSummary } from '../shared/protocol.ts'
+import { For, Match, Show, Switch, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
+import { createStore, reconcile } from 'solid-js/store'
+import { Columns3, Plus } from 'lucide-solid'
+import type { Card, SessionSummary } from '../shared/protocol.ts'
 import { api, getToken, setToken, socket } from './api.ts'
+import { Board } from './components/Board.tsx'
+import { CardView } from './components/CardView.tsx'
 import { Chat } from './components/Chat.tsx'
 import { Button, LiveDot, Menu, inputClass, ltr } from './components/ui.tsx'
 
@@ -15,18 +18,39 @@ function uuid(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
 
-const sessionFromPath = () => location.pathname.match(/^\/s\/([0-9a-f-]{36})/)?.[1] ?? null
+type Route = { kind: 'home' } | { kind: 'chat'; id: string } | { kind: 'board' } | { kind: 'card'; id: number }
+
+function routeFromPath(): Route {
+  const path = location.pathname
+  const chat = path.match(/^\/s\/([0-9a-f-]{36})/)
+  if (chat) return { kind: 'chat', id: chat[1] }
+  const card = path.match(/^\/c\/(\d+)/)
+  if (card) return { kind: 'card', id: Number(card[1]) }
+  if (path === '/board') return { kind: 'board' }
+  return { kind: 'home' }
+}
+
+const pathFor = (r: Route) =>
+  r.kind === 'chat' ? `/s/${r.id}` : r.kind === 'card' ? `/c/${r.id}` : r.kind === 'board' ? '/board' : '/'
+
 
 export function App() {
   const [config, setConfig] = createSignal<{ defaultCwd: string; authRequired: boolean } | null>(null)
   const [needsToken, setNeedsToken] = createSignal(false)
   const [sessions, setSessions] = createSignal<SessionSummary[]>([])
-  const [current, setCurrent] = createSignal<string | null>(sessionFromPath())
+  // Reconciled by id so a refresh updates cards in place instead of rebuilding them mid-drag or mid-edit.
+  const [cardStore, setCardStore] = createStore<Card[]>([])
+  const cards = () => cardStore
+  const setCards = (next: Card[]) => setCardStore(reconcile(next, { key: 'id' }))
+  const [route, setRoute] = createSignal<Route>(routeFromPath())
   const [drafts, setDrafts] = createSignal<Record<string, string>>({})
   const [connected, setConnected] = createSignal(false)
 
   const refresh = () => {
     api.sessions().then(setSessions, (e) => e.status === 401 && setNeedsToken(true))
+  }
+  const refreshCards = () => {
+    api.cards().then(setCards, (e) => e.status === 401 && setNeedsToken(true))
   }
 
   onMount(() => {
@@ -35,17 +59,19 @@ export function App() {
       if (c.authRequired && !getToken()) return setNeedsToken(true)
       socket.connect()
       refresh()
+      refreshCards()
     })
     const offConn = socket.onConnection(setConnected)
     // Refresh the list when sessions appear, finish a turn, or change state.
     let timer: ReturnType<typeof setTimeout>
     const off = socket.on((e) => {
+      if (e.type === 'cards_changed') refreshCards()
       if (e.type === 'sessions_changed' || e.type === 'status') {
         clearTimeout(timer)
         timer = setTimeout(refresh, 300)
       }
     })
-    const onPop = () => setCurrent(sessionFromPath())
+    const onPop = () => setRoute(routeFromPath())
     addEventListener('popstate', onPop)
     onCleanup(() => {
       clearTimeout(timer)
@@ -55,10 +81,19 @@ export function App() {
     })
   })
 
-  const open = (id: string | null) => {
-    history.pushState(null, '', id ? `/s/${id}` : '/')
-    setCurrent(id)
+  const go = (r: Route) => {
+    history.pushState(null, '', pathFor(r))
+    setRoute(r)
   }
+  const current = () => {
+    const r = route()
+    return r.kind === 'chat' ? r.id : null
+  }
+  const currentCard = () => {
+    const r = route()
+    return r.kind === 'card' ? cards().find((c) => c.id === r.id) : undefined
+  }
+  const cardOf = createMemo(() => new Map(cards().flatMap((c) => c.sessionIds.map((id) => [id, c] as const))))
 
   /** Every directory a session has run in, most recent first, plus the server default. Scratch dirs are skipped. */
   const projects = createMemo(() => {
@@ -68,10 +103,11 @@ export function App() {
     return dirs
   })
 
-  const newChat = (cwd: string) => {
+  const newChat = (cwd: string, cardId?: number) => {
     const id = uuid()
     setDrafts((d) => ({ ...d, [id]: cwd }))
-    open(id)
+    if (cardId !== undefined) api.linkSession(cardId, id)
+    go({ kind: 'chat', id })
   }
 
   return (
@@ -101,6 +137,14 @@ export function App() {
             </Show>
           </div>
           <div class="px-2 pb-3">
+            <button
+              onClick={() => go({ kind: 'board' })}
+              class={`mb-px flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[13px] transition-colors hover:bg-surface hover:text-fg ${
+                route().kind === 'board' || route().kind === 'card' ? 'bg-surface text-fg' : 'text-fg-2'
+              }`}
+            >
+              <Columns3 class="size-4" /> Board
+            </button>
             <Menu
               items={projects().map((p) => ({ label: basename(p), description: p, mono: true }))}
               onPick={(i) => newChat(projects()[i])}
@@ -122,7 +166,7 @@ export function App() {
             <For each={sessions()}>
               {(s) => (
                 <button
-                  onClick={() => open(s.id)}
+                  onClick={() => go({ kind: 'chat', id: s.id })}
                   class={`group mb-px block w-full rounded-lg px-2 py-1.5 text-left transition-colors ${
                     s.id === current() ? 'bg-surface' : 'hover:bg-surface/60'
                   }`}
@@ -141,6 +185,7 @@ export function App() {
                   </div>
                   <div class="mt-0.5 flex gap-1.5 text-[11px] text-fg-3 tabular-nums">
                     <span class="truncate">{s.cwd && basename(s.cwd)}</span>
+                    <Show when={cardOf().get(s.id)}>{(c) => <span class="shrink-0">#{c().id}</span>}</Show>
                     <span class="ml-auto shrink-0">{when(s.lastModified)}</span>
                   </div>
                 </button>
@@ -149,9 +194,7 @@ export function App() {
           </nav>
         </aside>
 
-        <Show
-          when={current()}
-          keyed
+        <Switch
           fallback={
             <div class="flex flex-1 items-center justify-center p-5">
               <div class="w-full max-w-sm">
@@ -173,8 +216,27 @@ export function App() {
             </div>
           }
         >
-          {(id) => <Chat sessionId={id} draftCwd={drafts()[id]} />}
-        </Show>
+          <Match when={current()} keyed>
+            {(id) => <Chat sessionId={id} draftCwd={drafts()[id]} />}
+          </Match>
+          <Match when={route().kind === 'board'}>
+            <Board cards={cards()} sessions={sessions()} setCards={setCards} onOpen={(id) => go({ kind: 'card', id })} />
+          </Match>
+          <Match when={route().kind === 'card'}>
+            <Show when={currentCard()} fallback={<p class="flex flex-1 items-center justify-center text-[13px] text-fg-3">No such card</p>}>
+              {(card) => (
+                <CardView
+                  card={card()}
+                  sessions={sessions()}
+                  projects={projects()}
+                  onOpenChat={(id) => go({ kind: 'chat', id })}
+                  onNewChat={(cwd) => newChat(cwd, card().id)}
+                  onBack={() => go({ kind: 'board' })}
+                />
+              )}
+            </Show>
+          </Match>
+        </Switch>
       </div>
     </Show>
   )

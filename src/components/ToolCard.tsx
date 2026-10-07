@@ -16,9 +16,30 @@ export function relPath(path: string, cwd?: string): string {
   return path
 }
 
+/** Display name: Badger's own board tools read as actions, other MCP tools as "server: tool". */
+export function toolLabel(name: string): string {
+  const mcp = name.match(/^mcp__(.+?)__(.+)$/)
+  if (!mcp) return name
+  const action = mcp[2].replace(/_/g, ' ')
+  return mcp[1] === 'badger' ? action[0].toUpperCase() + action.slice(1) : `${mcp[1]}: ${action}`
+}
+
 /** One-line description of a tool call for its collapsed header. */
 export function toolSummary(name: string, input: Input, cwd?: string): string {
   switch (name) {
+    case 'mcp__badger__create_card':
+      return str(input.title)
+    case 'mcp__badger__update_card': {
+      const fields = ['title', 'description', 'status'].filter((k) => input[k] !== undefined)
+      return `#${input.id}` + (input.status ? ` → ${input.status}` : fields.length ? ` ${fields.join(', ')}` : '')
+    }
+    case 'mcp__badger__get_card':
+      return input.id === undefined ? 'This chat’s card' : `#${input.id}`
+    case 'mcp__badger__link_chat':
+    case 'mcp__badger__delete_card':
+      return `#${input.id}`
+    case 'mcp__badger__list_cards':
+      return str(input.status)
     case 'Bash':
       return str(input.description) || str(input.command)
     case 'Read':
@@ -123,7 +144,7 @@ export function ToolCard(props: {
   return (
     <Show when={props.name !== 'TodoWrite'} fallback={<Todos todos={(props.input.todos as TodoItem[]) ?? []} />}>
       <Disclosure
-        label={props.name}
+        label={toolLabel(props.name)}
         detail={toolSummary(props.name, props.input, props.cwd)}
         trailing={
           <>

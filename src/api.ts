@@ -1,4 +1,4 @@
-import type { ClientEvent, ServerEvent, SessionSummary } from '../shared/protocol.ts'
+import type { Card, CardStatus, ClientEvent, ServerEvent, SessionSummary } from '../shared/protocol.ts'
 
 const TOKEN_KEY = 'badger.token'
 
@@ -18,15 +18,32 @@ export function setToken(token: string): void {
   }
 }
 
-async function get<T>(path: string): Promise<T> {
-  const res = await fetch(path, { headers: { authorization: `Bearer ${getToken()}` } })
-  if (!res.ok) throw Object.assign(new Error(`${res.status} ${res.statusText}`), { status: res.status })
-  return res.json()
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    headers: { authorization: `Bearer ${getToken()}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  if (!res.ok) {
+    const message = await res.json().then((b) => b.error, () => null)
+    throw Object.assign(new Error(message ?? `${res.status} ${res.statusText}`), { status: res.status })
+  }
+  return res.status === 204 ? (undefined as T) : res.json()
 }
+
+const get = <T>(path: string) => request<T>('GET', path)
+
+type CardPatch = Partial<Pick<Card, 'title' | 'description' | 'status' | 'position'>>
 
 export const api = {
   config: () => get<{ defaultCwd: string; authRequired: boolean }>('/api/config'),
   sessions: () => get<SessionSummary[]>('/api/sessions'),
+  cards: () => get<Card[]>('/api/cards'),
+  createCard: (card: { title: string; description?: string; status?: CardStatus }) => request<Card>('POST', '/api/cards', card),
+  updateCard: (id: number, patch: CardPatch) => request<Card>('PATCH', `/api/cards/${id}`, patch),
+  deleteCard: (id: number) => request<void>('DELETE', `/api/cards/${id}`),
+  linkSession: (id: number, sessionId: string) => request<Card>('POST', `/api/cards/${id}/sessions`, { sessionId }),
+  unlinkSession: (id: number, sessionId: string) => request<Card>('DELETE', `/api/cards/${id}/sessions/${sessionId}`),
 }
 
 type Listener = (event: ServerEvent) => void

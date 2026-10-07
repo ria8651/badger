@@ -3,7 +3,7 @@ import { unwrap } from 'solid-js/store'
 import type { WireMessage } from '../../shared/protocol.ts'
 import type { Partial } from '../useChat.ts'
 import { Markdown } from './Markdown.tsx'
-import { Disclosure, Pre, ToolCard, type ToolResult } from './ToolCard.tsx'
+import { Disclosure, Pre, ToolCard, toolLabel, type ToolResult } from './ToolCard.tsx'
 import { LiveDot } from './ui.tsx'
 
 type Block = { type: string; text?: string; thinking?: string; id?: string; name?: string; input?: Record<string, unknown> }
@@ -169,7 +169,7 @@ export function Transcript(props: {
         <Thinking text={props.partial?.text ?? ''} live />
       </Show>
       <Show when={props.partial?.type === 'tool_use'}>
-        <Disclosure label={props.partial?.toolName ?? 'Tool'} trailing={<LiveDot />} live>
+        <Disclosure label={props.partial?.toolName ? toolLabel(props.partial.toolName) : 'Tool'} trailing={<LiveDot />} live>
           <Pre text={props.partial?.text ?? ''} />
         </Disclosure>
       </Show>

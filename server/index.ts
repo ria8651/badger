@@ -1,10 +1,12 @@
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
-import { createServer } from 'node:http'
+import { createServer, type IncomingMessage } from 'node:http'
 import { extname, join, resolve } from 'node:path'
 import { timingSafeEqual } from 'node:crypto'
 import { getSessionInfo, getSessionMessages, listSessions } from '@anthropic-ai/claude-agent-sdk'
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { ClientEvent, ServerEvent, SessionSummary, WireMessage } from '../shared/protocol.ts'
+import { BOARD_AUTO_ALLOWED, BOARD_SERVER, boardServer, cardContext } from './boardTools.ts'
+import { BadRequest, Store } from './db.ts'
 import { SessionManager } from './session.ts'
 
 loadDotEnv()
@@ -14,6 +16,7 @@ const HOST = process.env.HOST ?? '127.0.0.1'
 const WORKSPACE_DIR = resolve(process.env.WORKSPACE_DIR ?? process.cwd())
 const AUTH_TOKEN = process.env.AUTH_TOKEN || ''
 const DIST = resolve('dist')
+const DATA_DIR = resolve(process.env.DATA_DIR ?? 'data')
 
 // ── Fan-out: which sockets are viewing which session ──
 
@@ -29,7 +32,15 @@ function broadcast(event: ServerEvent): void {
   for (const ws of targets ?? []) send(ws, event)
 }
 
-const manager = new SessionManager(() => broadcast({ type: 'sessions_changed' }))
+const store = new Store(DATA_DIR)
+const manager = new SessionManager(
+  () => broadcast({ type: 'sessions_changed' }),
+  (sessionId) => ({
+    mcpServers: { [BOARD_SERVER]: boardServer(store, sessionId, () => broadcast({ type: 'cards_changed' })) },
+    allowedTools: BOARD_AUTO_ALLOWED,
+    turnContext: () => cardContext(store, sessionId),
+  }),
+)
 
 async function snapshotFor(sessionId: string): Promise<ServerEvent> {
   const live = manager.get(sessionId)
@@ -98,6 +109,55 @@ async function sessionList(): Promise<SessionSummary[]> {
   return summaries
 }
 
+/** Card routes. Returns undefined when the path isn't one of them. */
+async function cardsApi(method: string, path: string, req: IncomingMessage): Promise<[number, unknown] | undefined> {
+  if (path === '/api/cards') {
+    if (method === 'GET') return [200, store.cards()]
+    if (method === 'POST') return changed([201, store.createCard(await readJson(req))])
+  }
+  const card = path.match(/^\/api\/cards\/(\d+)$/)
+  if (card) {
+    const id = Number(card[1])
+    if (method === 'GET') return found(store.card(id))
+    if (method === 'PATCH') return changed(found(store.updateCard(id, await readJson(req))))
+    if (method === 'DELETE') return changed(store.deleteCard(id) ? [204, null] : [404, { error: 'No such card' }])
+  }
+  const link = path.match(/^\/api\/cards\/(\d+)\/sessions(?:\/([0-9a-f-]{36}))?$/)
+  if (link) {
+    const id = Number(link[1])
+    if (!store.card(id)) return [404, { error: 'No such card' }]
+    if (method === 'POST' && !link[2]) {
+      const { sessionId } = await readJson(req)
+      if (typeof sessionId !== 'string' || !/^[0-9a-f-]{36}$/.test(sessionId)) throw new BadRequest('sessionId is required')
+      store.linkSession(id, sessionId)
+      return changed([200, store.card(id)])
+    }
+    if (method === 'DELETE' && link[2]) {
+      store.unlinkSession(id, link[2])
+      return changed([200, store.card(id)])
+    }
+  }
+  return undefined
+}
+
+const found = (card: unknown): [number, unknown] => (card ? [200, card] : [404, { error: 'No such card' }])
+
+/** Tells every open tab to refetch once a write succeeds. */
+function changed(result: [number, unknown]): [number, unknown] {
+  if (result[0] < 300) broadcast({ type: 'cards_changed' })
+  return result
+}
+
+async function readJson(req: IncomingMessage): Promise<any> {
+  let body = ''
+  for await (const chunk of req) body += chunk
+  try {
+    return body ? JSON.parse(body) : {}
+  } catch {
+    throw new BadRequest('Invalid JSON')
+  }
+}
+
 function authorized(header: string | undefined, queryToken: string | null): boolean {
   if (!AUTH_TOKEN) return true
   const supplied = header?.replace(/^Bearer /, '') || queryToken || ''
@@ -113,6 +173,7 @@ const MIME: Record<string, string> = {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://x')
   const json = (status: number, body: unknown) => {
+    if (status === 204) return void res.writeHead(204).end()
     res.writeHead(status, { 'content-type': 'application/json' })
     res.end(JSON.stringify(body))
   }
@@ -121,6 +182,8 @@ const server = createServer(async (req, res) => {
     if (url.pathname.startsWith('/api/')) {
       if (!authorized(req.headers.authorization, null)) return json(401, { error: 'Unauthorized' })
       if (url.pathname === '/api/sessions') return json(200, await sessionList())
+      const cards = await cardsApi(req.method ?? 'GET', url.pathname, req)
+      if (cards) return json(...cards)
       return json(404, { error: 'Not found' })
     }
     // Production: serve the built client, falling back to index.html for client routes.
@@ -130,6 +193,7 @@ const server = createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream' })
     createReadStream(file).pipe(res)
   } catch (err) {
+    if (err instanceof BadRequest) return json(400, { error: err.message })
     json(500, { error: err instanceof Error ? err.message : String(err) })
   }
 })

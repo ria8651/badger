@@ -3,7 +3,7 @@ import { createStore } from 'solid-js/store'
 import type { PendingPermission, PermissionMode } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
 import { Markdown } from './Markdown.tsx'
-import { ToolInput, relPath, toolSummary } from './ToolCard.tsx'
+import { ToolInput, relPath, toolLabel, toolSummary } from './ToolCard.tsx'
 import { Button, inputClass } from './ui.tsx'
 
 export function PermissionPrompt(props: { sessionId: string; permission: PendingPermission; cwd?: string }) {
@@ -28,7 +28,7 @@ export function PermissionPrompt(props: { sessionId: string; permission: Pending
   return (
     <Switch
       fallback={
-        <Shell title={`Allow ${p().toolName}?`} subtitle={toolSummary(p().toolName, p().input, props.cwd)}>
+        <Shell title={`Allow ${toolLabel(p().toolName)}?`} subtitle={toolSummary(p().toolName, p().input, props.cwd)}>
           <ToolInput name={p().toolName} input={p().input} />
           <Show when={p().blockedPath}>
             {(path) => (
