@@ -2,7 +2,7 @@
   "name": "badger",
   "version": "1.0.0",
   "scripts": {
-    "dev": "concurrently -k -n server,web -c blue,magenta \"tsx watch server/index.ts\" \"vite\"",
+    "dev": "concurrently -k --handle-input -n server,web -c blue,magenta \"node scripts/dev-server.mjs\" \"vite\"",
     "build": "vite build",
     "start": "NODE_ENV=production tsx server/index.ts",
     "typecheck": "tsc --noEmit"
