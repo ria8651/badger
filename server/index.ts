@@ -6,7 +6,7 @@ import { WebSocketServer, type WebSocket } from 'ws'
 import type { ClientEvent, ServerEvent, SessionSummary, WireMessage } from '../shared/protocol.ts'
 import { BOARD_AUTO_ALLOWED, BOARD_SERVER, boardServer, cardContext } from './boardTools.ts'
 import { BadRequest, Store } from './db.ts'
-import { SessionManager } from './session.ts'
+import { SessionManager, withTurnResults } from './session.ts'
 import { TERMINAL_AUTO_ALLOWED, TERMINAL_SERVER, terminalServer } from './terminalTools.ts'
 import { Terminals, shellEnv } from './terminals.ts'
 import { workspaceRoot } from './workspace.ts'
@@ -93,7 +93,7 @@ async function snapshotFor(sessionId: string): Promise<ServerEvent> {
   return {
     type: 'snapshot',
     sessionId,
-    messages: messages as unknown as WireMessage[],
+    messages: withTurnResults(messages as unknown as WireMessage[]),
     running: false,
     mode: 'auto',
     cwd: info?.cwd,

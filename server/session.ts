@@ -119,7 +119,7 @@ export class LiveSession {
     // Disk holds history from earlier processes; `live` holds this process's turns in order.
     const disk = (await getSessionMessages(this.id).catch(() => [])) as unknown as WireMessage[]
     const seen = new Set(this.live.map((m) => m.uuid))
-    const messages = [...disk.filter((m) => !seen.has(m.uuid)), ...this.live]
+    const messages = [...withTurnResults(disk).filter((m) => !seen.has(m.uuid) && !seen.has(m.after_uuid as string)), ...this.live]
     return {
       type: 'snapshot',
       sessionId: this.id,
@@ -233,7 +233,10 @@ export class LiveSession {
       }
     }
     if (msg.type === 'user') for (const id of toolResultIds(wire)) this.bash.finish(id)
-    if (msg.type === 'result') this.bash.finishAll()
+    if (msg.type === 'result') {
+      this.bash.finishAll()
+      wire.ended_at = Date.now()
+    }
     if (!isTranscriptMessage(msg)) return
     // The SDK may replay the user message we already echoed; skip the duplicate.
     if (msg.type === 'user' && wire.uuid && this.live.some((m) => m.uuid === wire.uuid)) return
@@ -262,6 +265,60 @@ export class LiveSession {
   private emit(event: ServerEvent): void {
     for (const listener of this.listeners) listener(event)
   }
+}
+
+type Usage = { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
+
+/**
+ * The transcript on disk has no result messages (time taken, tokens), so rebuild
+ * one after each turn from message timestamps and each API call's usage.
+ * Main agent only, like the live results the client shows.
+ */
+export function withTurnResults(messages: WireMessage[]): WireMessage[] {
+  const out: WireMessage[] = []
+  let start: WireMessage | undefined
+  let last: WireMessage | undefined
+  let calls = new Map<string, Usage>()
+  const close = () => {
+    if (start && last?.uuid) {
+      const usage: Required<Usage> = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+      for (const u of calls.values()) for (const k of Object.keys(usage) as (keyof Usage)[]) usage[k] += u[k] ?? 0
+      const ended = Date.parse(String(last.timestamp))
+      out.push({
+        type: 'result',
+        subtype: 'success',
+        uuid: `${last.uuid}-result`,
+        after_uuid: last.uuid,
+        duration_ms: ended - Date.parse(String(start.timestamp)),
+        ended_at: ended,
+        usage,
+      })
+    }
+    start = last = undefined
+    calls = new Map()
+  }
+  for (const m of messages) {
+    if (isPrompt(m)) {
+      close()
+      start = m
+    } else if (start && m.type === 'assistant' && !m.parent_tool_use_id) {
+      last = m
+      // One API call is split into a line per content block, all sharing its id and usage.
+      const msg = m.message as { id?: string; usage?: Usage } | undefined
+      if (msg?.id && msg.usage) calls.set(msg.id, msg.usage)
+    }
+    out.push(m)
+  }
+  close()
+  return out
+}
+
+/** A message the user typed, as opposed to tool results or injected context. */
+function isPrompt(m: WireMessage): boolean {
+  if (m.type !== 'user' || m.parent_tool_use_id || !m.timestamp) return false
+  const content = (m.message as { content?: unknown } | undefined)?.content
+  if (typeof content === 'string') return !content.trimStart().startsWith('<')
+  return Array.isArray(content) && content.some((b) => b?.type === 'text' && !String(b.text).trimStart().startsWith('<'))
 }
 
 /** Messages the client renders; everything else (hooks, rate limits, lifecycle) is dropped. */

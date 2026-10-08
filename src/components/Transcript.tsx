@@ -1,4 +1,4 @@
-import { For, Show, createMemo, type JSX } from 'solid-js'
+import { For, Show, createMemo, createSignal, type JSX } from 'solid-js'
 import { unwrap } from 'solid-js/store'
 import type { WireMessage } from '../../shared/protocol.ts'
 import type { Partial } from '../useChat.ts'
@@ -14,7 +14,7 @@ type Item =
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; id: string; name: string; input: Record<string, unknown> }
-  | { kind: 'result'; ok: boolean; seconds: number; tokens?: { input: number; output: number }; error?: string }
+  | { kind: 'result'; ok: boolean; seconds: number; tokens?: { input: number; output: number }; endedAt?: number; error?: string }
   | { kind: 'divider'; text: string }
 
 /**
@@ -54,6 +54,7 @@ function messageItems(m: WireMessage): Item[] {
         ok,
         seconds: Math.round(Number(m.duration_ms ?? 0) / 1000),
         tokens: turnTokens(m.usage),
+        endedAt: typeof m.ended_at === 'number' ? m.ended_at : undefined,
         error: ok ? undefined : String(m.subtype === 'success' ? (m.result ?? 'Error') : m.subtype),
       },
     ]
@@ -143,8 +144,9 @@ export function Transcript(props: {
         return (
           <div class={`mt-4 text-xs tabular-nums ${item.ok ? 'text-fg-3' : 'text-danger'}`}>
             {item.ok ? '' : `Stopped: ${item.error} · `}
-            {item.seconds}s
+            {duration(item.seconds)}
             {item.tokens ? ` · ${compact(item.tokens.input)} in · ${compact(item.tokens.output)} out` : ''}
+            <Show when={item.endedAt}>{(at) => <Ago time={at()} />}</Show>
           </div>
         )
       case 'divider':
@@ -199,3 +201,27 @@ function turnTokens(usage: unknown): { input: number; output: number } | undefin
 }
 
 const compact = (n: number) => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
+
+/** 42s, 5m 3s, 1h 12m. */
+function duration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  return h ? `${h}h ${m}m` : `${m}m ${seconds % 60}s`
+}
+
+/** Ticks once a minute for every <Ago> on the page. */
+const [now, setNow] = createSignal(Date.now())
+setInterval(() => setNow(Date.now()), 60_000)
+
+function Ago(props: { time: number }) {
+  const label = () => {
+    const minutes = Math.floor((now() - props.time) / 60_000)
+    if (minutes < 1) return 'just now'
+    if (minutes < 60) return `${minutes}m ago`
+    const hours = Math.floor(minutes / 60)
+    if (hours < 24) return `${hours}h ago`
+    return `${Math.floor(hours / 24)}d ago`
+  }
+  return <span title={new Date(props.time).toLocaleString()}>{` · ${label()}`}</span>
+}
