@@ -39,6 +39,29 @@ export interface Card {
   sessionIds: string[]
 }
 
+/**
+ * A terminal owned by the PTY host. It belongs to the server, not to a chat:
+ * it keeps running across chats, reloads and Badger server restarts.
+ */
+export interface TerminalInfo {
+  /** Short hex id. */
+  id: string
+  /** What the program last set as its title (shells usually show the running command), else the command or shell. */
+  title: string
+  cwd: string
+  /** Git root of cwd (each worktree is its own), or cwd outside a repo. Terminals are grouped by this. */
+  root: string
+  /** Run with bash -c; restarting runs it again. Absent for an interactive shell. */
+  command?: string
+  /** The chat whose Claude started it, if any. */
+  sessionId?: string
+  running: boolean
+  exitCode?: number
+  /** Set when the process was killed by a signal. */
+  signal?: number
+  createdAt: number
+}
+
 /** Anything the SDK emits, or a transcript entry read back from disk. */
 export type WireMessage = { type: string; uuid?: string; [key: string]: unknown }
 
@@ -57,6 +80,10 @@ export type ClientEvent =
       /** Replacement tool input, e.g. AskUserQuestion answers. */
       updatedInput?: Record<string, unknown>
     }
+  | { type: 'term_subscribe'; id: string }
+  | { type: 'term_unsubscribe'; id: string }
+  | { type: 'term_input'; id: string; data: string }
+  | { type: 'term_resize'; id: string; cols: number; rows: number }
 
 export type ServerEvent =
   | {
@@ -78,4 +105,9 @@ export type ServerEvent =
   | { type: 'permission_resolved'; sessionId: string; requestId: string }
   | { type: 'sessions_changed' }
   | { type: 'cards_changed' }
+  /** Every terminal; sent on connect and whenever any of them changes. */
+  | { type: 'terminals'; terminals: TerminalInfo[] }
+  /** The terminal's screen and scrollback as escape sequences; replaces whatever the viewer had. */
+  | { type: 'term_snapshot'; id: string; data: string }
+  | { type: 'term_output'; id: string; data: string }
   | { type: 'error'; sessionId?: string; error: string }

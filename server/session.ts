@@ -286,7 +286,7 @@ export class SessionManager {
 
   constructor(
     private onChange: () => void,
-    private tools: (sessionId: string) => SessionTools,
+    private tools: (sessionId: string, cwd: string) => SessionTools,
   ) {}
 
   get(id: string): LiveSession | undefined {
@@ -315,7 +315,7 @@ export class SessionManager {
       cwd,
       mode: opts.mode ?? 'auto',
       resume: !!info,
-      tools: this.tools(id),
+      tools: this.tools(id, cwd),
       onClose: () => {
         if (this.sessions.get(id) === session) this.sessions.delete(id)
         this.onChange()

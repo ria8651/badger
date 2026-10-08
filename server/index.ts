@@ -1,13 +1,18 @@
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage } from 'node:http'
-import { extname, join, resolve } from 'node:path'
+import { extname, isAbsolute, join, resolve } from 'node:path'
 import { getSessionInfo, getSessionMessages, listSessions } from '@anthropic-ai/claude-agent-sdk'
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { ClientEvent, ServerEvent, SessionSummary, WireMessage } from '../shared/protocol.ts'
 import { BOARD_AUTO_ALLOWED, BOARD_SERVER, boardServer, cardContext } from './boardTools.ts'
 import { BadRequest, Store } from './db.ts'
 import { SessionManager } from './session.ts'
+import { TERMINAL_AUTO_ALLOWED, TERMINAL_SERVER, terminalServer } from './terminalTools.ts'
+import { Terminals, shellEnv } from './terminals.ts'
+import { workspaceRoot } from './workspace.ts'
 
+// Terminals get the environment Badger was started with, before .env adds PORT and friends.
+const startEnv = shellEnv(process.env)
 loadDotEnv()
 
 const PORT = Number(process.env.PORT ?? 3001)
@@ -31,14 +36,55 @@ function broadcast(event: ServerEvent): void {
 }
 
 const store = new Store(DATA_DIR)
+const terminals = new Terminals(DATA_DIR, startEnv)
 const manager = new SessionManager(
   () => broadcast({ type: 'sessions_changed' }),
-  (sessionId) => ({
-    mcpServers: { [BOARD_SERVER]: boardServer(store, sessionId, () => broadcast({ type: 'cards_changed' })) },
-    allowedTools: BOARD_AUTO_ALLOWED,
+  (sessionId, cwd) => ({
+    mcpServers: {
+      [BOARD_SERVER]: boardServer(store, sessionId, () => broadcast({ type: 'cards_changed' })),
+      [TERMINAL_SERVER]: terminalServer(terminals, sessionId, cwd),
+    },
+    allowedTools: [...BOARD_AUTO_ALLOWED, ...TERMINAL_AUTO_ALLOWED],
     turnContext: () => cardContext(store, sessionId),
   }),
 )
+
+// ── Terminals: which sockets are watching which terminal ──
+
+/**
+ * Per terminal, the sockets viewing it and how many views each has open. A
+ * socket isn't live until its snapshot goes out: output before then is
+ * already in the snapshot.
+ */
+const termViewers = new Map<string, Map<WebSocket, { views: number; live: boolean }>>()
+
+terminals.on((e) => {
+  if (e.type === 'terminals') {
+    broadcast({ type: 'terminals', terminals: e.terminals })
+    for (const id of termViewers.keys()) if (!e.terminals.some((t) => t.id === id)) termViewers.delete(id)
+    return
+  }
+  for (const [ws, v] of termViewers.get(e.id) ?? []) if (v.live) send(ws, { type: 'term_output', id: e.id, data: e.data })
+})
+
+/** Every subscribe gets a fresh snapshot, which also resets any view of it the socket already has. */
+function subscribeTerminal(ws: WebSocket, id: string): void {
+  let viewers = termViewers.get(id)
+  if (!viewers) termViewers.set(id, (viewers = new Map()))
+  const v = viewers.get(ws) ?? { views: 0, live: false }
+  viewers.set(ws, { views: v.views + 1, live: false })
+  terminals.snapshot(id, (data) => {
+    const current = termViewers.get(id)?.get(ws)
+    if (!current || current.live) return
+    current.live = true
+    send(ws, { type: 'term_snapshot', id, data: data ?? '' })
+  })
+}
+
+function unsubscribeTerminal(ws: WebSocket, id: string): void {
+  const v = termViewers.get(id)?.get(ws)
+  if (v && --v.views <= 0) termViewers.get(id)!.delete(ws)
+}
 
 async function snapshotFor(sessionId: string): Promise<ServerEvent> {
   const live = manager.get(sessionId)
@@ -83,6 +129,18 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       return
     case 'permission':
       manager.get(event.sessionId)?.resolvePermission(event.requestId, event.decision, event.message, event.updatedInput)
+      return
+    case 'term_subscribe':
+      subscribeTerminal(ws, event.id)
+      return
+    case 'term_unsubscribe':
+      unsubscribeTerminal(ws, event.id)
+      return
+    case 'term_input':
+      terminals.input(event.id, event.data)
+      return
+    case 'term_resize':
+      terminals.resize(event.id, event.cols, event.rows)
       return
   }
 }
@@ -138,6 +196,32 @@ async function cardsApi(method: string, path: string, req: IncomingMessage): Pro
   return undefined
 }
 
+/** Terminal routes. Live I/O goes over the WebSocket; these are the one-off actions. */
+async function terminalsApi(method: string, path: string, req: IncomingMessage): Promise<[number, unknown] | undefined> {
+  if (path === '/api/terminals') {
+    if (method === 'GET') return [200, terminals.terminals]
+    if (method === 'POST') {
+      const { cwd, command, cols, rows } = await readJson(req)
+      if (typeof cwd !== 'string' || !isAbsolute(cwd)) throw new BadRequest('cwd must be an absolute path')
+      if (command !== undefined && typeof command !== 'string') throw new BadRequest('command must be a string')
+      return [201, await terminals.create({ cwd, command: command || undefined, cols, rows }).catch(badRequest)]
+    }
+  }
+  const m = path.match(/^\/api\/terminals\/([0-9a-f]+)(?:\/(restart))?$/)
+  if (!m) return undefined
+  const [, id, action] = m
+  if (!terminals.get(id)) return [404, { error: 'No such terminal' }]
+  if (method === 'POST' && action === 'restart') return [200, await terminals.restart(id)]
+  if (method === 'DELETE' && !action) return (await terminals.remove(id), [204, null])
+  return undefined
+}
+
+const badRequest = (err: Error): never => {
+  throw new BadRequest(err.message)
+}
+
+const roots = new Map<string, string>()
+
 const found = (card: unknown): [number, unknown] => (card ? [200, card] : [404, { error: 'No such card' }])
 
 /** Tells every open tab to refetch once a write succeeds. */
@@ -160,6 +244,27 @@ const MIME: Record<string, string> = {
   '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
 }
 
+/**
+ * Only the page this server serves may use it. Without auth, any website the
+ * user visits could otherwise POST a command into a terminal or open the
+ * WebSocket and type into one. The Host check stops DNS rebinding (a hostile
+ * name resolving to 127.0.0.1); the Origin check stops cross-site requests.
+ * Requests with no Origin (curl, same-origin GETs) are allowed.
+ */
+const LOCAL_NAMES = new Set(['localhost', '127.0.0.1', '[::1]', HOST])
+
+function sameOrigin(req: IncomingMessage): boolean {
+  const host = req.headers.host
+  if (!host || !LOCAL_NAMES.has(new URL(`http://${host}`).hostname)) return false
+  const origin = req.headers.origin
+  if (!origin) return true
+  try {
+    return new URL(origin).host === host
+  } catch {
+    return false
+  }
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://x')
   const json = (status: number, body: unknown) => {
@@ -167,10 +272,19 @@ const server = createServer(async (req, res) => {
     res.writeHead(status, { 'content-type': 'application/json' })
     res.end(JSON.stringify(body))
   }
+  if (!sameOrigin(req)) return json(403, { error: 'Cross-origin requests are not allowed' })
   try {
     if (url.pathname === '/api/config') return json(200, { defaultCwd: WORKSPACE_DIR })
     if (url.pathname.startsWith('/api/')) {
       if (url.pathname === '/api/sessions') return json(200, await sessionList())
+      if (url.pathname === '/api/workspace') {
+        const cwd = url.searchParams.get('cwd')
+        if (!cwd) throw new BadRequest('cwd is required')
+        if (!roots.has(cwd)) roots.set(cwd, workspaceRoot(cwd))
+        return json(200, { root: roots.get(cwd) })
+      }
+      const terms = await terminalsApi(req.method ?? 'GET', url.pathname, req)
+      if (terms) return json(...terms)
       const cards = await cardsApi(req.method ?? 'GET', url.pathname, req)
       if (cards) return json(...cards)
       return json(404, { error: 'Not found' })
@@ -191,8 +305,8 @@ const wss = new WebSocketServer({ noServer: true })
 
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url ?? '/', 'http://x')
-  if (url.pathname !== '/ws') {
-    socket.write('HTTP/1.1 404 Not Found\r\n\r\n')
+  if (url.pathname !== '/ws' || !sameOrigin(req)) {
+    socket.write(url.pathname !== '/ws' ? 'HTTP/1.1 404 Not Found\r\n\r\n' : 'HTTP/1.1 403 Forbidden\r\n\r\n')
     socket.destroy()
     return
   }
@@ -201,6 +315,8 @@ server.on('upgrade', (req, socket, head) => {
 
 wss.on('connection', (ws: WebSocket) => {
   sockets.add(ws)
+  // Before the host has said hello the list is unknown, not empty; it's broadcast once it arrives.
+  if (terminals.known) send(ws, { type: 'terminals', terminals: terminals.terminals })
   // Handle each socket's events in order so a snapshot can't overtake a later status.
   let chain = Promise.resolve()
   ws.on('message', (raw) => {
@@ -223,12 +339,16 @@ wss.on('connection', (ws: WebSocket) => {
   ws.on('close', () => {
     sockets.delete(ws)
     for (const set of viewers.values()) set.delete(ws)
+    for (const set of termViewers.values()) set.delete(ws)
   })
 })
 
 server.listen(PORT, HOST, () => {
   console.log(`badger server on http://${HOST}:${PORT} (workspace ${WORKSPACE_DIR})`)
 })
+
+// Terminals live in a separate process and outlive this one; connect now so the list is ready.
+terminals.connect().catch((err) => console.error(err.message))
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {

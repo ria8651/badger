@@ -6,7 +6,9 @@ import { api, socket } from './api.ts'
 import { Board } from './components/Board.tsx'
 import { CardView } from './components/CardView.tsx'
 import { Chat } from './components/Chat.tsx'
+import { StatusDot, TerminalPage } from './components/Terminals.tsx'
 import { LiveDot } from './components/ui.tsx'
+import { terminalLabel, terminals } from './terminals.ts'
 
 /** crypto.randomUUID needs a secure context; fall back for plain-http hosts. */
 function uuid(): string {
@@ -18,7 +20,12 @@ function uuid(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
 
-type Route = { kind: 'home' } | { kind: 'chat'; id: string } | { kind: 'board' } | { kind: 'card'; id: number }
+type Route =
+  | { kind: 'home' }
+  | { kind: 'chat'; id: string }
+  | { kind: 'board' }
+  | { kind: 'card'; id: number }
+  | { kind: 'terminal'; id: string }
 
 function routeFromPath(): Route {
   const path = location.pathname
@@ -26,12 +33,22 @@ function routeFromPath(): Route {
   if (chat) return { kind: 'chat', id: chat[1] }
   const card = path.match(/^\/c\/(\d+)/)
   if (card) return { kind: 'card', id: Number(card[1]) }
+  const terminal = path.match(/^\/t\/([0-9a-f]+)/)
+  if (terminal) return { kind: 'terminal', id: terminal[1] }
   if (path === '/board') return { kind: 'board' }
   return { kind: 'home' }
 }
 
 const pathFor = (r: Route) =>
-  r.kind === 'chat' ? `/s/${r.id}` : r.kind === 'card' ? `/c/${r.id}` : r.kind === 'board' ? '/board' : '/'
+  r.kind === 'chat'
+    ? `/s/${r.id}`
+    : r.kind === 'card'
+      ? `/c/${r.id}`
+      : r.kind === 'terminal'
+        ? `/t/${r.id}`
+        : r.kind === 'board'
+          ? '/board'
+          : '/'
 
 
 export function App() {
@@ -93,6 +110,14 @@ export function App() {
     const r = route()
     return r.kind === 'card' ? cards().find((c) => c.id === r.id) : undefined
   }
+  const currentTerminal = () => {
+    const r = route()
+    return r.kind === 'terminal' ? r.id : null
+  }
+  // Grouped by workspace, oldest first within each, so a workspace's terminals sit together.
+  const sortedTerminals = createMemo(() =>
+    [...terminals()].sort((a, b) => a.root.localeCompare(b.root) || a.createdAt - b.createdAt),
+  )
   const cardOf = createMemo(() => new Map(cards().flatMap((c) => c.sessionIds.map((id) => [id, c] as const))))
 
   /** Every directory a session has run in, most recent first, plus the server default. Scratch dirs are skipped. */
@@ -148,6 +173,32 @@ export function App() {
             <Plus class="size-4" /> New chat
           </button>
         </div>
+        <Show when={sortedTerminals().length}>
+          <div class="px-2 pb-3">
+            <div class="px-2 pb-1 text-[11px] text-fg-3">Terminals</div>
+            <For each={sortedTerminals()}>
+              {(t) => (
+                <button
+                  onClick={() => go({ kind: 'terminal', id: t.id })}
+                  title={`${terminalLabel(t)}\n${t.cwd}`}
+                  class={`group mb-px flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left transition-colors ${
+                    t.id === currentTerminal() ? 'bg-surface' : 'hover:bg-surface/60'
+                  }`}
+                >
+                  <StatusDot terminal={t} />
+                  <span
+                    class={`min-w-0 flex-1 truncate text-[13px] ${
+                      t.id === currentTerminal() ? 'text-fg' : 'text-fg-2 group-hover:text-fg'
+                    }`}
+                  >
+                    {terminalLabel(t)}
+                  </span>
+                  <span class="shrink-0 text-[11px] text-fg-3">{basename(t.root)}</span>
+                </button>
+              )}
+            </For>
+          </div>
+        </Show>
         <nav class="flex-1 overflow-y-auto px-2 py-2">
           <For each={sessions()}>
             {(s) => (
@@ -192,9 +243,13 @@ export function App() {
                 projects={home() ? projects() : undefined}
                 onPickCwd={(cwd) => setDrafts((d) => ({ ...d, [id]: cwd }))}
                 onStart={() => home() && startHomeChat(id, drafts()[id] ?? projects()[0])}
+                onOpenTerminal={(tid) => go({ kind: 'terminal', id: tid })}
               />
             )
           }}
+        </Match>
+        <Match when={currentTerminal()} keyed>
+          {(id) => <TerminalPage id={id} onClosed={newHomeChat} />}
         </Match>
         <Match when={route().kind === 'board'}>
           <Board cards={cards()} sessions={sessions()} setCards={setCards} onOpen={(id) => go({ kind: 'card', id })} />
