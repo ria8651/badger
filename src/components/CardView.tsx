@@ -1,9 +1,10 @@
-import { For, Show, createMemo } from 'solid-js'
+import { For, Show, createEffect, createMemo, createSignal, on } from 'solid-js'
 import { Link, Plus, Trash2, X } from 'lucide-solid'
 import { CARD_STATUSES, type Card, type SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { folderItem, folderLabel, isScratch } from '../folders.ts'
 import { STATUS_LABELS } from './Board.tsx'
+import { Markdown } from './Markdown.tsx'
 import { LiveDot, Menu, Select } from './ui.tsx'
 
 const STATUS_OPTIONS = CARD_STATUSES.map((value) => ({ value, label: STATUS_LABELS[value] }))
@@ -24,6 +25,11 @@ export function CardView(props: {
   // Linked ids with no transcript yet (a chat opened but never sent) are left out.
   const chats = createMemo(() => props.sessions.filter((s) => props.card.sessionIds.includes(s.id)))
   const unlinked = createMemo(() => props.sessions.filter((s) => !props.card.sessionIds.includes(s.id)).slice(0, 30))
+  const [editing, setEditing] = createSignal(false)
+  // What was just typed, shown until the saved card comes back so the old text doesn't flash.
+  const [draft, setDraft] = createSignal<string>()
+  createEffect(on(() => props.card.description, () => setDraft(undefined), { defer: true }))
+  const description = () => draft() ?? props.card.description
 
   const save = (patch: { title?: string; description?: string }) => {
     const [key, value] = Object.entries(patch)[0] as ['title' | 'description', string]
@@ -66,13 +72,32 @@ export function CardView(props: {
           <Select value={props.card.status} options={STATUS_OPTIONS} onChange={(status) => api.updateCard(props.card.id, { status })} placement="bottom" title="Status" />
         </div>
 
-        <textarea
-          value={props.card.description}
-          onBlur={(e) => save({ description: e.currentTarget.value })}
-          placeholder="Describe the work"
-          rows={Math.max(4, props.card.description.split('\n').length + 1)}
-          class="mt-4 block w-full resize-none bg-transparent text-[15px] leading-relaxed outline-none placeholder:text-fg-3"
-        />
+        <Show
+          when={editing() || !description().trim()}
+          fallback={
+            <div
+              onClick={(e) => !(e.target as Element).closest('a') && setEditing(true)}
+              title="Click to edit"
+              class="mt-4 min-h-[6.6em] cursor-text"
+            >
+              <Markdown text={description()} />
+            </div>
+          }
+        >
+          <textarea
+            ref={(el) => editing() && queueMicrotask(() => el.focus())}
+            value={description()}
+            onBlur={(e) => {
+              setDraft(e.currentTarget.value)
+              save({ description: e.currentTarget.value })
+              setEditing(false)
+            }}
+            onKeyDown={(e) => e.key === 'Escape' && e.currentTarget.blur()}
+            placeholder="Describe the work"
+            rows={Math.max(4, description().split('\n').length + 1)}
+            class="mt-4 block w-full resize-none bg-transparent text-[15px] leading-relaxed outline-none placeholder:text-fg-3"
+          />
+        </Show>
 
         <div class="mt-8 flex items-center gap-1 border-b border-line pb-2">
           <h2 class="mr-auto text-[13px] font-medium text-fg-2">Chats</h2>
