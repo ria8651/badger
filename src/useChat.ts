@@ -42,6 +42,7 @@ function apply(state: ChatState, event: ServerEvent): void {
     case 'status':
       state.running = event.running
       state.mode = event.mode
+      state.cwd = event.cwd
       if (!event.running) state.partial = null
       break
     case 'permission_request':

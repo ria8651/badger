@@ -61,6 +61,8 @@ export function App() {
   const setCards = (next: Card[]) => setCardStore(reconcile(next, { key: 'id' }))
   const [route, setRoute] = createSignal<Route>(routeFromPath())
   const [drafts, setDrafts] = createSignal<Record<string, string>>({})
+  /** Blank chats that should start with "In a worktree" ticked, e.g. a card whose work is already in one. */
+  const [worktreeDrafts, setWorktreeDrafts] = createSignal<Record<string, boolean>>({})
   const [connected, setConnected] = createSignal(false)
   // Home is a blank chat; it gets a real URL once its first message is sent.
   // Its id is kept until then so a draft typed there survives reloads.
@@ -179,10 +181,10 @@ export function App() {
 
   /**
    * No folder first, then every directory a session has run in, most recent
-   * first, plus the server default. Temp dirs are skipped.
+   * first, plus the server default. Temp dirs and ones that are gone (removed worktrees) are skipped.
    */
   const projects = createMemo(() => {
-    const dirs = [...new Set(sessions().flatMap((s) => (s.cwd && !TEMP.test(s.cwd) && !isScratch(s.cwd) ? [s.cwd] : [])))]
+    const dirs = [...new Set(sessions().flatMap((s) => (s.cwd && !s.gone && !TEMP.test(s.cwd) && !isScratch(s.cwd) ? [s.cwd] : [])))]
     const fallback = config()?.defaultCwd
     if (fallback && !dirs.includes(fallback)) dirs.push(fallback)
     const scratch = config()?.scratchCwd
@@ -201,9 +203,10 @@ export function App() {
     if (loaded() && !untrack(drafts)[id]) setDrafts((d) => ({ ...d, [id]: untrack(defaultCwd) }))
   })
 
-  const newChat = (cwd: string, cardId?: number) => {
+  const newChat = (from: { cwd: string; worktree: boolean } | undefined, cardId?: number) => {
     const id = uuid()
-    setDrafts((d) => ({ ...d, [id]: cwd }))
+    setDrafts((d) => ({ ...d, [id]: from?.cwd ?? untrack(defaultCwd) }))
+    if (from?.worktree) setWorktreeDrafts((w) => ({ ...w, [id]: true }))
     if (cardId !== undefined) api.linkSession(cardId, id)
     go({ kind: 'chat', id })
   }
@@ -299,9 +302,11 @@ export function App() {
             return (
               <Chat
                 sessionId={id}
-                draftCwd={drafts()[id] ?? (home() ? defaultCwd() : undefined)}
-                projects={home() ? projects() : undefined}
+                draftCwd={drafts()[id] ?? defaultCwd()}
+                projects={projects()}
+                worktree={worktreeDrafts()[id]}
                 onPickCwd={(cwd) => setDrafts((d) => ({ ...d, [id]: cwd }))}
+                card={cardOf().get(id)}
                 onStart={() => home() && startHomeChat(id, drafts()[id] ?? defaultCwd())}
                 onOpenTerminal={(tid) => go({ kind: 'terminal', id: tid })}
               />
@@ -320,9 +325,8 @@ export function App() {
               <CardView
                 card={card()}
                 sessions={sessions()}
-                projects={projects()}
                 onOpenChat={(id) => go({ kind: 'chat', id })}
-                onNewChat={(cwd) => newChat(cwd, card().id)}
+                onNewChat={(from) => newChat(from, card().id)}
                 onBack={() => go({ kind: 'board' })}
               />
             )}

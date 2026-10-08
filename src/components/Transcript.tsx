@@ -2,7 +2,7 @@ import { For, Show, createMemo, createSignal, type JSX } from 'solid-js'
 import { unwrap } from 'solid-js/store'
 import { Columns3 } from 'lucide-solid'
 import { parseCardContext, type CardContext } from '../../shared/cardContext.ts'
-import type { WireMessage } from '../../shared/protocol.ts'
+import type { CardStatus, WireMessage } from '../../shared/protocol.ts'
 import type { Partial } from '../useChat.ts'
 import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
@@ -191,31 +191,40 @@ export function Transcript(props: {
   )
 }
 
+const badge = 'inline-flex max-w-[80%] items-center gap-2 rounded-full border border-line px-3 py-1 text-[13px]'
+
+/** A card as a pill linking to it; `prefix` goes before its number, e.g. "On card". */
+export function CardBadge(props: { card: { id: number; title: string; status: CardStatus }; prefix?: string }) {
+  return (
+    <a
+      href={`/c/${props.card.id}`}
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
+        e.preventDefault()
+        // App routes on popstate, so this navigates without a reload.
+        history.pushState(null, '', `/c/${props.card.id}`)
+        dispatchEvent(new PopStateEvent('popstate'))
+      }}
+      class={`${badge} text-fg-2 transition-colors hover:bg-surface hover:text-fg`}
+    >
+      <Columns3 class="size-3.5 shrink-0 text-fg-3" />
+      <span class="min-w-0 truncate">
+        <span class="text-fg-3">
+          {props.prefix ? `${props.prefix} ` : ''}#{props.card.id}
+        </span>{' '}
+        {props.card.title}
+      </span>
+      <span class="shrink-0 text-xs text-fg-3">{STATUS_LABELS[props.card.status]}</span>
+    </a>
+  )
+}
+
 /** The card Claude was told about with this message, as a badge on the user's side linking to it. */
 function CardContextBadge(props: { context: CardContext }) {
-  const badge = 'inline-flex max-w-[80%] items-center gap-2 rounded-full border border-line px-3 py-1 text-[13px]'
   return (
     <div class="-mt-2 mb-4 flex justify-end">
       <Show when={props.context.card} fallback={<span class={`${badge} text-fg-3`}><Columns3 class="size-3.5" />No longer on a card</span>}>
-        {(card) => (
-          <a
-            href={`/c/${card().id}`}
-            onClick={(e) => {
-              if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
-              e.preventDefault()
-              // App routes on popstate, so this navigates without a reload.
-              history.pushState(null, '', `/c/${card().id}`)
-              dispatchEvent(new PopStateEvent('popstate'))
-            }}
-            class={`${badge} text-fg-2 transition-colors hover:bg-surface hover:text-fg`}
-          >
-            <Columns3 class="size-3.5 shrink-0 text-fg-3" />
-            <span class="min-w-0 truncate">
-              <span class="text-fg-3">#{card().id}</span> {card().title}
-            </span>
-            <span class="shrink-0 text-xs text-fg-3">{STATUS_LABELS[card().status]}</span>
-          </a>
-        )}
+        {(card) => <CardBadge card={card()} />}
       </Show>
     </div>
   )

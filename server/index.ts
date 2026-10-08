@@ -10,7 +10,7 @@ import { BadRequest, Store } from './db.ts'
 import { SessionManager, diskTranscript } from './session.ts'
 import { TERMINAL_AUTO_ALLOWED, TERMINAL_SERVER, terminalServer } from './terminalTools.ts'
 import { Terminals, shellEnv } from './terminals.ts'
-import { workspaceRoot } from './workspace.ts'
+import { excludeWorktrees, removeWorktree, workspaceRoot, worktreeStatus } from './workspace.ts'
 
 // Terminals get the environment Badger was started with, before .env adds PORT and friends.
 const startEnv = shellEnv(process.env)
@@ -140,7 +140,12 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       // Sending empties the composer in every tab, not just the one that sent.
       saveDraft(ws, event.sessionId, '')
       const isNew = !manager.get(event.sessionId)
-      const session = await manager.open(event.sessionId, { cwd: event.cwd, mode: event.mode })
+      if (isNew && event.worktree !== undefined && event.cwd) {
+        await excludeWorktrees(event.cwd).catch(() => {
+          throw new Error(`${event.cwd} isn't a git repository, so it can't have worktrees`)
+        })
+      }
+      const session = await manager.open(event.sessionId, { cwd: event.cwd, mode: event.mode, worktree: event.worktree })
       if (isNew) session.subscribe(broadcast)
       if (!session.send(event.text)) throw new Error('Session is closed; try again')
       return
@@ -178,13 +183,21 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
 async function sessionList(): Promise<SessionSummary[]> {
   const infos = await listSessions({ limit: 200 })
   const archived = store.archivedIds()
+  const exists = new Map<string, boolean>()
+  const gone = (cwd?: string) => {
+    if (!cwd) return false
+    if (!exists.has(cwd)) exists.set(cwd, existsSync(cwd))
+    return !exists.get(cwd)
+  }
   const summaries: SessionSummary[] = infos.map((s) => ({
     id: s.sessionId,
     title: s.customTitle || s.summary || s.firstPrompt || 'Untitled',
-    cwd: s.cwd,
+    // A live chat may have moved into a worktree since its transcript was last written.
+    cwd: manager.get(s.sessionId)?.cwd ?? s.cwd,
     lastModified: s.lastModified,
     running: manager.isRunning(s.sessionId),
     archived: archived.has(s.sessionId),
+    gone: gone(s.cwd),
   }))
   // A brand-new live session may not have a transcript on disk yet.
   for (const id of manager.liveIds()) {
@@ -232,6 +245,23 @@ function sessionsApi(method: string, path: string): [number, unknown] | undefine
   if (!m) return undefined
   if (method === 'POST') return (store.setArchived(m[1], true), [204, null])
   if (method === 'DELETE') return (store.setArchived(m[1], false), [204, null])
+  return undefined
+}
+
+/** Worktree routes, by path. Making them is Claude Code's job (--worktree); these look and clean up. */
+async function worktreesApi(method: string, path: string, url: URL): Promise<[number, unknown] | undefined> {
+  if (path !== '/api/worktree') return undefined
+  const dir = url.searchParams.get('path')
+  if (!dir || !isAbsolute(dir)) throw new BadRequest('path must be an absolute path')
+  if (method === 'GET') return [200, await worktreeStatus(dir).catch(badRequest)]
+  if (method === 'DELETE') {
+    if (manager.in(dir).some((s) => s.running)) throw new BadRequest('A chat is still working in this worktree')
+    if (terminals.terminals.some((t) => t.root === dir)) throw new BadRequest('Close its terminals first')
+    for (const s of manager.in(dir)) s.close()
+    await removeWorktree(dir).catch(badRequest)
+    broadcast({ type: 'sessions_changed' })
+    return [204, null]
+  }
   return undefined
 }
 
@@ -324,6 +354,8 @@ const server = createServer(async (req, res) => {
       }
       const archive = sessionsApi(req.method ?? 'GET', url.pathname)
       if (archive) return json(...archive)
+      const worktrees = await worktreesApi(req.method ?? 'GET', url.pathname, url)
+      if (worktrees) return json(...worktrees)
       const terms = await terminalsApi(req.method ?? 'GET', url.pathname, req)
       if (terms) return json(...terms)
       const cards = await cardsApi(req.method ?? 'GET', url.pathname, req)

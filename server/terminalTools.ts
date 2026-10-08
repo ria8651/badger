@@ -27,8 +27,14 @@ const timeout = z.number().min(1).max(600).optional().describe('Seconds to wait 
  * Badger's terminals as tools, for one chat. Terminals are the user's: they
  * see them in the browser, and they outlive this chat and Badger restarts.
  */
-export function terminalServer(terminals: Terminals, sessionId: string, cwd: string): McpSdkServerConfigWithInstance {
-  const root = workspaceRoot(cwd)
+export function terminalServer(terminals: Terminals, sessionId: string, chatCwd: () => string): McpSdkServerConfigWithInstance {
+  // The chat's directory moves if Claude enters a worktree; look its root up again when it does.
+  let rootOf: [string, string] | undefined
+  const root = () => {
+    const cwd = chatCwd()
+    if (rootOf?.[0] !== cwd) rootOf = [cwd, workspaceRoot(cwd)]
+    return rootOf[1]
+  }
 
   const find = (tid: string) => terminals.get(tid)
 
@@ -115,7 +121,7 @@ export function terminalServer(terminals: Terminals, sessionId: string, cwd: str
   const describe = (t: TerminalInfo) => {
     const state = t.running ? 'running' : t.signal ? `killed (signal ${t.signal})` : `exited ${t.exitCode ?? '?'}`
     const what = t.command ? `$ ${t.command}` : `shell, showing "${t.title}"`
-    const where = t.root === root ? (t.cwd === root ? '' : ` in ${t.cwd}`) : ` in ${t.cwd} (another workspace)`
+    const where = t.root === root() ? (t.cwd === root() ? '' : ` in ${t.cwd}`) : ` in ${t.cwd} (another workspace)`
     return `${t.id} [${state}] ${what}${where}${t.sessionId === sessionId ? ' (started by this chat)' : ''}`
   }
 
@@ -135,7 +141,7 @@ export function terminalServer(terminals: Terminals, sessionId: string, cwd: str
         "List Badger's terminals: id, state, command, directory. Ones in this chat's workspace come first.",
         {},
         async () => {
-          const all = [...terminals.terminals].sort((a, b) => Number(b.root === root) - Number(a.root === root))
+          const all = [...terminals.terminals].sort((a, b) => Number(b.root === root()) - Number(a.root === root()))
           return text(all.length ? all.map(describe).join('\n') : 'No terminals.')
         },
         { annotations: { readOnlyHint: true } },
@@ -158,7 +164,7 @@ export function terminalServer(terminals: Terminals, sessionId: string, cwd: str
           timeout,
         },
         async (args) => {
-          const dir = args.cwd ? (isAbsolute(args.cwd) ? args.cwd : resolve(cwd, args.cwd)) : cwd
+          const dir = args.cwd ? (isAbsolute(args.cwd) ? args.cwd : resolve(chatCwd(), args.cwd)) : chatCwd()
           return act(() => terminals.create({ cwd: dir, command: args.command, sessionId }), args)
         },
       ),

@@ -1,8 +1,8 @@
-import { For, Show, createEffect, createMemo, createSignal, on } from 'solid-js'
-import { Link, Plus, Trash2, X } from 'lucide-solid'
+import { For, Show, createEffect, createMemo, createResource, createSignal, on } from 'solid-js'
+import { GitBranch, Link, Plus, Trash2, X } from 'lucide-solid'
 import { CARD_STATUSES, type Card, type SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
-import { folderItem, folderLabel, isScratch } from '../folders.ts'
+import { folderLabel, isScratch, worktreeOf } from '../folders.ts'
 import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
 import { LiveDot, Menu, Select } from './ui.tsx'
@@ -17,14 +17,24 @@ const menuTrigger = (open: boolean) =>
 export function CardView(props: {
   card: Card
   sessions: SessionSummary[]
-  projects: string[]
   onOpenChat: (id: string) => void
-  onNewChat: (cwd: string) => void
+  /** Where the card's work last happened, if anywhere: the repo, and whether it was in the card's worktree. */
+  onNewChat: (from?: { cwd: string; worktree: boolean }) => void
   onBack: () => void
 }) {
   // Linked ids with no transcript yet (a chat opened but never sent) are left out.
   const chats = createMemo(() => props.sessions.filter((s) => props.card.sessionIds.includes(s.id)))
   const unlinked = createMemo(() => props.sessions.filter((s) => !props.card.sessionIds.includes(s.id)).slice(0, 30))
+  /** Worktrees this card's chats run in. Made by starting a chat in one; nothing else records them. */
+  const worktrees = createMemo(() => [...new Set(chats().flatMap((s) => (s.cwd && !s.gone && worktreeOf(s.cwd) ? [s.cwd] : [])))])
+  // A new chat picks up where the card's latest chat ran; its folder can still be changed before the first message.
+  const newChat = () => {
+    const latest = chats()
+      .filter((s) => s.cwd && !s.gone && !isScratch(s.cwd))
+      .reduce<SessionSummary | undefined>((a, s) => (!a || s.lastModified > a.lastModified ? s : a), undefined)
+    const wt = worktreeOf(latest?.cwd)
+    props.onNewChat(latest?.cwd ? { cwd: wt?.repo ?? latest.cwd, worktree: !!wt } : undefined)
+  }
   const [editing, setEditing] = createSignal(false)
   // What was just typed, shown until the saved card comes back so the old text doesn't flash.
   const [draft, setDraft] = createSignal<string>()
@@ -113,18 +123,9 @@ export function CardView(props: {
               </>
             )}
           />
-          <Menu
-            items={props.projects.map(folderItem)}
-            onPick={(i) => props.onNewChat(props.projects[i])}
-            placement="bottom"
-            class="right-0 left-auto! w-60"
-            triggerClass={menuTrigger}
-            trigger={() => (
-              <>
-                <Plus class="size-3.5" /> New chat
-              </>
-            )}
-          />
+          <button type="button" onClick={newChat} class={menuTrigger(false)}>
+            <Plus class="size-3.5" /> New chat
+          </button>
         </div>
         <Show when={chats().length} fallback={<p class="py-3 text-[13px] text-fg-3">No chats yet. Chats can be in any repo.</p>}>
           <For each={chats()}>
@@ -148,7 +149,62 @@ export function CardView(props: {
             )}
           </For>
         </Show>
+
+        <Show when={worktrees().length}>
+          <h2 class="mt-8 border-b border-line pb-2 text-[13px] font-medium text-fg-2">Worktrees</h2>
+          <For each={worktrees()}>{(path) => <WorktreeRow path={path} sessions={props.sessions} />}</For>
+        </Show>
       </div>
+    </div>
+  )
+}
+
+/** One worktree's branch and what's not merged yet, with a way to remove it once the work is in. */
+function WorktreeRow(props: { path: string; sessions: SessionSummary[] }) {
+  // Refetched whenever the chat list changes, which is roughly whenever work happened.
+  const [status, { refetch }] = createResource(
+    () => [props.path, props.sessions] as const,
+    ([path]) => api.worktree(path),
+  )
+  const [error, setError] = createSignal<string>()
+  const summary = () => {
+    const s = status()
+    if (!s) return status.error ? 'Unavailable' : ''
+    const parts = [
+      s.changes && `${s.changes} uncommitted ${s.changes === 1 ? 'change' : 'changes'}`,
+      s.unmerged && `${s.unmerged} ${s.unmerged === 1 ? 'commit' : 'commits'} not on ${s.base || 'HEAD'}`,
+    ].filter(Boolean)
+    return parts.length ? parts.join(' · ') : `Merged into ${s.base || 'HEAD'}`
+  }
+  const remove = () => {
+    const s = status()
+    const warning = s?.unmerged ? `\n\nIts branch ${s.branch} has unmerged commits, so it will be kept.` : ''
+    if (!confirm(`Remove worktree ${folderLabel(props.path)}?${warning}`)) return
+    setError(undefined)
+    api.removeWorktree(props.path).catch((err: Error) => {
+      setError(err.message)
+      refetch()
+    })
+  }
+  return (
+    <div class="group border-b border-line py-2.5">
+      <div class="flex items-center gap-2 text-[13px]">
+        <GitBranch class="size-3.5 shrink-0 text-fg-3" />
+        <span class="min-w-0 truncate font-mono text-xs text-fg-2" title={props.path}>
+          {status()?.branch || folderLabel(props.path)}
+        </span>
+        <span class="ml-auto shrink-0 text-[11px] text-fg-3">{summary()}</span>
+        <button
+          onClick={remove}
+          title="Remove worktree (its branch goes too, if merged)"
+          class="grid size-6 place-items-center rounded-md text-fg-3 opacity-0 transition hover:bg-surface hover:text-danger group-hover:opacity-100 focus-visible:opacity-100"
+        >
+          <Trash2 class="size-3.5" />
+        </button>
+      </div>
+      <Show when={error()}>
+        <p class="mt-1 text-xs text-danger">{error()}</p>
+      </Show>
     </div>
   )
 }

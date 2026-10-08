@@ -23,6 +23,20 @@ export interface SessionSummary {
   running: boolean
   /** Hidden from the sidebar's main list. Archiving never deletes the transcript. */
   archived: boolean
+  /** Its directory no longer exists, e.g. a removed worktree. */
+  gone?: boolean
+}
+
+/** A git worktree Claude Code made under `<repo>/.claude/worktrees/`. */
+export interface WorktreeStatus {
+  path: string
+  branch: string
+  /** Files with uncommitted changes. */
+  changes: number
+  /** Commits on its branch that the main checkout's HEAD doesn't have. */
+  unmerged: number
+  /** The main checkout's branch, which `unmerged` is counted against. */
+  base: string
 }
 
 export const CARD_STATUSES = ['backlog', 'todo', 'in_progress', 'review', 'done'] as const
@@ -70,7 +84,15 @@ export type WireMessage = { type: string; uuid?: string; [key: string]: unknown 
 export type ClientEvent =
   | { type: 'subscribe'; sessionId: string }
   | { type: 'unsubscribe'; sessionId: string }
-  | { type: 'send'; sessionId: string; text: string; cwd?: string; mode?: PermissionMode }
+  | {
+      type: 'send'
+      sessionId: string
+      text: string
+      cwd?: string
+      mode?: PermissionMode
+      /** Start a new chat in a git worktree of cwd with this name (reused if it exists); empty lets Claude name it. */
+      worktree?: string
+    }
   | { type: 'interrupt'; sessionId: string }
   /** The composer's unsent text; replaces the saved draft. */
   | { type: 'draft'; sessionId: string; text: string }
@@ -108,7 +130,8 @@ export type ServerEvent =
   | { type: 'draft'; sessionId: string; text: string }
   /** Live output from a running Bash command; the tool_result still carries the final output. */
   | { type: 'bash_output'; sessionId: string; toolUseId: string; chunk: string }
-  | { type: 'status'; sessionId: string; running: boolean; mode: PermissionMode }
+  /** cwd changes when the chat moves into a worktree. */
+  | { type: 'status'; sessionId: string; running: boolean; mode: PermissionMode; cwd: string }
   | { type: 'permission_request'; sessionId: string; permission: PendingPermission }
   | { type: 'permission_resolved'; sessionId: string; requestId: string }
   | { type: 'sessions_changed' }

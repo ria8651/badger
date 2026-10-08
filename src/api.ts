@@ -1,4 +1,4 @@
-import type { Card, CardStatus, ClientEvent, ServerEvent, SessionSummary, TerminalInfo } from '../shared/protocol.ts'
+import type { Card, CardStatus, ClientEvent, ServerEvent, SessionSummary, TerminalInfo, WorktreeStatus } from '../shared/protocol.ts'
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -30,6 +30,8 @@ export const api = {
   deleteCard: (id: number) => request<void>('DELETE', `/api/cards/${id}`),
   linkSession: (id: number, sessionId: string) => request<Card>('POST', `/api/cards/${id}/sessions`, { sessionId }),
   unlinkSession: (id: number, sessionId: string) => request<Card>('DELETE', `/api/cards/${id}/sessions/${sessionId}`),
+  worktree: (path: string) => get<WorktreeStatus>(`/api/worktree?path=${encodeURIComponent(path)}`),
+  removeWorktree: (path: string) => request<void>('DELETE', `/api/worktree?path=${encodeURIComponent(path)}`),
   workspace: (cwd: string) => get<{ root: string }>(`/api/workspace?cwd=${encodeURIComponent(cwd)}`),
   createTerminal: (spec: { cwd: string; command?: string; cols?: number; rows?: number }) =>
     request<TerminalInfo>('POST', '/api/terminals', spec),

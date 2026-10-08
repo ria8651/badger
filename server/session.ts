@@ -41,7 +41,8 @@ interface Pending extends PendingPermission {
  */
 export class LiveSession {
   readonly id: string
-  readonly cwd: string
+  /** Changes when Claude moves into or out of a worktree. */
+  cwd: string
   mode: PermissionMode
   running = false
 
@@ -54,12 +55,24 @@ export class LiveSession {
   private idleTimer: NodeJS.Timeout | null = null
   private bash: BashStreams
   private onClose: () => void
+  private onCwd: () => void
 
-  constructor(opts: { id: string; cwd: string; mode: PermissionMode; resume: boolean; tools: SessionTools; onClose: () => void }) {
+  constructor(opts: {
+    id: string
+    cwd: string
+    mode: PermissionMode
+    resume: boolean
+    /** Start a new session in this worktree (Claude Code's --worktree); empty lets Claude name it. */
+    worktree?: string
+    tools: SessionTools
+    onClose: () => void
+    onCwd: () => void
+  }) {
     this.id = opts.id
     this.cwd = opts.cwd
     this.mode = opts.mode
     this.onClose = opts.onClose
+    this.onCwd = opts.onCwd
     this.bash = new BashStreams(this.id, (toolUseId, chunk) =>
       this.emit({ type: 'bash_output', sessionId: this.id, toolUseId, chunk }),
     )
@@ -80,6 +93,7 @@ export class LiveSession {
         // Newer models omit thinking text by default; ask for summaries so it can stream.
         thinking: { type: 'adaptive', display: 'summarized' },
         env: streamEnv(),
+        ...(opts.worktree !== undefined ? { extraArgs: { worktree: opts.worktree || null } } : {}),
         hooks: {
           UserPromptSubmit: [
             {
@@ -102,6 +116,18 @@ export class LiveSession {
                     const command = (input.tool_input as { command?: unknown })?.command
                     if (typeof command === 'string') this.bash.track(input.tool_use_id, command)
                   }
+                  return { continue: true }
+                },
+              ],
+            },
+          ],
+          // Claude can move itself into a worktree mid-chat; follow it so terminals do too.
+          PostToolUse: [
+            {
+              matcher: 'EnterWorktree|ExitWorktree',
+              hooks: [
+                async (input) => {
+                  this.setCwd(input.cwd)
                   return { continue: true }
                 },
               ],
@@ -229,6 +255,8 @@ export class LiveSession {
       this.emit({ type: 'message', sessionId: this.id, message: wire })
       return
     }
+    // With --worktree, Claude Code reports where it actually ended up.
+    if (msg.type === 'system' && msg.subtype === 'init') this.setCwd(msg.cwd)
     if (msg.type === 'system' && 'permissionMode' in msg && msg.permissionMode) {
       const mode = msg.permissionMode as PermissionMode
       if (mode !== this.mode) {
@@ -262,8 +290,15 @@ export class LiveSession {
     this.emitStatus()
   }
 
+  private setCwd(cwd: string): void {
+    if (!cwd || cwd === this.cwd) return
+    this.cwd = cwd
+    this.emitStatus()
+    this.onCwd()
+  }
+
   private emitStatus(): void {
-    this.emit({ type: 'status', sessionId: this.id, running: this.running, mode: this.mode })
+    this.emit({ type: 'status', sessionId: this.id, running: this.running, mode: this.mode, cwd: this.cwd })
   }
 
   private emit(event: ServerEvent): void {
@@ -404,7 +439,8 @@ export class SessionManager {
 
   constructor(
     private onChange: () => void,
-    private tools: (sessionId: string, cwd: string) => SessionTools,
+    /** `cwd` is a getter: it changes if Claude moves into a worktree. */
+    private tools: (sessionId: string, cwd: () => string) => SessionTools,
   ) {}
 
   get(id: string): LiveSession | undefined {
@@ -420,7 +456,12 @@ export class SessionManager {
   }
 
   /** Return the live session, resuming it from disk or creating it as needed. */
-  async open(id: string, opts: { cwd?: string; mode?: PermissionMode }): Promise<LiveSession> {
+  /** Live sessions running in a directory, e.g. a worktree about to be removed. */
+  in(cwd: string): LiveSession[] {
+    return [...this.sessions.values()].filter((s) => s.cwd === cwd)
+  }
+
+  async open(id: string, opts: { cwd?: string; mode?: PermissionMode; worktree?: string }): Promise<LiveSession> {
     const existing = this.sessions.get(id)
     if (existing) return existing
 
@@ -433,11 +474,14 @@ export class SessionManager {
       cwd,
       mode: opts.mode ?? 'auto',
       resume: !!info,
-      tools: this.tools(id, cwd),
+      // Only a new chat can start in a new worktree; a resumed one already runs where it left off.
+      worktree: info ? undefined : opts.worktree,
+      tools: this.tools(id, () => session.cwd),
       onClose: () => {
         if (this.sessions.get(id) === session) this.sessions.delete(id)
         this.onChange()
       },
+      onCwd: this.onChange,
     })
     this.sessions.set(id, session)
     this.onChange()

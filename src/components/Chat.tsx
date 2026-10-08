@@ -1,14 +1,14 @@
 import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from 'solid-js'
-import { ArrowUp, ChevronDown, Square } from 'lucide-solid'
-import type { PermissionMode } from '../../shared/protocol.ts'
+import { ArrowUp, Check, GitBranch, Square } from 'lucide-solid'
+import type { Card, PermissionMode } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
-import { folderItem, isScratch } from '../folders.ts'
+import { cardWorktreeName, folderItem, isScratch, worktreeOf } from '../folders.ts'
 import { workspaceOf } from '../terminals.ts'
 import { createChat } from '../useChat.ts'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
 import { TerminalButton, TerminalDock } from './Terminals.tsx'
-import { Transcript } from './Transcript.tsx'
-import { IconButton, LiveDot, Menu, Select, ltr, type Option } from './ui.tsx'
+import { CardBadge, Transcript } from './Transcript.tsx'
+import { IconButton, LiveDot, Select, ltr, type Option } from './ui.tsx'
 
 const MODES: Option<PermissionMode>[] = [
   { value: 'default', label: 'Ask before edits', description: 'Claude asks before changing files or running commands.' },
@@ -21,9 +21,13 @@ const MODES: Option<PermissionMode>[] = [
 export function Chat(props: {
   sessionId: string
   draftCwd?: string
-  /** Offered as a directory picker until the first message goes out. */
+  /** Offered as a directory picker until the first message goes out; existing chats never show it. */
   projects?: string[]
   onPickCwd?: (cwd: string) => void
+  /** The card this chat is on. A worktree it starts in is named after the card; otherwise Claude names it. */
+  card?: Card
+  /** Start with "In a worktree" ticked. */
+  worktree?: boolean
   /** Called once, when the first message is sent. */
   onStart?: () => void
   onOpenTerminal: (id: string) => void
@@ -32,6 +36,10 @@ export function Chat(props: {
   const [text, setText] = createSignal('')
   const [started, setStarted] = createSignal(false)
   const [mode, setMode] = createSignal<PermissionMode>('auto')
+  const [inWorktree, setInWorktree] = createSignal(!!props.worktree)
+  const worktreeName = () => props.card && cardWorktreeName(props.card)
+  // Offered before the first message, for a repo checkout that isn't already a worktree.
+  const canWorktree = () => !started() && !state.cwd && !!cwd() && !isScratch(cwd()) && !worktreeOf(cwd())
   let scroller!: HTMLDivElement
   let content!: HTMLDivElement
   let input!: HTMLTextAreaElement
@@ -105,7 +113,8 @@ export function Chat(props: {
   const submit = () => {
     const value = text().trim()
     if (!value) return
-    socket.send({ type: 'send', sessionId: props.sessionId, text: value, cwd: cwd(), mode: mode() })
+    const worktree = inWorktree() && canWorktree() ? (worktreeName() ?? '') : undefined
+    socket.send({ type: 'send', sessionId: props.sessionId, text: value, cwd: cwd(), mode: mode(), worktree })
     if (!started()) {
       setStarted(true)
       props.onStart?.()
@@ -145,27 +154,13 @@ export function Chat(props: {
                     when={props.projects?.length && props.onPickCwd && !state.cwd && !started()}
                     fallback={<p class="mt-1.5 font-mono text-xs text-fg-3">{where()}</p>}
                   >
-                    <div class="mt-1 inline-block text-left">
-                      <Menu
-                        items={props.projects!.map((p) => ({ ...folderItem(p), selected: p === cwd() }))}
-                        onPick={(i) => props.onPickCwd!(props.projects![i])}
-                        placement="bottom"
-                        class="w-72"
-                        title="Directory"
-                        triggerClass={(open) =>
-                          `flex h-7 max-w-md items-center gap-1 rounded-md px-2 font-mono text-xs transition-colors hover:bg-surface hover:text-fg-2 ${
-                            open ? 'bg-surface text-fg-2' : 'text-fg-3'
-                          }`
-                        }
-                        trigger={(open) => (
-                          <>
-                            <span class="truncate text-left [direction:rtl]">{ltr(where())}</span>
-                            <ChevronDown class={`size-3 shrink-0 transition-transform ${open() ? 'rotate-180' : ''}`} />
-                          </>
-                        )}
-                      />
-                    </div>
+                    <FolderPicker folders={props.projects!} selected={cwd()} onPick={props.onPickCwd!} />
                   </Show>
+                  <Show when={canWorktree()}>
+                    <WorktreeOption checked={inWorktree()} onChange={setInWorktree} name={worktreeName()} />
+                  </Show>
+                  {/* So a card's new chat isn't mistaken for a plain one. */}
+                  <Show when={props.card}>{(card) => <div class="mt-4"><CardBadge card={card()} prefix="On card" /></div>}</Show>
                 </div>
               }
             >
@@ -231,5 +226,88 @@ export function Chat(props: {
         {(r) => <TerminalDock root={r} cwd={cwd()!} onOpenPage={props.onOpenTerminal} onHide={() => input.focus()} />}
       </Show>
     </div>
+  )
+}
+
+/** How many folders show before "Show more": no folder plus the most recent few. */
+const FOLDERS_SHOWN = 5
+
+/** Every folder on view at once, most recent first; the picked one stays visible even when collapsed. */
+function FolderPicker(props: { folders: string[]; selected?: string; onPick: (cwd: string) => void }) {
+  const [all, setAll] = createSignal(false)
+  const shown = () => {
+    if (all() || props.folders.length <= FOLDERS_SHOWN + 1) return props.folders
+    const top = props.folders.slice(0, FOLDERS_SHOWN)
+    return props.selected && !top.includes(props.selected) && props.folders.includes(props.selected) ? [...top, props.selected] : top
+  }
+  return (
+    <div class="mx-auto mt-4 w-80 text-left">
+      <div class={all() ? 'max-h-[40vh] overflow-y-auto' : ''}>
+        <For each={shown()}>
+          {(dir) => {
+            const item = folderItem(dir)
+            const selected = () => dir === props.selected
+            return (
+              <button
+                type="button"
+                onClick={() => props.onPick(dir)}
+                aria-pressed={selected()}
+                class={`flex w-full items-start gap-3 rounded-lg px-2.5 py-2 text-left transition-colors ${
+                  selected() ? 'bg-surface' : 'hover:bg-surface/60'
+                }`}
+              >
+                <div class="min-w-0 flex-1">
+                  <div class={`truncate text-[13px] ${selected() ? 'text-fg' : 'text-fg-2'}`}>{item.label}</div>
+                  <div
+                    class={`mt-0.5 leading-snug text-fg-3 ${item.mono ? 'truncate font-mono text-[11px] text-left [direction:rtl]' : 'text-xs'}`}
+                  >
+                    {item.mono ? ltr(item.description) : item.description}
+                  </div>
+                </div>
+                <Check class={`mt-0.5 size-3.5 shrink-0 text-fg-2 ${selected() ? '' : 'invisible'}`} />
+              </button>
+            )
+          }}
+        </For>
+      </div>
+      <Show when={props.folders.length > shown().length}>
+        <button
+          type="button"
+          onClick={() => setAll(true)}
+          class="mt-0.5 w-full rounded-lg px-2.5 py-1.5 text-left text-xs text-fg-3 transition-colors hover:bg-surface/60 hover:text-fg-2"
+        >
+          Show {props.folders.length - shown().length} more
+        </button>
+      </Show>
+    </div>
+  )
+}
+
+/** Start the chat in a git worktree. Drawn rather than a native checkbox so it takes the theme's ink, not the system blue. */
+function WorktreeOption(props: { checked: boolean; onChange: (checked: boolean) => void; name?: string }) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={props.checked}
+      onClick={() => props.onChange(!props.checked)}
+      title="Run this chat in its own git worktree and branch, so it can work alongside others"
+      class={`mt-3 inline-flex h-7 items-center gap-2 rounded-md px-2 text-xs transition-colors hover:bg-surface ${
+        props.checked ? 'text-fg-2' : 'text-fg-3 hover:text-fg-2'
+      }`}
+    >
+      <span
+        class={`grid size-3.5 place-items-center rounded-[4px] border transition-colors ${
+          props.checked ? 'border-fg bg-fg text-bg' : 'border-edge'
+        }`}
+      >
+        <Show when={props.checked}>
+          <Check class="size-2.5" stroke-width={3} />
+        </Show>
+      </span>
+      <GitBranch class="size-3.5" />
+      In a worktree
+      <Show when={props.name}>{(name) => <span class="font-mono text-fg-3">{name()}</span>}</Show>
+    </button>
   )
 }
