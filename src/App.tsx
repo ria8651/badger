@@ -1,4 +1,4 @@
-import { For, Match, Show, Switch, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
+import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
 import { Archive, ArchiveRestore, ChevronRight, Columns3, Plus } from 'lucide-solid'
 import type { Card, SessionSummary } from '../shared/protocol.ts'
@@ -65,8 +65,12 @@ export function App() {
   // Home is a blank chat; it gets a real URL once its first message is sent.
   const [homeId, setHomeId] = createSignal(uuid())
 
+  const [loaded, setLoaded] = createSignal(false)
   const refresh = () => {
-    api.sessions().then(setSessions)
+    api.sessions().then((list) => {
+      setSessions(list)
+      setLoaded(true)
+    })
   }
   const refreshCards = () => {
     api.cards().then(setCards)
@@ -172,8 +176,8 @@ export function App() {
   const cardOf = createMemo(() => new Map(cards().flatMap((c) => c.sessionIds.map((id) => [id, c] as const))))
 
   /**
-   * No folder first, so it's the default for new chats, then every directory a
-   * session has run in, most recent first, plus the server default. Temp dirs are skipped.
+   * No folder first, then every directory a session has run in, most recent
+   * first, plus the server default. Temp dirs are skipped.
    */
   const projects = createMemo(() => {
     const dirs = [...new Set(sessions().flatMap((s) => (s.cwd && !TEMP.test(s.cwd) && !isScratch(s.cwd) ? [s.cwd] : [])))]
@@ -181,6 +185,18 @@ export function App() {
     if (fallback && !dirs.includes(fallback)) dirs.push(fallback)
     const scratch = config()?.scratchCwd
     return scratch ? [scratch, ...dirs] : dirs
+  })
+  /** New chats start where the most recently active chat ran, or with no folder. */
+  const defaultCwd = createMemo(() => {
+    const recent = sessions()
+      .filter((s) => s.cwd && projects().includes(s.cwd))
+      .reduce<SessionSummary | undefined>((a, s) => (!a || s.lastModified > a.lastModified ? s : a), undefined)
+    return recent?.cwd ?? projects()[0]
+  })
+  // Pin it per blank chat so activity elsewhere doesn't move the folder while you type.
+  createEffect(() => {
+    const id = homeId()
+    if (loaded() && !untrack(drafts)[id]) setDrafts((d) => ({ ...d, [id]: untrack(defaultCwd) }))
   })
 
   const newChat = (cwd: string, cardId?: number) => {
@@ -279,10 +295,10 @@ export function App() {
             return (
               <Chat
                 sessionId={id}
-                draftCwd={drafts()[id] ?? (home() ? projects()[0] : undefined)}
+                draftCwd={drafts()[id] ?? (home() ? defaultCwd() : undefined)}
                 projects={home() ? projects() : undefined}
                 onPickCwd={(cwd) => setDrafts((d) => ({ ...d, [id]: cwd }))}
-                onStart={() => home() && startHomeChat(id, drafts()[id] ?? projects()[0])}
+                onStart={() => home() && startHomeChat(id, drafts()[id] ?? defaultCwd())}
                 onOpenTerminal={(tid) => go({ kind: 'terminal', id: tid })}
               />
             )
