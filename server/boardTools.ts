@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { createSdkMcpServer, getSessionInfo, tool, type McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import { CARD_STATUSES, type Card } from '../shared/protocol.ts'
+import { NO_CARD_CONTEXT, renderCardContext } from '../shared/cardContext.ts'
 import type { Store } from './db.ts'
 
 export const BOARD_SERVER = 'badger'
@@ -12,9 +13,6 @@ export const BOARD_AUTO_ALLOWED = ['list_cards', 'get_card', 'create_card', 'upd
 )
 
 const status = z.enum(CARD_STATUSES)
-
-/** Longer descriptions are cut in injected context; get_card has the rest. */
-const CONTEXT_DESCRIPTION_LIMIT = 4000
 
 /**
  * The chat's card as context for the next turn, or undefined when Claude has
@@ -28,26 +26,13 @@ export function cardContext(store: Store, sessionId: string): string | undefined
   if (!card) {
     if (last === undefined) return undefined
     store.setContextHash(sessionId, null)
-    return 'This chat is no longer on a card.'
+    return NO_CARD_CONTEXT
   }
-  const rendered = renderContext(card)
+  const rendered = renderCardContext(card)
   const hash = hashOf(rendered)
   if (hash === last) return undefined
   store.setContextHash(sessionId, hash)
   return rendered
-}
-
-function renderContext(c: Card): string {
-  let description = c.description.trim() || '(no description)'
-  if (description.length > CONTEXT_DESCRIPTION_LIMIT)
-    description = description.slice(0, CONTEXT_DESCRIPTION_LIMIT) + '\n[truncated; call get_card for the rest]'
-  return [
-    `This chat is on Badger card #${c.id}: ${c.title}`,
-    `Status: ${c.status}`,
-    'This is the current state of the card. It is new to you or changed since you last saw it, possibly edited by the user on the board.',
-    '',
-    description,
-  ].join('\n')
 }
 
 const hashOf = (text: string) => createHash('sha1').update(text).digest('hex')
@@ -60,7 +45,7 @@ export function boardServer(store: Store, sessionId: string, onChange: () => voi
   const thisCard = () => store.cards().find((c) => c.sessionIds.includes(sessionId))
   // Claude already knows this state (it wrote or just read it), so don't inject it next turn.
   const markSeen = (card: Card) => {
-    if (card.sessionIds.includes(sessionId)) store.setContextHash(sessionId, hashOf(renderContext(card)))
+    if (card.sessionIds.includes(sessionId)) store.setContextHash(sessionId, hashOf(renderCardContext(card)))
   }
   const changed = <T>(value: T): T => {
     onChange()

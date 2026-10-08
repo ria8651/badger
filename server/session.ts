@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import { readdir, readFile, stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import {
   getSessionInfo,
   getSessionMessages,
@@ -84,6 +87,7 @@ export class LiveSession {
                 async () => {
                   const additionalContext = opts.tools.turnContext?.()
                   if (!additionalContext) return { continue: true }
+                  this.record({ type: 'hook_context', uuid: randomUUID(), text: additionalContext })
                   return { continue: true, hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } }
                 },
               ],
@@ -117,9 +121,9 @@ export class LiveSession {
   /** Transcript from disk merged with anything newer that only exists in memory. */
   async snapshot(): Promise<ServerEvent> {
     // Disk holds history from earlier processes; `live` holds this process's turns in order.
-    const disk = (await getSessionMessages(this.id).catch(() => [])) as unknown as WireMessage[]
+    const disk = await diskTranscript(this.id)
     const seen = new Set(this.live.map((m) => m.uuid))
-    const messages = [...withTurnResults(disk).filter((m) => !seen.has(m.uuid) && !seen.has(m.after_uuid as string)), ...this.live]
+    const messages = [...disk.filter((m) => !seen.has(m.uuid) && !seen.has(m.after_uuid as string)), ...this.live]
     return {
       type: 'snapshot',
       sessionId: this.id,
@@ -267,6 +271,63 @@ export class LiveSession {
   }
 }
 
+/** A chat's transcript from disk, with what the SDK's reader leaves out put back: turn results and hook context. */
+export async function diskTranscript(id: string): Promise<WireMessage[]> {
+  const [messages, context] = await Promise.all([
+    getSessionMessages(id).catch(() => []) as Promise<unknown> as Promise<WireMessage[]>,
+    hookContext(id).catch(() => new Map<string, string[]>()),
+  ])
+  return withTurnResults(
+    messages.flatMap((m) => [
+      m,
+      ...(context.get(m.uuid ?? '') ?? []).map((text, i) => ({ type: 'hook_context', uuid: `${m.uuid}-context-${i}`, after_uuid: m.uuid, text })),
+    ]),
+  )
+}
+
+const PROJECTS_DIR = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects')
+
+/**
+ * What UserPromptSubmit hooks added to each turn, by the uuid of the prompt it came with.
+ * It's stored as attachment entries, which getSessionMessages skips, so read the file directly.
+ */
+async function hookContext(id: string): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>()
+  const file = await transcriptFile(id)
+  if (!file) return out
+  type Entry = { type?: string; uuid?: string; parentUuid?: string; attachment?: { type?: string; hookEvent?: string; content?: unknown } }
+  const parents = new Map<string, string>()
+  const hooks: Entry[] = []
+  for (const line of (await readFile(file, 'utf8')).split('\n')) {
+    if (!line.includes('"attachment"')) continue
+    let e: Entry
+    try {
+      e = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (e.type !== 'attachment' || !e.uuid || !e.parentUuid) continue
+    parents.set(e.uuid, e.parentUuid)
+    if (e.attachment?.type === 'hook_additional_context' && e.attachment.hookEvent === 'UserPromptSubmit') hooks.push(e)
+  }
+  for (const e of hooks) {
+    // Attachments chain off each other; the first non-attachment ancestor is the prompt.
+    let anchor = e.parentUuid!
+    while (parents.has(anchor)) anchor = parents.get(anchor)!
+    const content = Array.isArray(e.attachment!.content) ? e.attachment!.content.filter((c): c is string => typeof c === 'string') : []
+    out.set(anchor, [...(out.get(anchor) ?? []), ...content])
+  }
+  return out
+}
+
+async function transcriptFile(id: string): Promise<string | undefined> {
+  for (const dir of await readdir(PROJECTS_DIR).catch(() => [])) {
+    const file = join(PROJECTS_DIR, dir, `${id}.jsonl`)
+    if (await stat(file).then(() => true, () => false)) return file
+  }
+  return undefined
+}
+
 type Usage = { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
 
 /**
@@ -274,7 +335,7 @@ type Usage = { input_tokens?: number; output_tokens?: number; cache_read_input_t
  * one after each turn from message timestamps and each API call's usage.
  * Main agent only, like the live results the client shows.
  */
-export function withTurnResults(messages: WireMessage[]): WireMessage[] {
+function withTurnResults(messages: WireMessage[]): WireMessage[] {
   const out: WireMessage[] = []
   let start: WireMessage | undefined
   let last: WireMessage | undefined

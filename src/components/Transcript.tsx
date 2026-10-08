@@ -1,7 +1,10 @@
 import { For, Show, createMemo, createSignal, type JSX } from 'solid-js'
 import { unwrap } from 'solid-js/store'
+import { Columns3 } from 'lucide-solid'
+import { parseCardContext, type CardContext } from '../../shared/cardContext.ts'
 import type { WireMessage } from '../../shared/protocol.ts'
 import type { Partial } from '../useChat.ts'
+import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
 import { Disclosure, Pre, ToolCard, toolLabel, type ToolResult } from './ToolCard.tsx'
 import { LiveDot } from './ui.tsx'
@@ -16,6 +19,7 @@ type Item =
   | { kind: 'tool'; id: string; name: string; input: Record<string, unknown> }
   | { kind: 'result'; ok: boolean; seconds: number; tokens?: { input: number; output: number }; endedAt?: number; error?: string }
   | { kind: 'divider'; text: string }
+  | { kind: 'card'; context: CardContext }
 
 /**
  * Items per message, cached by message identity so <For> keeps existing rows
@@ -58,6 +62,11 @@ function messageItems(m: WireMessage): Item[] {
         error: ok ? undefined : String(m.subtype === 'success' ? (m.result ?? 'Error') : m.subtype),
       },
     ]
+  }
+  if (m.type === 'hook_context') {
+    // Other hooks' context isn't Badger's to show.
+    const context = parseCardContext(String(m.text ?? ''))
+    return context ? [{ kind: 'card', context }] : []
   }
   if (m.type === 'system' && m.subtype === 'compact_boundary') return [{ kind: 'divider', text: 'Conversation compacted' }]
   return []
@@ -157,6 +166,8 @@ export function Transcript(props: {
             <div class="h-px flex-1 bg-line" />
           </div>
         )
+      case 'card':
+        return <CardContextBadge context={item.context} />
     }
   }
 
@@ -175,6 +186,36 @@ export function Transcript(props: {
         <Disclosure label={props.partial?.toolName ? toolLabel(props.partial.toolName) : 'Tool'} trailing={<LiveDot />} live>
           <Pre text={props.partial?.text ?? ''} />
         </Disclosure>
+      </Show>
+    </div>
+  )
+}
+
+/** The card Claude was told about with this message, as a badge on the user's side linking to it. */
+function CardContextBadge(props: { context: CardContext }) {
+  const badge = 'inline-flex max-w-[80%] items-center gap-2 rounded-full border border-line px-3 py-1 text-[13px]'
+  return (
+    <div class="-mt-2 mb-4 flex justify-end">
+      <Show when={props.context.card} fallback={<span class={`${badge} text-fg-3`}><Columns3 class="size-3.5" />No longer on a card</span>}>
+        {(card) => (
+          <a
+            href={`/c/${card().id}`}
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
+              e.preventDefault()
+              // App routes on popstate, so this navigates without a reload.
+              history.pushState(null, '', `/c/${card().id}`)
+              dispatchEvent(new PopStateEvent('popstate'))
+            }}
+            class={`${badge} text-fg-2 transition-colors hover:bg-surface hover:text-fg`}
+          >
+            <Columns3 class="size-3.5 shrink-0 text-fg-3" />
+            <span class="min-w-0 truncate">
+              <span class="text-fg-3">#{card().id}</span> {card().title}
+            </span>
+            <span class="shrink-0 text-xs text-fg-3">{STATUS_LABELS[card().status]}</span>
+          </a>
+        )}
       </Show>
     </div>
   )

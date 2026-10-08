@@ -2,12 +2,12 @@ import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeF
 import { createServer, type IncomingMessage } from 'node:http'
 import { homedir } from 'node:os'
 import { extname, isAbsolute, join, resolve } from 'node:path'
-import { getSessionInfo, getSessionMessages, listSessions } from '@anthropic-ai/claude-agent-sdk'
+import { getSessionInfo, listSessions } from '@anthropic-ai/claude-agent-sdk'
 import { WebSocketServer, type WebSocket } from 'ws'
-import type { ClientEvent, ServerEvent, SessionSummary, WireMessage } from '../shared/protocol.ts'
+import type { ClientEvent, ServerEvent, SessionSummary } from '../shared/protocol.ts'
 import { BOARD_AUTO_ALLOWED, BOARD_SERVER, boardServer, cardContext } from './boardTools.ts'
 import { BadRequest, Store } from './db.ts'
-import { SessionManager, withTurnResults } from './session.ts'
+import { SessionManager, diskTranscript } from './session.ts'
 import { TERMINAL_AUTO_ALLOWED, TERMINAL_SERVER, terminalServer } from './terminalTools.ts'
 import { Terminals, shellEnv } from './terminals.ts'
 import { workspaceRoot } from './workspace.ts'
@@ -100,11 +100,11 @@ function unsubscribeTerminal(ws: WebSocket, id: string): void {
 async function snapshotFor(sessionId: string): Promise<ServerEvent> {
   const live = manager.get(sessionId)
   if (live) return live.snapshot()
-  const [info, messages] = await Promise.all([getSessionInfo(sessionId), getSessionMessages(sessionId)])
+  const [info, messages] = await Promise.all([getSessionInfo(sessionId), diskTranscript(sessionId)])
   return {
     type: 'snapshot',
     sessionId,
-    messages: withTurnResults(messages as unknown as WireMessage[]),
+    messages,
     running: false,
     mode: 'auto',
     cwd: info?.cwd,
