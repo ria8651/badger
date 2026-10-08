@@ -9,9 +9,10 @@ export default defineConfig({
   server: {
     // No hot updates or auto-reloads; changes show up when the page is refreshed.
     hmr: false,
+    // Keep the browser's Host so the server's same-origin check sees it match Origin.
     proxy: {
-      '/api': server,
-      '/ws': { target: server, ws: true },
+      '/api': { target: server, changeOrigin: false },
+      '/ws': { target: server, ws: true, changeOrigin: false },
     },
   },
 })
