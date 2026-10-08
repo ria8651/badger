@@ -6,7 +6,7 @@ import { getSessionInfo, listSessions } from '@anthropic-ai/claude-agent-sdk'
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { ClientEvent, ServerEvent, SessionSummary } from '../shared/protocol.ts'
 import { BOARD_AUTO_ALLOWED, BOARD_SERVER, boardServer, cardContext } from './boardTools.ts'
-import { BadRequest, Store } from './db.ts'
+import { type Actor, BadRequest, Store } from './db.ts'
 import { SessionManager, diskTranscript } from './session.ts'
 import { TERMINAL_AUTO_ALLOWED, TERMINAL_SERVER, terminalServer } from './terminalTools.ts'
 import { Terminals, shellEnv } from './terminals.ts'
@@ -47,6 +47,8 @@ function broadcast(event: ServerEvent): void {
 }
 
 const store = new Store(DATA_DIR, () => broadcast({ type: 'sessions_changed' }))
+/** Changes made through the REST API and WebSocket, i.e. by someone in the browser. */
+const UI: Actor = { source: 'ui' }
 const terminals = new Terminals(DATA_DIR, startEnv)
 const manager = new SessionManager(
   () => broadcast({ type: 'sessions_changed' }),
@@ -136,7 +138,7 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       return
     case 'send': {
       // Picking an archived chat back up brings it back to the sidebar.
-      store.setArchived(event.sessionId, false)
+      store.setArchived(event.sessionId, false, UI)
       // Sending empties the composer in every tab, not just the one that sent.
       saveDraft(ws, event.sessionId, '')
       const isNew = !manager.get(event.sessionId)
@@ -212,14 +214,14 @@ async function sessionList(): Promise<SessionSummary[]> {
 async function cardsApi(method: string, path: string, req: IncomingMessage): Promise<[number, unknown] | undefined> {
   if (path === '/api/cards') {
     if (method === 'GET') return [200, store.cards()]
-    if (method === 'POST') return changed([201, store.createCard(await readJson(req))])
+    if (method === 'POST') return changed([201, store.createCard(await readJson(req), UI)])
   }
   const card = path.match(/^\/api\/cards\/(\d+)$/)
   if (card) {
     const id = Number(card[1])
     if (method === 'GET') return found(store.card(id))
-    if (method === 'PATCH') return changed(found(store.updateCard(id, await readJson(req))))
-    if (method === 'DELETE') return changed(store.deleteCard(id) ? [204, null] : [404, { error: 'No such card' }])
+    if (method === 'PATCH') return changed(found(store.updateCard(id, await readJson(req), UI)))
+    if (method === 'DELETE') return changed(store.deleteCard(id, UI) ? [204, null] : [404, { error: 'No such card' }])
   }
   const link = path.match(/^\/api\/cards\/(\d+)\/sessions(?:\/([0-9a-f-]{36}))?$/)
   if (link) {
@@ -228,11 +230,11 @@ async function cardsApi(method: string, path: string, req: IncomingMessage): Pro
     if (method === 'POST' && !link[2]) {
       const { sessionId } = await readJson(req)
       if (typeof sessionId !== 'string' || !/^[0-9a-f-]{36}$/.test(sessionId)) throw new BadRequest('sessionId is required')
-      store.linkSession(id, sessionId)
+      store.linkSession(id, sessionId, UI)
       return changed([200, store.card(id)])
     }
     if (method === 'DELETE' && link[2]) {
-      store.unlinkSession(id, link[2])
+      store.unlinkSession(id, link[2], UI)
       return changed([200, store.card(id)])
     }
   }
@@ -243,8 +245,8 @@ async function cardsApi(method: string, path: string, req: IncomingMessage): Pro
 function sessionsApi(method: string, path: string): [number, unknown] | undefined {
   const m = path.match(/^\/api\/sessions\/([0-9a-f-]{36})\/archive$/)
   if (!m) return undefined
-  if (method === 'POST') return (store.setArchived(m[1], true), [204, null])
-  if (method === 'DELETE') return (store.setArchived(m[1], false), [204, null])
+  if (method === 'POST') return (store.setArchived(m[1], true, UI), [204, null])
+  if (method === 'DELETE') return (store.setArchived(m[1], false, UI), [204, null])
   return undefined
 }
 

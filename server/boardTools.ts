@@ -3,7 +3,7 @@ import { createSdkMcpServer, getSessionInfo, tool, type McpSdkServerConfigWithIn
 import { z } from 'zod'
 import { CARD_STATUSES, type Card } from '../shared/protocol.ts'
 import { NO_CARD_CONTEXT, renderCardContext } from '../shared/cardContext.ts'
-import type { Store } from './db.ts'
+import type { Actor, Store } from './db.ts'
 
 export const BOARD_SERVER = 'badger'
 
@@ -42,6 +42,7 @@ const hashOf = (text: string) => createHash('sha1').update(text).digest('hex')
  * process: it knows which chat it is so "this chat" means something.
  */
 export function boardServer(store: Store, sessionId: string, onChange: () => void): McpSdkServerConfigWithInstance {
+  const actor: Actor = { source: 'claude', sessionId }
   const thisCard = () => store.cards().find((c) => c.sessionIds.includes(sessionId))
   // Claude already knows this state (it wrote or just read it), so don't inject it next turn.
   const markSeen = (card: Card) => {
@@ -95,8 +96,8 @@ export function boardServer(store: Store, sessionId: string, onChange: () => voi
           link_this_chat: z.boolean().optional().describe('Also put this chat on the new card'),
         },
         async (args) => {
-          const card = store.createCard(args)
-          if (args.link_this_chat) store.linkSession(card.id, sessionId)
+          const card = store.createCard(args, actor)
+          if (args.link_this_chat) store.linkSession(card.id, sessionId, actor)
           const created = store.card(card.id)!
           markSeen(created)
           return changed(text(`Created ${summary(created, !!args.link_this_chat)}`))
@@ -112,7 +113,7 @@ export function boardServer(store: Store, sessionId: string, onChange: () => voi
           status: status.optional(),
         },
         async ({ id, ...patch }) => {
-          const card = store.updateCard(id, patch)
+          const card = store.updateCard(id, patch, actor)
           if (!card) return error(`No card #${id}.`)
           markSeen(card)
           return changed(text(`Updated ${summary(card, card.id === thisCard()?.id)}`))
@@ -125,7 +126,7 @@ export function boardServer(store: Store, sessionId: string, onChange: () => voi
         { id: z.number().int() },
         async ({ id }) => {
           if (!store.card(id)) return error(`No card #${id}.`)
-          store.linkSession(id, sessionId)
+          store.linkSession(id, sessionId, actor)
           return changed(text(`This chat is now on card #${id}.`))
         },
         { annotations: { idempotentHint: true } },
@@ -144,7 +145,7 @@ export function boardServer(store: Store, sessionId: string, onChange: () => voi
         async (args) => {
           const id = args.session_id ?? sessionId
           const archived = args.archived ?? true
-          store.setArchived(id, archived)
+          store.setArchived(id, archived, actor)
           const which = id === sessionId ? 'This chat' : `Chat ${id}`
           return text(`${which} is ${archived ? 'archived' : 'not archived'}.`)
         },
@@ -154,7 +155,7 @@ export function boardServer(store: Store, sessionId: string, onChange: () => voi
         'delete_card',
         'Delete a card. Its chats are kept. Only do this when the user asks.',
         { id: z.number().int() },
-        async ({ id }) => (store.deleteCard(id) ? changed(text(`Deleted card #${id}.`)) : error(`No card #${id}.`)),
+        async ({ id }) => (store.deleteCard(id, actor) ? changed(text(`Deleted card #${id}.`)) : error(`No card #${id}.`)),
         { annotations: { destructiveHint: true } },
       ),
     ],

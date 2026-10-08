@@ -40,6 +40,19 @@ const MIGRATIONS = [
      text TEXT NOT NULL,
      updated_at INTEGER NOT NULL
    );`,
+  // Every change to board data, append-only. before/after hold the changed fields as JSON; a delete keeps the whole card so it can be restored.
+  `CREATE TABLE audit_log (
+     id INTEGER PRIMARY KEY,
+     at INTEGER NOT NULL,
+     actor TEXT NOT NULL,
+     actor_session TEXT,
+     entity TEXT NOT NULL,
+     entity_id TEXT NOT NULL,
+     action TEXT NOT NULL,
+     before TEXT,
+     after TEXT
+   );
+   CREATE INDEX audit_log_entity ON audit_log(entity, entity_id);`,
 ]
 
 interface CardRow {
@@ -54,9 +67,16 @@ interface CardRow {
 
 export type CardPatch = Partial<Pick<Card, 'title' | 'description' | 'status' | 'position'>>
 
+/** Who made a change. There are no users yet, so for now it's where the change came from. */
+export type Actor = { source: 'ui' } | { source: 'claude'; sessionId: string }
+
+type AuditEntity = 'card' | 'card_session' | 'archived_session'
+type AuditAction = 'create' | 'update' | 'delete' | 'link' | 'unlink' | 'archive' | 'unarchive'
+
 /** Project data that spans repos and users: cards and which chats belong to them. */
 export class Store {
   private db: DatabaseSync
+  private inTransaction = false
 
   /** @param onArchived called whenever a chat is archived or unarchived, including by a card's status changing. */
   constructor(
@@ -79,8 +99,11 @@ export class Store {
     }
   }
 
+  /** Joins the enclosing transaction if there is one, so writes that call each other stay atomic. */
   private transaction<T>(fn: () => T): T {
+    if (this.inTransaction) return fn()
     this.db.exec('BEGIN')
+    this.inTransaction = true
     try {
       const result = fn()
       this.db.exec('COMMIT')
@@ -88,7 +111,25 @@ export class Store {
     } catch (err) {
       this.db.exec('ROLLBACK')
       throw err
+    } finally {
+      this.inTransaction = false
     }
+  }
+
+  /** Call inside the same transaction as the change it records. */
+  private audit(actor: Actor, entity: AuditEntity, entityId: string | number, action: AuditAction, before: object | null, after: object | null): void {
+    this.db
+      .prepare('INSERT INTO audit_log (at, actor, actor_session, entity, entity_id, action, before, after) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(
+        Date.now(),
+        actor.source,
+        actor.source === 'claude' ? actor.sessionId : null,
+        entity,
+        String(entityId),
+        action,
+        before && JSON.stringify(before),
+        after && JSON.stringify(after),
+      )
   }
 
   cards(): Card[] {
@@ -114,17 +155,21 @@ export class Store {
     )
   }
 
-  createCard(input: { title: string; description?: string; status?: CardStatus }): Card {
+  createCard(input: { title: string; description?: string; status?: CardStatus }, actor: Actor): Card {
     const title = requireTitle(input.title)
     const status = requireStatus(input.status ?? 'backlog')
     const now = Date.now()
-    const { lastInsertRowid } = this.db
-      .prepare('INSERT INTO cards (title, description, status, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(title, input.description ?? '', status, this.endOf(status), now, now)
-    return this.card(Number(lastInsertRowid))!
+    return this.transaction(() => {
+      const { lastInsertRowid } = this.db
+        .prepare('INSERT INTO cards (title, description, status, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(title, input.description ?? '', status, this.endOf(status), now, now)
+      const card = this.card(Number(lastInsertRowid))!
+      this.audit(actor, 'card', card.id, 'create', null, editable(card))
+      return card
+    })
   }
 
-  updateCard(id: number, patch: CardPatch): Card | undefined {
+  updateCard(id: number, patch: CardPatch, actor: Actor): Card | undefined {
     const current = this.card(id)
     if (!current) return undefined
     const next = { ...current }
@@ -134,32 +179,58 @@ export class Store {
     if (patch.position !== undefined) next.position = Number(patch.position)
     // Moving columns without a position lands at the bottom of the new one.
     else if (next.status !== current.status) next.position = this.endOf(next.status)
+    const before: CardPatch = {}
+    const after: CardPatch = {}
+    for (const key of ['title', 'description', 'status', 'position'] as const) {
+      if (next[key] === current[key]) continue
+      Object.assign(before, { [key]: current[key] })
+      Object.assign(after, { [key]: next[key] })
+    }
+    // Repeating an update changes nothing, so it isn't written or logged.
+    if (!Object.keys(after).length) return current
     this.transaction(() => {
       this.db
         .prepare('UPDATE cards SET title = ?, description = ?, status = ?, position = ?, updated_at = ? WHERE id = ?')
         .run(next.title, next.description, next.status, next.position, Date.now(), id)
+      this.audit(actor, 'card', id, 'update', before, after)
       // Finishing a card puts its chats away; reopening it brings them back.
-      if (next.status === 'done' && current.status !== 'done') for (const s of current.sessionIds) this.setArchived(s, true)
-      if (next.status !== 'done' && current.status === 'done') for (const s of current.sessionIds) this.setArchived(s, false)
+      if (next.status === 'done' && current.status !== 'done') for (const s of current.sessionIds) this.setArchived(s, true, actor)
+      if (next.status !== 'done' && current.status === 'done') for (const s of current.sessionIds) this.setArchived(s, false, actor)
     })
     return this.card(id)
   }
 
-  deleteCard(id: number): boolean {
-    return this.db.prepare('DELETE FROM cards WHERE id = ?').run(id).changes > 0
+  /** The log keeps the whole card, chats included, so a deleted card can be restored. */
+  deleteCard(id: number, actor: Actor): boolean {
+    const card = this.card(id)
+    if (!card) return false
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM cards WHERE id = ?').run(id)
+      this.audit(actor, 'card', id, 'delete', card, null)
+    })
+    return true
   }
 
   /** Attaches a chat to a card, moving it off any card it was on. */
-  linkSession(cardId: number, sessionId: string): void {
-    this.db
-      .prepare(
-        'INSERT INTO card_sessions (session_id, card_id, created_at) VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET card_id = excluded.card_id',
-      )
-      .run(sessionId, cardId, Date.now())
+  linkSession(cardId: number, sessionId: string, actor: Actor): void {
+    this.transaction(() => {
+      const current = this.db.prepare('SELECT card_id FROM card_sessions WHERE session_id = ?').get(sessionId) as { card_id: number } | undefined
+      if (current?.card_id === cardId) return
+      this.db
+        .prepare(
+          'INSERT INTO card_sessions (session_id, card_id, created_at) VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET card_id = excluded.card_id',
+        )
+        .run(sessionId, cardId, Date.now())
+      this.audit(actor, 'card_session', sessionId, 'link', current ? { cardId: current.card_id } : null, { cardId })
+    })
   }
 
-  unlinkSession(cardId: number, sessionId: string): boolean {
-    return this.db.prepare('DELETE FROM card_sessions WHERE card_id = ? AND session_id = ?').run(cardId, sessionId).changes > 0
+  unlinkSession(cardId: number, sessionId: string, actor: Actor): boolean {
+    return this.transaction(() => {
+      const removed = this.db.prepare('DELETE FROM card_sessions WHERE card_id = ? AND session_id = ?').run(cardId, sessionId).changes > 0
+      if (removed) this.audit(actor, 'card_session', sessionId, 'unlink', { cardId }, null)
+      return removed
+    })
   }
 
   archivedIds(): Set<string> {
@@ -168,12 +239,16 @@ export class Store {
   }
 
   /** Returns whether anything changed. */
-  setArchived(sessionId: string, archived: boolean): boolean {
-    const result = archived
-      ? this.db.prepare('INSERT INTO archived_sessions (session_id, archived_at) VALUES (?, ?) ON CONFLICT DO NOTHING').run(sessionId, Date.now())
-      : this.db.prepare('DELETE FROM archived_sessions WHERE session_id = ?').run(sessionId)
-    if (result.changes > 0) this.onArchived()
-    return result.changes > 0
+  setArchived(sessionId: string, archived: boolean, actor: Actor): boolean {
+    const changed = this.transaction(() => {
+      const result = archived
+        ? this.db.prepare('INSERT INTO archived_sessions (session_id, archived_at) VALUES (?, ?) ON CONFLICT DO NOTHING').run(sessionId, Date.now())
+        : this.db.prepare('DELETE FROM archived_sessions WHERE session_id = ?').run(sessionId)
+      if (result.changes > 0) this.audit(actor, 'archived_session', sessionId, archived ? 'archive' : 'unarchive', null, null)
+      return result.changes > 0
+    })
+    if (changed) this.onArchived()
+    return changed
   }
 
   draft(sessionId: string): string {
@@ -209,6 +284,10 @@ export class Store {
     const { max } = this.db.prepare('SELECT MAX(position) AS max FROM cards WHERE status = ?').get(status) as { max: number | null }
     return (max ?? 0) + 1
   }
+}
+
+function editable(c: Card): CardPatch {
+  return { title: c.title, description: c.description, status: c.status, position: c.position }
 }
 
 function toCard(r: CardRow, sessionIds: string[]): Card {
