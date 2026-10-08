@@ -15,10 +15,12 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 const get = <T>(path: string) => request<T>('GET', path)
 
+type Config = { defaultCwd: string; scratchCwd: string }
+
 type CardPatch = Partial<Pick<Card, 'title' | 'description' | 'status' | 'position'>>
 
 export const api = {
-  config: () => get<{ defaultCwd: string }>('/api/config'),
+  config: () => get<Config>('/api/config'),
   sessions: () => get<SessionSummary[]>('/api/sessions'),
   cards: () => get<Card[]>('/api/cards'),
   createCard: (card: { title: string; description?: string; status?: CardStatus }) => request<Card>('POST', '/api/cards', card),

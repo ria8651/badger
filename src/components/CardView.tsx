@@ -2,6 +2,7 @@ import { For, Show, createMemo } from 'solid-js'
 import { Link, Plus, Trash2, X } from 'lucide-solid'
 import { CARD_STATUSES, type Card, type SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
+import { folderItem, folderLabel, isScratch } from '../folders.ts'
 import { STATUS_LABELS } from './Board.tsx'
 import { LiveDot, Menu, Select } from './ui.tsx'
 
@@ -76,7 +77,7 @@ export function CardView(props: {
         <div class="mt-8 flex items-center gap-1 border-b border-line pb-2">
           <h2 class="mr-auto text-[13px] font-medium text-fg-2">Chats</h2>
           <Menu
-            items={unlinked().map((s) => ({ label: s.title, description: s.cwd, mono: true }))}
+            items={unlinked().map((s) => ({ label: s.title, description: isScratch(s.cwd) ? 'No folder' : s.cwd, mono: true }))}
             onPick={(i) => api.linkSession(props.card.id, unlinked()[i].id)}
             placement="bottom"
             class="right-0 left-auto! w-80"
@@ -88,7 +89,7 @@ export function CardView(props: {
             )}
           />
           <Menu
-            items={props.projects.map((p) => ({ label: basename(p), description: p, mono: true }))}
+            items={props.projects.map(folderItem)}
             onPick={(i) => props.onNewChat(props.projects[i])}
             placement="bottom"
             class="right-0 left-auto! w-60"
@@ -109,7 +110,7 @@ export function CardView(props: {
                   <Show when={s.running}>
                     <LiveDot />
                   </Show>
-                  <span class="shrink-0 text-[11px] text-fg-3">{s.cwd && basename(s.cwd)}</span>
+                  <span class="shrink-0 text-[11px] text-fg-3">{s.cwd && folderLabel(s.cwd)}</span>
                 </button>
                 <button
                   onClick={() => api.unlinkSession(props.card.id, s.id)}
@@ -126,5 +127,3 @@ export function CardView(props: {
     </div>
   )
 }
-
-const basename = (path: string) => path.split('/').filter(Boolean).pop() ?? path

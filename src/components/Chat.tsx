@@ -2,6 +2,7 @@ import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from 's
 import { ArrowUp, ChevronDown, Square } from 'lucide-solid'
 import type { PermissionMode } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
+import { folderItem, isScratch } from '../folders.ts'
 import { workspaceOf } from '../terminals.ts'
 import { createChat } from '../useChat.ts'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
@@ -37,10 +38,12 @@ export function Chat(props: {
   let pinned = true
   let lastTop = 0
   const cwd = () => state.cwd ?? props.draftCwd
+  // Folderless chats get no terminals: there's no project to run anything in.
   const root = () => {
     const dir = cwd()
-    return dir ? workspaceOf(dir)() : undefined
+    return dir && !isScratch(dir) ? workspaceOf(dir)() : undefined
   }
+  const where = () => (isScratch(cwd()) ? 'No folder' : (cwd() ?? ''))
 
   createEffect(on(() => state.mode, setMode))
 
@@ -108,11 +111,11 @@ export function Chat(props: {
                   <p class="text-base text-fg-2">What are we working on?</p>
                   <Show
                     when={props.projects?.length && props.onPickCwd && !state.cwd && !started()}
-                    fallback={<p class="mt-1.5 font-mono text-xs text-fg-3">{cwd()}</p>}
+                    fallback={<p class="mt-1.5 font-mono text-xs text-fg-3">{where()}</p>}
                   >
                     <div class="mt-1 inline-block text-left">
                       <Menu
-                        items={props.projects!.map((p) => ({ label: basename(p), description: p, mono: true, selected: p === cwd() }))}
+                        items={props.projects!.map((p) => ({ ...folderItem(p), selected: p === cwd() }))}
                         onPick={(i) => props.onPickCwd!(props.projects![i])}
                         placement="bottom"
                         class="w-72"
@@ -124,7 +127,7 @@ export function Chat(props: {
                         }
                         trigger={(open) => (
                           <>
-                            <span class="truncate text-left [direction:rtl]">{ltr(cwd() ?? '')}</span>
+                            <span class="truncate text-left [direction:rtl]">{ltr(where())}</span>
                             <ChevronDown class={`size-3 shrink-0 transition-transform ${open() ? 'rotate-180' : ''}`} />
                           </>
                         )}
@@ -198,5 +201,3 @@ export function Chat(props: {
     </div>
   )
 }
-
-const basename = (path: string) => path.split('/').filter(Boolean).pop() ?? path

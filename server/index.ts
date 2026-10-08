@@ -1,5 +1,6 @@
-import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage } from 'node:http'
+import { homedir } from 'node:os'
 import { extname, isAbsolute, join, resolve } from 'node:path'
 import { getSessionInfo, getSessionMessages, listSessions } from '@anthropic-ai/claude-agent-sdk'
 import { WebSocketServer, type WebSocket } from 'ws'
@@ -20,6 +21,16 @@ const HOST = process.env.HOST ?? '127.0.0.1'
 const WORKSPACE_DIR = resolve(process.env.WORKSPACE_DIR ?? process.cwd())
 const DIST = resolve('dist')
 const DATA_DIR = resolve(process.env.DATA_DIR ?? 'data')
+// Folderless chats run here. Outside DATA_DIR, which defaults to inside this repo.
+const SCRATCH_DIR = resolve(process.env.SCRATCH_DIR || join(homedir(), '.badger', 'scratch'))
+
+mkdirSync(SCRATCH_DIR, { recursive: true })
+if (!existsSync(join(SCRATCH_DIR, 'CLAUDE.md'))) {
+  writeFileSync(
+    join(SCRATCH_DIR, 'CLAUDE.md'),
+    'Chats here are general questions, not tied to any project. There is no codebase to explore; just answer. This folder is shared scratch space for every such chat.\n',
+  )
+}
 
 // ── Fan-out: which sockets are viewing which session ──
 
@@ -274,7 +285,7 @@ const server = createServer(async (req, res) => {
   }
   if (!sameOrigin(req)) return json(403, { error: 'Cross-origin requests are not allowed' })
   try {
-    if (url.pathname === '/api/config') return json(200, { defaultCwd: WORKSPACE_DIR })
+    if (url.pathname === '/api/config') return json(200, { defaultCwd: WORKSPACE_DIR, scratchCwd: SCRATCH_DIR })
     if (url.pathname.startsWith('/api/')) {
       if (url.pathname === '/api/sessions') return json(200, await sessionList())
       if (url.pathname === '/api/workspace') {

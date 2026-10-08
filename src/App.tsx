@@ -3,6 +3,7 @@ import { createStore, reconcile } from 'solid-js/store'
 import { Columns3, Plus } from 'lucide-solid'
 import type { Card, SessionSummary } from '../shared/protocol.ts'
 import { api, socket } from './api.ts'
+import { basename, folderLabel, isScratch, setScratch } from './folders.ts'
 import { Board } from './components/Board.tsx'
 import { CardView } from './components/CardView.tsx'
 import { Chat } from './components/Chat.tsx'
@@ -52,7 +53,7 @@ const pathFor = (r: Route) =>
 
 
 export function App() {
-  const [config, setConfig] = createSignal<{ defaultCwd: string } | null>(null)
+  const [config, setConfig] = createSignal<{ defaultCwd: string; scratchCwd: string } | null>(null)
   const [sessions, setSessions] = createSignal<SessionSummary[]>([])
   // Reconciled by id so a refresh updates cards in place instead of rebuilding them mid-drag or mid-edit.
   const [cardStore, setCardStore] = createStore<Card[]>([])
@@ -74,6 +75,7 @@ export function App() {
   onMount(() => {
     api.config().then((c) => {
       setConfig(c)
+      setScratch(c.scratchCwd)
       socket.connect()
       refresh()
       refreshCards()
@@ -120,12 +122,16 @@ export function App() {
   )
   const cardOf = createMemo(() => new Map(cards().flatMap((c) => c.sessionIds.map((id) => [id, c] as const))))
 
-  /** Every directory a session has run in, most recent first, plus the server default. Scratch dirs are skipped. */
+  /**
+   * No folder first, so it's the default for new chats, then every directory a
+   * session has run in, most recent first, plus the server default. Temp dirs are skipped.
+   */
   const projects = createMemo(() => {
-    const dirs = [...new Set(sessions().flatMap((s) => (s.cwd && !TEMP.test(s.cwd) ? [s.cwd] : [])))]
+    const dirs = [...new Set(sessions().flatMap((s) => (s.cwd && !TEMP.test(s.cwd) && !isScratch(s.cwd) ? [s.cwd] : [])))]
     const fallback = config()?.defaultCwd
     if (fallback && !dirs.includes(fallback)) dirs.push(fallback)
-    return dirs
+    const scratch = config()?.scratchCwd
+    return scratch ? [scratch, ...dirs] : dirs
   })
 
   const newChat = (cwd: string, cardId?: number) => {
@@ -221,7 +227,7 @@ export function App() {
                   </Show>
                 </div>
                 <div class="mt-0.5 flex gap-1.5 text-[11px] text-fg-3 tabular-nums">
-                  <span class="truncate">{s.cwd && basename(s.cwd)}</span>
+                  <span class="truncate">{s.cwd && folderLabel(s.cwd)}</span>
                   <Show when={cardOf().get(s.id)}>{(c) => <span class="shrink-0">#{c().id}</span>}</Show>
                   <span class="ml-auto shrink-0">{when(s.lastModified)}</span>
                 </div>
@@ -274,8 +280,6 @@ export function App() {
 }
 
 const TEMP = /^\/(private\/)?(tmp|var\/folders)\//
-
-const basename = (path: string) => path.split('/').filter(Boolean).pop() ?? path
 
 /** Time today, day and month this year, full date otherwise. */
 function when(ms: number): string {
