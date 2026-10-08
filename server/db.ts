@@ -34,6 +34,12 @@ const MIGRATIONS = [
      session_id TEXT PRIMARY KEY,
      archived_at INTEGER NOT NULL
    );`,
+  // Text typed into a chat's composer but not sent yet.
+  `CREATE TABLE session_drafts (
+     session_id TEXT PRIMARY KEY,
+     text TEXT NOT NULL,
+     updated_at INTEGER NOT NULL
+   );`,
 ]
 
 interface CardRow {
@@ -168,6 +174,22 @@ export class Store {
       : this.db.prepare('DELETE FROM archived_sessions WHERE session_id = ?').run(sessionId)
     if (result.changes > 0) this.onArchived()
     return result.changes > 0
+  }
+
+  draft(sessionId: string): string {
+    const row = this.db.prepare('SELECT text FROM session_drafts WHERE session_id = ?').get(sessionId) as { text: string } | undefined
+    return row?.text ?? ''
+  }
+
+  /** An empty draft is deleted rather than stored. */
+  setDraft(sessionId: string, text: string): void {
+    if (!text) this.db.prepare('DELETE FROM session_drafts WHERE session_id = ?').run(sessionId)
+    else
+      this.db
+        .prepare(
+          'INSERT INTO session_drafts (session_id, text, updated_at) VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at',
+        )
+        .run(sessionId, text, Date.now())
   }
 
   contextHash(sessionId: string): string | undefined {

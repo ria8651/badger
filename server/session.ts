@@ -119,7 +119,7 @@ export class LiveSession {
   }
 
   /** Transcript from disk merged with anything newer that only exists in memory. */
-  async snapshot(): Promise<ServerEvent> {
+  async snapshot(): Promise<Omit<Extract<ServerEvent, { type: 'snapshot' }>, 'draft'>> {
     // Disk holds history from earlier processes; `live` holds this process's turns in order.
     const disk = await diskTranscript(this.id)
     const seen = new Set(this.live.map((m) => m.uuid))

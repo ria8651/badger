@@ -63,7 +63,9 @@ export function App() {
   const [drafts, setDrafts] = createSignal<Record<string, string>>({})
   const [connected, setConnected] = createSignal(false)
   // Home is a blank chat; it gets a real URL once its first message is sent.
-  const [homeId, setHomeId] = createSignal(uuid())
+  // Its id is kept until then so a draft typed there survives reloads.
+  const [homeId, setHomeId] = createSignal(localStorage.getItem(HOME_KEY) ?? uuid())
+  createEffect(() => localStorage.setItem(HOME_KEY, homeId()))
 
   const [loaded, setLoaded] = createSignal(false)
   const refresh = () => {
@@ -205,10 +207,12 @@ export function App() {
     if (cardId !== undefined) api.linkSession(cardId, id)
     go({ kind: 'chat', id })
   }
-  const newHomeChat = () => {
-    setHomeId(uuid())
-    go({ kind: 'home' })
-  }
+  // Another tab may have started the blank chat both were showing.
+  createEffect(() => {
+    if (sessions().some((s) => s.id === untrack(homeId))) setHomeId(uuid())
+  })
+
+  const newHomeChat = () => go({ kind: 'home' })
   /** The home chat's first message went out: give it its own URL and a fresh blank chat for next time. */
   const startHomeChat = (id: string, cwd?: string) => {
     if (cwd) setDrafts((d) => ({ ...d, [id]: cwd }))
@@ -328,6 +332,8 @@ export function App() {
     </div>
   )
 }
+
+const HOME_KEY = 'badger.homeId'
 
 const TEMP = /^\/(private\/)?(tmp|var\/folders)\//
 

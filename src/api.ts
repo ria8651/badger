@@ -62,9 +62,10 @@ class Socket {
     ws.onopen = () => {
       this.retry = 0
       this.setConnected(true)
+      // Queued events go first so the fresh snapshots already include them, e.g. a draft typed while offline.
+      for (const e of this.outbox.splice(0)) this.raw(e)
       for (const id of this.subscriptions) this.raw({ type: 'subscribe', sessionId: id })
       for (const [id, views] of this.terminals) for (let i = 0; i < views; i++) this.raw({ type: 'term_subscribe', id })
-      for (const e of this.outbox.splice(0)) this.raw(e)
     }
     ws.onmessage = (e) => {
       const event = JSON.parse(e.data) as ServerEvent
@@ -98,7 +99,11 @@ class Socket {
     }
     if (this.ws?.readyState === WebSocket.OPEN) this.raw(event)
     // Subscriptions are replayed on connect; keystrokes typed into a dead connection are dropped rather than replayed later.
-    else if (!['subscribe', 'unsubscribe', 'term_subscribe', 'term_unsubscribe', 'term_input'].includes(event.type)) this.outbox.push(event)
+    else if (event.type === 'draft') {
+      // Only the latest draft matters.
+      this.outbox = this.outbox.filter((e) => !(e.type === 'draft' && e.sessionId === event.sessionId))
+      this.outbox.push(event)
+    } else if (!['subscribe', 'unsubscribe', 'term_subscribe', 'term_unsubscribe', 'term_input'].includes(event.type)) this.outbox.push(event)
   }
 
   private raw(event: ClientEvent): void {

@@ -47,6 +47,35 @@ export function Chat(props: {
 
   createEffect(on(() => state.mode, setMode))
 
+  // Unsent text is saved on the server, so it survives leaving the chat or
+  // reloading, and every tab on this chat shows the same draft.
+  let saveTimer: ReturnType<typeof setTimeout> | undefined
+  let unsaved = false
+  const saveDraft = () => {
+    clearTimeout(saveTimer)
+    if (!unsaved) return
+    unsaved = false
+    socket.send({ type: 'draft', sessionId: props.sessionId, text: text() })
+  }
+  const edit = (value: string) => {
+    setText(value)
+    unsaved = true
+    clearTimeout(saveTimer)
+    saveTimer = setTimeout(saveDraft, 300)
+  }
+  // Someone else's edit never overwrites what's typed here and not yet saved.
+  const offDraft = socket.on((e) => {
+    if (!('sessionId' in e) || e.sessionId !== props.sessionId || unsaved) return
+    if (e.type === 'snapshot') setText(e.draft)
+    if (e.type === 'draft') setText(e.text)
+  })
+  addEventListener('pagehide', saveDraft)
+  onCleanup(() => {
+    saveDraft()
+    offDraft()
+    removeEventListener('pagehide', saveDraft)
+  })
+
   const fromBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
   const toBottom = () => {
     scroller.scrollTop = scroller.scrollHeight
@@ -81,6 +110,9 @@ export function Chat(props: {
       setStarted(true)
       props.onStart?.()
     }
+    // The server clears the saved draft when the message arrives.
+    clearTimeout(saveTimer)
+    unsaved = false
     setText('')
     pinned = true
     toBottom()
@@ -162,7 +194,7 @@ export function Chat(props: {
             <textarea
               ref={input}
               value={text()}
-              onInput={(e) => setText(e.currentTarget.value)}
+              onInput={(e) => edit(e.currentTarget.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
                   e.preventDefault()

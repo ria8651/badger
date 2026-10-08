@@ -72,6 +72,8 @@ export type ClientEvent =
   | { type: 'unsubscribe'; sessionId: string }
   | { type: 'send'; sessionId: string; text: string; cwd?: string; mode?: PermissionMode }
   | { type: 'interrupt'; sessionId: string }
+  /** The composer's unsent text; replaces the saved draft. */
+  | { type: 'draft'; sessionId: string; text: string }
   | { type: 'set_mode'; sessionId: string; mode: PermissionMode }
   | {
       type: 'permission'
@@ -98,8 +100,12 @@ export type ServerEvent =
       permissions: PendingPermission[]
       /** Output so far of Bash commands still running, by tool_use_id. */
       bashOutput: Record<string, string>
+      /** Unsent composer text, in the same message as the transcript so they arrive together. */
+      draft: string
     }
   | { type: 'message'; sessionId: string; message: WireMessage }
+  /** Another viewer changed the chat's unsent text. */
+  | { type: 'draft'; sessionId: string; text: string }
   /** Live output from a running Bash command; the tool_result still carries the final output. */
   | { type: 'bash_output'; sessionId: string; toolUseId: string; chunk: string }
   | { type: 'status'; sessionId: string; running: boolean; mode: PermissionMode }

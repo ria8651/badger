@@ -98,8 +98,9 @@ function unsubscribeTerminal(ws: WebSocket, id: string): void {
 }
 
 async function snapshotFor(sessionId: string): Promise<ServerEvent> {
+  const draft = store.draft(sessionId)
   const live = manager.get(sessionId)
-  if (live) return live.snapshot()
+  if (live) return { ...(await live.snapshot()), draft }
   const [info, messages] = await Promise.all([getSessionInfo(sessionId), diskTranscript(sessionId)])
   return {
     type: 'snapshot',
@@ -110,7 +111,15 @@ async function snapshotFor(sessionId: string): Promise<ServerEvent> {
     cwd: info?.cwd,
     permissions: [],
     bashOutput: {},
+    draft,
   }
+}
+
+/** Stores a chat's draft and shows it to the chat's other viewers; the one typing it already has it. */
+function saveDraft(from: WebSocket, sessionId: string, text: string): void {
+  if (store.draft(sessionId) === text) return
+  store.setDraft(sessionId, text)
+  for (const ws of viewers.get(sessionId) ?? []) if (ws !== from) send(ws, { type: 'draft', sessionId, text })
 }
 
 async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
@@ -128,12 +137,18 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
     case 'send': {
       // Picking an archived chat back up brings it back to the sidebar.
       store.setArchived(event.sessionId, false)
+      // Sending empties the composer in every tab, not just the one that sent.
+      saveDraft(ws, event.sessionId, '')
       const isNew = !manager.get(event.sessionId)
       const session = await manager.open(event.sessionId, { cwd: event.cwd, mode: event.mode })
       if (isNew) session.subscribe(broadcast)
       if (!session.send(event.text)) throw new Error('Session is closed; try again')
       return
     }
+    case 'draft':
+      if (typeof event.text !== 'string') throw new BadRequest('text must be a string')
+      saveDraft(ws, event.sessionId, event.text)
+      return
     case 'interrupt':
       await manager.get(event.sessionId)?.interrupt()
       return
