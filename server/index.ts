@@ -46,7 +46,7 @@ function broadcast(event: ServerEvent): void {
   for (const ws of targets ?? []) send(ws, event)
 }
 
-const store = new Store(DATA_DIR)
+const store = new Store(DATA_DIR, () => broadcast({ type: 'sessions_changed' }))
 const terminals = new Terminals(DATA_DIR, startEnv)
 const manager = new SessionManager(
   () => broadcast({ type: 'sessions_changed' }),
@@ -126,6 +126,8 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       viewers.get(event.sessionId)?.delete(ws)
       return
     case 'send': {
+      // Picking an archived chat back up brings it back to the sidebar.
+      store.setArchived(event.sessionId, false)
       const isNew = !manager.get(event.sessionId)
       const session = await manager.open(event.sessionId, { cwd: event.cwd, mode: event.mode })
       if (isNew) session.subscribe(broadcast)
@@ -160,17 +162,19 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
 
 async function sessionList(): Promise<SessionSummary[]> {
   const infos = await listSessions({ limit: 200 })
+  const archived = store.archivedIds()
   const summaries: SessionSummary[] = infos.map((s) => ({
     id: s.sessionId,
     title: s.customTitle || s.summary || s.firstPrompt || 'Untitled',
     cwd: s.cwd,
     lastModified: s.lastModified,
     running: manager.isRunning(s.sessionId),
+    archived: archived.has(s.sessionId),
   }))
   // A brand-new live session may not have a transcript on disk yet.
   for (const id of manager.liveIds()) {
     if (!summaries.some((s) => s.id === id)) {
-      summaries.unshift({ id, title: 'New chat', cwd: manager.get(id)?.cwd, lastModified: Date.now(), running: manager.isRunning(id) })
+      summaries.unshift({ id, title: 'New chat', cwd: manager.get(id)?.cwd, lastModified: Date.now(), running: manager.isRunning(id), archived: false })
     }
   }
   return summaries
@@ -204,6 +208,15 @@ async function cardsApi(method: string, path: string, req: IncomingMessage): Pro
       return changed([200, store.card(id)])
     }
   }
+  return undefined
+}
+
+/** Archive routes. Archiving only hides a chat; its transcript is left alone. */
+function sessionsApi(method: string, path: string): [number, unknown] | undefined {
+  const m = path.match(/^\/api\/sessions\/([0-9a-f-]{36})\/archive$/)
+  if (!m) return undefined
+  if (method === 'POST') return (store.setArchived(m[1], true), [204, null])
+  if (method === 'DELETE') return (store.setArchived(m[1], false), [204, null])
   return undefined
 }
 
@@ -294,6 +307,8 @@ const server = createServer(async (req, res) => {
         if (!roots.has(cwd)) roots.set(cwd, workspaceRoot(cwd))
         return json(200, { root: roots.get(cwd) })
       }
+      const archive = sessionsApi(req.method ?? 'GET', url.pathname)
+      if (archive) return json(...archive)
       const terms = await terminalsApi(req.method ?? 'GET', url.pathname, req)
       if (terms) return json(...terms)
       const cards = await cardsApi(req.method ?? 'GET', url.pathname, req)

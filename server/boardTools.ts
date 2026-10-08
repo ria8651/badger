@@ -7,7 +7,7 @@ import type { Store } from './db.ts'
 export const BOARD_SERVER = 'badger'
 
 /** Tools that only read, or write without destroying anything. Anything else goes through the normal permission flow. */
-export const BOARD_AUTO_ALLOWED = ['list_cards', 'get_card', 'create_card', 'update_card', 'link_chat'].map(
+export const BOARD_AUTO_ALLOWED = ['list_cards', 'get_card', 'create_card', 'update_card', 'link_chat', 'archive_chat'].map(
   (t) => `mcp__${BOARD_SERVER}__${t}`,
 )
 
@@ -96,7 +96,7 @@ export function boardServer(store: Store, sessionId: string, onChange: () => voi
           const card = args.id === undefined ? thisCard() : store.card(args.id)
           if (!card) return error(args.id === undefined ? 'This chat is not on a card.' : `No card #${args.id}.`)
           markSeen(card)
-          return text(await detail(card, sessionId))
+          return text(await detail(card, sessionId, store.archivedIds()))
         },
         { annotations: { readOnlyHint: true } },
       ),
@@ -146,6 +146,26 @@ export function boardServer(store: Store, sessionId: string, onChange: () => voi
         { annotations: { idempotentHint: true } },
       ),
       tool(
+        'archive_chat',
+        "Hide a chat from Badger's sidebar, or bring it back. Its transcript is kept; sending it a message unarchives it. Moving a card to done archives its chats, so there's no need to archive them separately.",
+        {
+          session_id: z
+            .string()
+            .regex(/^[0-9a-f-]{36}$/)
+            .optional()
+            .describe('Chat id, as listed by get_card. Omit for this chat'),
+          archived: z.boolean().optional().describe('false to unarchive. Defaults to true'),
+        },
+        async (args) => {
+          const id = args.session_id ?? sessionId
+          const archived = args.archived ?? true
+          store.setArchived(id, archived)
+          const which = id === sessionId ? 'This chat' : `Chat ${id}`
+          return text(`${which} is ${archived ? 'archived' : 'not archived'}.`)
+        },
+        { annotations: { idempotentHint: true } },
+      ),
+      tool(
         'delete_card',
         'Delete a card. Its chats are kept. Only do this when the user asks.',
         { id: z.number().int() },
@@ -161,13 +181,14 @@ function summary(c: Card, mine: boolean): string {
   return `#${c.id} [${c.status}] ${c.title}${chats}${mine ? ' (this chat)' : ''}`
 }
 
-async function detail(c: Card, sessionId: string): Promise<string> {
+async function detail(c: Card, sessionId: string, archived: Set<string>): Promise<string> {
   const chats = await Promise.all(
     c.sessionIds.map(async (id) => {
       const info = await getSessionInfo(id).catch(() => undefined)
       if (!info && id !== sessionId) return null
       const title = info?.customTitle || info?.summary || info?.firstPrompt || 'New chat'
-      return `- ${title}${info?.cwd ? ` (in ${info.cwd})` : ''}${id === sessionId ? ' (this chat)' : ''}`
+      const notes = [info?.cwd && `in ${info.cwd}`, archived.has(id) && 'archived', id === sessionId && 'this chat'].filter(Boolean)
+      return `- ${title} [${id}]${notes.length ? ` (${notes.join(', ')})` : ''}`
     }),
   )
   const lines = chats.filter(Boolean)

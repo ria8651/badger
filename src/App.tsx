@@ -1,6 +1,6 @@
 import { For, Match, Show, Switch, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
-import { Columns3, Plus } from 'lucide-solid'
+import { Archive, ArchiveRestore, ChevronRight, Columns3, Plus } from 'lucide-solid'
 import type { Card, SessionSummary } from '../shared/protocol.ts'
 import { api, socket } from './api.ts'
 import { basename, folderLabel, isScratch, setScratch } from './folders.ts'
@@ -120,6 +120,55 @@ export function App() {
   const sortedTerminals = createMemo(() =>
     [...terminals()].sort((a, b) => a.root.localeCompare(b.root) || a.createdAt - b.createdAt),
   )
+  const active = createMemo(() => sessions().filter((s) => !s.archived))
+  const archived = createMemo(() => sessions().filter((s) => s.archived))
+  const [showArchived, setShowArchived] = createSignal(false)
+  const toggleArchived = (s: SessionSummary) => {
+    // Move it straight away; the server's sessions_changed confirms it.
+    setSessions((all) => all.map((x) => (x.id === s.id ? { ...x, archived: !s.archived } : x)))
+    ;(s.archived ? api.unarchive(s.id) : api.archive(s.id)).catch(refresh)
+  }
+
+  const SessionRow = (props: { session: SessionSummary }) => {
+    const s = () => props.session
+    return (
+      <div class="group relative mb-px">
+        <button
+          onClick={() => go({ kind: 'chat', id: s().id })}
+          class={`block w-full rounded-lg px-2 py-1.5 text-left transition-colors ${
+            s().id === current() ? 'bg-surface' : 'hover:bg-surface/60'
+          }`}
+        >
+          <div class="flex items-center gap-2">
+            <span
+              class={`min-w-0 flex-1 truncate text-[13px] ${
+                s().id === current() ? 'text-fg' : s().archived ? 'text-fg-3 group-hover:text-fg' : 'text-fg-2 group-hover:text-fg'
+              }`}
+            >
+              {s().title}
+            </span>
+            <Show when={s().running}>
+              <LiveDot />
+            </Show>
+          </div>
+          <div class="mt-0.5 flex gap-1.5 text-[11px] text-fg-3 tabular-nums">
+            <span class="truncate">{s().cwd && folderLabel(s().cwd!)}</span>
+            <Show when={cardOf().get(s().id)}>{(c) => <span class="shrink-0">#{c().id}</span>}</Show>
+            <span class="ml-auto shrink-0 group-hover:invisible">{when(s().lastModified)}</span>
+          </div>
+        </button>
+        <button
+          onClick={() => toggleArchived(s())}
+          title={s().archived ? 'Unarchive' : 'Archive'}
+          class="absolute right-1.5 bottom-1 hidden size-5 place-items-center rounded text-fg-3 transition-colors group-hover:grid hover:bg-surface hover:text-fg"
+        >
+          <Show when={s().archived} fallback={<Archive class="size-3.5" />}>
+            <ArchiveRestore class="size-3.5" />
+          </Show>
+        </button>
+      </div>
+    )
+  }
   const cardOf = createMemo(() => new Map(cards().flatMap((c) => c.sessionIds.map((id) => [id, c] as const))))
 
   /**
@@ -206,34 +255,19 @@ export function App() {
           </div>
         </Show>
         <nav class="flex-1 overflow-y-auto px-2 py-2">
-          <For each={sessions()}>
-            {(s) => (
-              <button
-                onClick={() => go({ kind: 'chat', id: s.id })}
-                class={`group mb-px block w-full rounded-lg px-2 py-1.5 text-left transition-colors ${
-                  s.id === current() ? 'bg-surface' : 'hover:bg-surface/60'
-                }`}
-              >
-                <div class="flex items-center gap-2">
-                  <span
-                    class={`min-w-0 flex-1 truncate text-[13px] ${
-                      s.id === current() ? 'text-fg' : 'text-fg-2 group-hover:text-fg'
-                    }`}
-                  >
-                    {s.title}
-                  </span>
-                  <Show when={s.running}>
-                    <LiveDot />
-                  </Show>
-                </div>
-                <div class="mt-0.5 flex gap-1.5 text-[11px] text-fg-3 tabular-nums">
-                  <span class="truncate">{s.cwd && folderLabel(s.cwd)}</span>
-                  <Show when={cardOf().get(s.id)}>{(c) => <span class="shrink-0">#{c().id}</span>}</Show>
-                  <span class="ml-auto shrink-0">{when(s.lastModified)}</span>
-                </div>
-              </button>
-            )}
-          </For>
+          <For each={active()}>{(s) => <SessionRow session={s} />}</For>
+          <Show when={archived().length}>
+            <button
+              onClick={() => setShowArchived((v) => !v)}
+              class="mt-2 flex h-7 w-full items-center gap-1 rounded-lg px-2 text-[11px] text-fg-3 transition-colors hover:text-fg-2"
+            >
+              <ChevronRight class={`size-3 transition-transform ${showArchived() ? 'rotate-90' : ''}`} />
+              Archived ({archived().length})
+            </button>
+            <Show when={showArchived()}>
+              <For each={archived()}>{(s) => <SessionRow session={s} />}</For>
+            </Show>
+          </Show>
         </nav>
       </aside>
 

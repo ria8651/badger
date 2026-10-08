@@ -21,6 +21,8 @@ export interface SessionSummary {
   cwd?: string
   lastModified: number
   running: boolean
+  /** Hidden from the sidebar's main list. Archiving never deletes the transcript. */
+  archived: boolean
 }
 
 export const CARD_STATUSES = ['backlog', 'todo', 'in_progress', 'review', 'done'] as const

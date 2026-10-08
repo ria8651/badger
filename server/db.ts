@@ -26,6 +26,14 @@ const MIGRATIONS = [
      session_id TEXT PRIMARY KEY,
      hash TEXT NOT NULL
    );`,
+  // An unreleased migration (turn_results) ran here on some local databases; kept as a no-op so their versions still line up.
+  `SELECT 1;`,
+  // Archived chats are hidden from the sidebar. Their transcripts are never touched.
+  `DROP TABLE IF EXISTS turn_results;
+   CREATE TABLE archived_sessions (
+     session_id TEXT PRIMARY KEY,
+     archived_at INTEGER NOT NULL
+   );`,
 ]
 
 interface CardRow {
@@ -44,7 +52,11 @@ export type CardPatch = Partial<Pick<Card, 'title' | 'description' | 'status' | 
 export class Store {
   private db: DatabaseSync
 
-  constructor(dir: string) {
+  /** @param onArchived called whenever a chat is archived or unarchived, including by a card's status changing. */
+  constructor(
+    dir: string,
+    private onArchived: () => void = () => {},
+  ) {
     mkdirSync(dir, { recursive: true })
     this.db = new DatabaseSync(join(dir, 'badger.db'))
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON')
@@ -116,9 +128,14 @@ export class Store {
     if (patch.position !== undefined) next.position = Number(patch.position)
     // Moving columns without a position lands at the bottom of the new one.
     else if (next.status !== current.status) next.position = this.endOf(next.status)
-    this.db
-      .prepare('UPDATE cards SET title = ?, description = ?, status = ?, position = ?, updated_at = ? WHERE id = ?')
-      .run(next.title, next.description, next.status, next.position, Date.now(), id)
+    this.transaction(() => {
+      this.db
+        .prepare('UPDATE cards SET title = ?, description = ?, status = ?, position = ?, updated_at = ? WHERE id = ?')
+        .run(next.title, next.description, next.status, next.position, Date.now(), id)
+      // Finishing a card puts its chats away; reopening it brings them back.
+      if (next.status === 'done' && current.status !== 'done') for (const s of current.sessionIds) this.setArchived(s, true)
+      if (next.status !== 'done' && current.status === 'done') for (const s of current.sessionIds) this.setArchived(s, false)
+    })
     return this.card(id)
   }
 
@@ -137,6 +154,20 @@ export class Store {
 
   unlinkSession(cardId: number, sessionId: string): boolean {
     return this.db.prepare('DELETE FROM card_sessions WHERE card_id = ? AND session_id = ?').run(cardId, sessionId).changes > 0
+  }
+
+  archivedIds(): Set<string> {
+    const rows = this.db.prepare('SELECT session_id FROM archived_sessions').all() as { session_id: string }[]
+    return new Set(rows.map((r) => r.session_id))
+  }
+
+  /** Returns whether anything changed. */
+  setArchived(sessionId: string, archived: boolean): boolean {
+    const result = archived
+      ? this.db.prepare('INSERT INTO archived_sessions (session_id, archived_at) VALUES (?, ?) ON CONFLICT DO NOTHING').run(sessionId, Date.now())
+      : this.db.prepare('DELETE FROM archived_sessions WHERE session_id = ?').run(sessionId)
+    if (result.changes > 0) this.onArchived()
+    return result.changes > 0
   }
 
   contextHash(sessionId: string): string | undefined {
