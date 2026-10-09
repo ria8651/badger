@@ -2,7 +2,7 @@ import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeF
 import { createServer, type IncomingMessage } from 'node:http'
 import { homedir } from 'node:os'
 import { extname, isAbsolute, join, resolve } from 'node:path'
-import { getSessionInfo, listSessions } from '@anthropic-ai/claude-agent-sdk'
+import { getSessionInfo, listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk'
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { ClientEvent, ServerEvent, SessionSummary } from '../shared/protocol.ts'
 import { BOARD_AUTO_ALLOWED, BOARD_SERVER, boardServer, cardContext } from './boardTools.ts'
@@ -10,6 +10,7 @@ import { type Actor, BadRequest, Store } from './db.ts'
 import { SessionManager, diskTranscript } from './session.ts'
 import { TERMINAL_AUTO_ALLOWED, TERMINAL_SERVER, terminalServer } from './terminalTools.ts'
 import { Terminals, shellEnv } from './terminals.ts'
+import { suggestTitle } from './titles.ts'
 import { excludeWorktrees, removeWorktree, workspaceRoot, worktreeStatus } from './workspace.ts'
 
 // Terminals get the environment Badger was started with, before .env adds PORT and friends.
@@ -241,12 +242,30 @@ async function cardsApi(method: string, path: string, req: IncomingMessage): Pro
   return undefined
 }
 
-/** Archive routes. Archiving only hides a chat; its transcript is left alone. */
-function sessionsApi(method: string, path: string): [number, unknown] | undefined {
-  const m = path.match(/^\/api\/sessions\/([0-9a-f-]{36})\/archive$/)
+/** Archive and title routes. Archiving only hides a chat; its transcript is left alone. */
+async function sessionsApi(method: string, path: string, req: IncomingMessage): Promise<[number, unknown] | undefined> {
+  const m = path.match(/^\/api\/sessions\/([0-9a-f-]{36})\/(archive|title|title\/suggest)$/)
   if (!m) return undefined
-  if (method === 'POST') return (store.setArchived(m[1], true, UI), [204, null])
-  if (method === 'DELETE') return (store.setArchived(m[1], false, UI), [204, null])
+  const [, id, action] = m
+  if (action === 'archive') {
+    if (method === 'POST') return (store.setArchived(id, true, UI), [204, null])
+    if (method === 'DELETE') return (store.setArchived(id, false, UI), [204, null])
+  }
+  // The title goes in the transcript, where the CLI's /resume sees it too.
+  if (action === 'title' && method === 'PUT') {
+    const { title } = await readJson(req)
+    if (typeof title !== 'string' || !title.trim()) throw new BadRequest('title is required')
+    await renameSession(id, title.trim()).catch(badRequest)
+    broadcast({ type: 'sessions_changed' })
+    return [204, null]
+  }
+  if (action === 'title/suggest' && method === 'POST') {
+    const info = await getSessionInfo(id)
+    if (!info) return [404, { error: 'No such chat' }]
+    const current = info.customTitle || info.summary || info.firstPrompt || ''
+    const card = store.cards().find((c) => c.sessionIds.includes(id))
+    return [200, { title: await suggestTitle(id, current, card, SCRATCH_DIR).catch(badRequest) }]
+  }
   return undefined
 }
 
@@ -354,8 +373,8 @@ const server = createServer(async (req, res) => {
         if (!roots.has(cwd)) roots.set(cwd, workspaceRoot(cwd))
         return json(200, { root: roots.get(cwd) })
       }
-      const archive = sessionsApi(req.method ?? 'GET', url.pathname)
-      if (archive) return json(...archive)
+      const sessions = await sessionsApi(req.method ?? 'GET', url.pathname, req)
+      if (sessions) return json(...sessions)
       const worktrees = await worktreesApi(req.method ?? 'GET', url.pathname, url)
       if (worktrees) return json(...worktrees)
       const terms = await terminalsApi(req.method ?? 'GET', url.pathname, req)

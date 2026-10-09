@@ -1,10 +1,11 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, on } from 'solid-js'
-import { GitBranch, Link, Plus, Trash2, X } from 'lucide-solid'
+import { GitBranch, Link, Pencil, Plus, Trash2, X } from 'lucide-solid'
 import { CARD_STATUSES, type Card, type SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { folderLabel, isScratch, worktreeOf } from '../folders.ts'
 import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
+import { RenameChat } from './RenameChat.tsx'
 import { LiveDot, Menu, Select } from './ui.tsx'
 
 const STATUS_OPTIONS = CARD_STATUSES.map((value) => ({ value, label: STATUS_LABELS[value] }))
@@ -24,6 +25,7 @@ export function CardView(props: {
 }) {
   // Linked ids with no transcript yet (a chat opened but never sent) are left out.
   const chats = createMemo(() => props.sessions.filter((s) => props.card.sessionIds.includes(s.id)))
+  const [renaming, setRenaming] = createSignal<string>()
   const unlinked = createMemo(() => props.sessions.filter((s) => !props.card.sessionIds.includes(s.id)).slice(0, 30))
   /** Worktrees this card's chats run in. Made by starting a chat in one; nothing else records them. */
   const worktrees = createMemo(() => [...new Set(chats().flatMap((s) => (s.cwd && !s.gone && worktreeOf(s.cwd) ? [s.cwd] : [])))])
@@ -131,13 +133,25 @@ export function CardView(props: {
           <For each={chats()}>
             {(s) => (
               <div class="group flex items-center gap-2 border-b border-line">
-                <button onClick={() => props.onOpenChat(s.id)} class="flex min-w-0 flex-1 items-center gap-2 py-2.5 text-left">
-                  <span class="min-w-0 flex-1 truncate text-[13px] text-fg-2 group-hover:text-fg">{s.title}</span>
-                  <Show when={s.running}>
-                    <LiveDot />
-                  </Show>
-                  <span class="shrink-0 text-[11px] text-fg-3">{s.cwd && folderLabel(s.cwd)}</span>
-                </button>
+                <Show
+                  when={renaming() !== s.id}
+                  fallback={<RenameChat session={s} onDone={() => setRenaming()} class="flex min-w-0 flex-1 items-center gap-3 py-2.5" />}
+                >
+                  <button onClick={() => props.onOpenChat(s.id)} class="flex min-w-0 flex-1 items-center gap-2 py-2.5 text-left">
+                    <span class="min-w-0 flex-1 truncate text-[13px] text-fg-2 group-hover:text-fg">{s.title}</span>
+                    <Show when={s.running}>
+                      <LiveDot />
+                    </Show>
+                    <span class="shrink-0 text-[11px] text-fg-3">{s.cwd && folderLabel(s.cwd)}</span>
+                  </button>
+                  <button
+                    onClick={() => setRenaming(s.id)}
+                    title="Rename chat"
+                    class="grid size-6 place-items-center rounded-md text-fg-3 opacity-0 transition hover:bg-surface hover:text-fg group-hover:opacity-100 focus-visible:opacity-100"
+                  >
+                    <Pencil class="size-3.5" />
+                  </button>
+                </Show>
                 <button
                   onClick={() => api.unlinkSession(props.card.id, s.id)}
                   title="Unlink chat"
