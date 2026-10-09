@@ -1,4 +1,4 @@
-import { For, Match, Show, Switch, createEffect, createSignal, on, type JSX } from 'solid-js'
+import { For, Match, Show, Switch, createEffect, createSignal, type JSX } from 'solid-js'
 import { Check, ChevronRight, Loader2 } from 'lucide-solid'
 import type { Task } from '../tasks.ts'
 import { Markdown } from './Markdown.tsx'
@@ -115,16 +115,18 @@ export function Disclosure(props: {
   trailing?: JSX.Element
   /** Shown under the row while collapsed. */
   peek?: JSX.Element
-  /** Open while true, folding up once it turns false. */
+  /** Open while true, folding up once it turns false, until the user opens or closes it. */
   live?: boolean
   children: JSX.Element
 }) {
-  const [open, setOpen] = createSignal(!!props.live)
-  createEffect(on(() => !!props.live, setOpen, { defer: true }))
+  // Derived rather than synced by an effect: once the user picks, nothing else
+  // (other tools finishing, messages arriving) can change it.
+  const [picked, setPicked] = createSignal<boolean>()
+  const open = () => picked() ?? !!props.live
   return (
     <div class="text-[13px]">
       <button
-        onClick={() => setOpen(!open())}
+        onClick={() => setPicked(!open())}
         class="group -mx-2 flex w-[calc(100%+1rem)] items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-surface"
       >
         <span class="shrink-0 text-fg-2 group-hover:text-fg">{props.label}</span>
