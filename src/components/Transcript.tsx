@@ -76,12 +76,21 @@ function messageItems(m: WireMessage): Item[] {
 function buildView(messages: WireMessage[]) {
   const results = new Map<string, ToolResult>()
   const subagentSteps = new Map<string, number>()
+  // When the user next spoke after each turn; turns without one are idle until now.
+  const idleUntil = new Map<Item, number>()
+  let lastResult: Item | undefined
   for (const m of messages) {
     const parent = m.parent_tool_use_id as string | null | undefined
     if (parent && m.type === 'assistant') subagentSteps.set(parent, (subagentSteps.get(parent) ?? 0) + 1)
     if (parent || m.type === 'user') collectResults(m, results)
+    const items = itemsFor(m)
+    if (m.type === 'result') lastResult = items[0]
+    else if (lastResult && items[0]?.kind === 'user' && m.timestamp) {
+      idleUntil.set(lastResult, Date.parse(String(m.timestamp)))
+      lastResult = undefined
+    }
   }
-  return { items: messages.flatMap(itemsFor), results, subagentSteps }
+  return { items: messages.flatMap(itemsFor), results, subagentSteps, idleUntil }
 }
 
 function collectResults(m: WireMessage, results: Map<string, ToolResult>) {
@@ -155,7 +164,7 @@ export function Transcript(props: {
             {item.ok ? '' : `Stopped: ${item.error} · `}
             {duration(item.seconds)}
             {item.tokens ? ` · ${compact(item.tokens.input)} in · ${compact(item.tokens.output)} out` : ''}
-            <Show when={item.endedAt}>{(at) => <Ago time={at()} />}</Show>
+            <Show when={item.endedAt}>{(at) => <Idle from={at()} until={view().idleUntil.get(item)} />}</Show>
           </div>
         )
       case 'divider':
@@ -260,18 +269,19 @@ function duration(seconds: number): string {
   return h ? `${h}h ${m}m` : `${m}m ${seconds % 60}s`
 }
 
-/** Ticks once a minute for every <Ago> on the page. */
+/** Ticks once a minute for every <Idle> on the page. */
 const [now, setNow] = createSignal(Date.now())
 setInterval(() => setNow(Date.now()), 60_000)
 
-function Ago(props: { time: number }) {
+/** How long the chat sat idle after a turn: until the next prompt, or until now. */
+function Idle(props: { from: number; until?: number }) {
   const label = () => {
-    const minutes = Math.floor((now() - props.time) / 60_000)
-    if (minutes < 1) return 'just now'
-    if (minutes < 60) return `${minutes}m ago`
+    const minutes = Math.floor(((props.until ?? now()) - props.from) / 60_000)
+    if (minutes < 1) return props.until ? '' : ' · just now'
+    if (minutes < 60) return ` · ${minutes}m idle`
     const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h ago`
-    return `${Math.floor(hours / 24)}d ago`
+    if (hours < 24) return ` · ${hours}h idle`
+    return ` · ${Math.floor(hours / 24)}d idle`
   }
-  return <span title={new Date(props.time).toLocaleString()}>{` · ${label()}`}</span>
+  return <span title={new Date(props.from).toLocaleString()}>{label()}</span>
 }

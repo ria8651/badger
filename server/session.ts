@@ -172,7 +172,7 @@ export class LiveSession {
     }
     if (!this.queue.push(message)) return false
     // Echo immediately so every tab shows the message before the SDK replays it.
-    this.record(message as unknown as WireMessage)
+    this.record({ ...message, timestamp: new Date().toISOString() } as unknown as WireMessage)
     this.setRunning(true)
     return true
   }
