@@ -1,5 +1,5 @@
 import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from 'solid-js'
-import { ArrowUp, Check, GitBranch, Square } from 'lucide-solid'
+import { ArrowUp, Check, GitBranch, ListChevronsDownUp, ListChevronsUpDown, Square } from 'lucide-solid'
 import type { Card, PermissionMode } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
 import { cardWorktreeName, folderItem, isScratch, worktreeOf } from '../folders.ts'
@@ -7,8 +7,8 @@ import { workspaceOf } from '../terminals.ts'
 import { createChat } from '../useChat.ts'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
 import { TerminalButton, TerminalDock } from './Terminals.tsx'
-import { CardBadge, Transcript } from './Transcript.tsx'
-import { IconButton, LiveDot, Select, ltr, type Option } from './ui.tsx'
+import { CardBadge, Transcript, detail, setDetail } from './Transcript.tsx'
+import { IconButton, Select, ltr, type Option } from './ui.tsx'
 
 const MODES: Option<PermissionMode>[] = [
   { value: 'default', label: 'Ask before edits', description: 'Claude asks before changing files or running commands.' },
@@ -164,12 +164,14 @@ export function Chat(props: {
                 </div>
               }
             >
-              <Transcript messages={state.messages} partial={state.partial} bashOutput={state.bashOutput} running={state.running} cwd={cwd()} />
-            </Show>
-            <Show when={state.running && !state.partial && state.permissions.length === 0}>
-              <div class="mt-4 flex h-6 items-center gap-2 text-[13px] text-fg-3">
-                <LiveDot /> Working
-              </div>
+              <Transcript
+                messages={state.messages}
+                partial={state.partial}
+                bashOutput={state.bashOutput}
+                running={state.running}
+                working={state.running && state.permissions.length === 0}
+                cwd={cwd()}
+              />
             </Show>
           </div>
         </div>
@@ -204,6 +206,17 @@ export function Chat(props: {
             <div class="flex items-center gap-2 px-2 pb-2">
               <Select value={mode()} options={MODES} onChange={changeMode} title="Permission mode" />
               <Show when={root()}>{(r) => <TerminalButton root={r()} cwd={cwd()!} />}</Show>
+              <button
+                type="button"
+                onClick={() => setDetail(detail() === 'full' ? 'result' : 'full')}
+                title={detail() === 'full' ? 'Show results only' : 'Show all work'}
+                class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2"
+              >
+                {/* Shows what a click does, like play/pause: fold the work away or expand it. */}
+                <Show when={detail() === 'full'} fallback={<ListChevronsUpDown class="size-3.5" />}>
+                  <ListChevronsDownUp class="size-3.5" />
+                </Show>
+              </button>
               <div class="flex-1" />
               {/* One slot: stop while running with nothing typed, otherwise send. */}
               <Show

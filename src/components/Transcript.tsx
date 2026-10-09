@@ -6,7 +6,7 @@ import type { CardStatus, WireMessage } from '../../shared/protocol.ts'
 import type { Partial } from '../useChat.ts'
 import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
-import { Disclosure, Pre, ToolCard, toolLabel, type ToolResult } from './ToolCard.tsx'
+import { Disclosure, Pre, ToolCard, toolLabel, toolSummary, type ToolResult } from './ToolCard.tsx'
 import { LiveDot } from './ui.tsx'
 
 type Block = { type: string; text?: string; thinking?: string; id?: string; name?: string; input?: Record<string, unknown> }
@@ -20,6 +20,22 @@ type Item =
   | { kind: 'result'; ok: boolean; seconds: number; tokens?: { input: number; output: number }; endedAt?: number; error?: string }
   | { kind: 'divider'; text: string }
   | { kind: 'card'; context: CardContext }
+
+/** A stretch of Claude's work folded into one row, in result-only mode. */
+type Work = { kind: 'work' }
+type Row = Item | Work
+
+export type Detail = 'full' | 'result'
+
+const DETAIL_KEY = 'badger.chatDetail'
+const [detail, setDetailSignal] = createSignal<Detail>(localStorage.getItem(DETAIL_KEY) === 'result' ? 'result' : 'full')
+export { detail }
+
+/** How much of Claude's work chats show. One setting for every chat. */
+export function setDetail(next: Detail): void {
+  setDetailSignal(next)
+  localStorage.setItem(DETAIL_KEY, next)
+}
 
 /**
  * Items per message, cached by message identity so <For> keeps existing rows
@@ -93,6 +109,45 @@ function buildView(messages: WireMessage[]) {
   return { items: messages.flatMap(itemsFor), results, subagentSteps, idleUntil }
 }
 
+const isWork = (i: Item) => i.kind === 'text' || i.kind === 'thinking' || i.kind === 'tool'
+
+/** Work rows keyed by their first item, which never changes as the run grows. */
+const workCache = new WeakMap<Item, Work>()
+
+/**
+ * Result-only rows. In each unbroken run of assistant items, trailing text is
+ * the response and stays; everything before it folds into one work row.
+ * `tail` is the work row of a run still at the end, the one that can be live.
+ */
+function foldWork(items: Item[]) {
+  const rows: Row[] = []
+  const groups = new Map<Work, Item[]>()
+  let tail: Work | undefined
+  for (let i = 0; i < items.length; ) {
+    tail = undefined
+    if (!isWork(items[i])) {
+      rows.push(items[i++])
+      continue
+    }
+    let end = i
+    while (end < items.length && isWork(items[end])) end++
+    let reply = end
+    while (reply > i && items[reply - 1].kind === 'text') reply--
+    if (reply > i) {
+      let work = workCache.get(items[i])
+      if (!work) workCache.set(items[i], (work = { kind: 'work' }))
+      groups.set(work, items.slice(i, reply))
+      rows.push(work)
+      tail = work
+    }
+    rows.push(...items.slice(reply, end))
+    i = end
+  }
+  return { rows, groups, tail }
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+
 function collectResults(m: WireMessage, results: Map<string, ToolResult>) {
   const content = (m.message as { content?: unknown })?.content
   if (!Array.isArray(content)) return
@@ -121,6 +176,8 @@ export function Transcript(props: {
   partial: Partial | null
   bashOutput: Record<string, string>
   running: boolean
+  /** Running and not stopped on a permission prompt. */
+  working: boolean
   cwd?: string
 }) {
   // Track the array and its length, then walk the raw objects so the cache keys are stable.
@@ -128,10 +185,62 @@ export function Transcript(props: {
     void props.messages.length
     return buildView(unwrap(props.messages))
   })
+  const folded = createMemo(() => foldWork(view().items))
+  const rows = (): Row[] => (detail() === 'full' ? view().items : folded().rows)
+
+  const partialWork = () => (
+    <>
+      <Show when={props.partial?.type === 'thinking'}>
+        <Thinking text={props.partial?.text ?? ''} live />
+      </Show>
+      <Show when={props.partial?.type === 'tool_use'}>
+        <Disclosure label={props.partial?.toolName ? toolLabel(props.partial.toolName) : 'Tool'} trailing={<LiveDot />} live>
+          <Pre text={props.partial?.text ?? ''} />
+        </Disclosure>
+      </Show>
+    </>
+  )
+
+  /** What the live work row says Claude is doing right now. */
+  const activity = (items: Item[]) => {
+    const p = props.partial
+    if (p?.type === 'tool_use') return p.toolName ? toolLabel(p.toolName) : ''
+    if (p?.type === 'thinking') return 'Thinking'
+    const last = items.findLast((i) => i.kind === 'tool' || i.kind === 'thinking')
+    if (last?.kind === 'tool') return `${toolLabel(last.name)} ${toolSummary(last.name, last.input, props.cwd)}`
+    return last?.kind === 'thinking' ? 'Thinking' : ''
+  }
+
+  const WorkRow = (p: { work: Work }) => {
+    const items = () => folded().groups.get(p.work) ?? []
+    const live = () => props.running && folded().tail === p.work
+    const steps = () => items().filter((i) => i.kind === 'tool').length
+    return (
+      <Disclosure
+        label={live() ? 'Working' : steps() ? 'Worked' : 'Thought'}
+        detail={live() ? activity(items()) : steps() ? plural(steps(), 'step') : ''}
+        trailing={
+          <Show when={live()}>
+            <Show when={steps()}>
+              <span class="shrink-0 text-xs text-fg-3 tabular-nums">{plural(steps(), 'step')}</span>
+            </Show>
+            <LiveDot />
+          </Show>
+        }
+      >
+        <div>
+          <For each={items()}>{render}</For>
+          <Show when={live()}>{partialWork()}</Show>
+        </div>
+      </Disclosure>
+    )
+  }
 
   // Block layout so vertical margins collapse: prose breathes, tool rows stack tightly.
-  const render = (item: Item): JSX.Element => {
+  const render = (item: Row): JSX.Element => {
     switch (item.kind) {
+      case 'work':
+        return <WorkRow work={item} />
       case 'user':
         return (
           <div class="mt-8 mb-4 flex justify-end first:mt-0">
@@ -182,19 +291,36 @@ export function Transcript(props: {
 
   return (
     <div>
-      <For each={view().items}>{render}</For>
+      <For each={rows()}>{render}</For>
+      <Show
+        when={detail() === 'full'}
+        fallback={
+          // Nothing to fold yet: the turn has just started, or it's only thinking so far.
+          <Show when={props.running && !folded().tail && props.partial?.type !== 'text'}>
+            <WorkingLine detail={activity([])} />
+          </Show>
+        }
+      >
+        {partialWork()}
+      </Show>
       <Show when={props.partial?.type === 'text' && props.partial.text}>
         <div class="my-4">
           <Markdown text={props.partial?.text ?? ''} />
         </div>
       </Show>
-      <Show when={props.partial?.type === 'thinking'}>
-        <Thinking text={props.partial?.text ?? ''} live />
+      <Show when={detail() === 'full' && props.working && !props.partial}>
+        <WorkingLine />
       </Show>
-      <Show when={props.partial?.type === 'tool_use'}>
-        <Disclosure label={props.partial?.toolName ? toolLabel(props.partial.toolName) : 'Tool'} trailing={<LiveDot />} live>
-          <Pre text={props.partial?.text ?? ''} />
-        </Disclosure>
+    </div>
+  )
+}
+
+function WorkingLine(props: { detail?: string }) {
+  return (
+    <div class="mt-4 flex h-6 items-center gap-2 text-[13px] text-fg-3">
+      <LiveDot /> Working
+      <Show when={props.detail}>
+        <span class="min-w-0 truncate font-mono text-xs">{props.detail}</span>
       </Show>
     </div>
   )
