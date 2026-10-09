@@ -35,7 +35,7 @@ export async function excludeWorktrees(cwd: string): Promise<void> {
 }
 
 /** The main checkout a worktree belongs to. */
-async function mainCheckout(path: string): Promise<string> {
+export async function mainCheckout(path: string): Promise<string> {
   return dirname(resolve(path, await git(path, 'rev-parse', '--git-common-dir')))
 }
 
@@ -67,4 +67,19 @@ export async function removeWorktree(path: string): Promise<void> {
     throw new Error(err.stderr?.trim().replace(/^fatal: /, '') || 'git worktree remove failed')
   })
   if (branch) await git(main, 'branch', '-d', branch).catch(() => {})
+}
+
+/** Why a checkout can't take a merge right now, if it can't: a merge already in progress, no branch, or uncommitted changes. */
+export async function mergeBlocker(checkout: string): Promise<string | undefined> {
+  const inProgress = await git(checkout, 'rev-parse', '-q', '--verify', 'MERGE_HEAD').then(() => true, () => false)
+  if (inProgress) return `${checkout} is in the middle of a merge.`
+  if (!(await git(checkout, 'branch', '--show-current'))) return `${checkout} has no branch checked out.`
+  // Untracked files don't get in a merge's way unless the merge adds the same path, and git refuses that itself.
+  const dirty = await git(checkout, 'status', '--porcelain', '--untracked-files=no')
+  if (dirty) {
+    // `git` trims the output, so the first line may have lost its leading status column.
+    const files = dirty.split('\n').map((l) => l.trim().replace(/^\S+\s+/, ''))
+    return `${checkout} has uncommitted changes (${files.slice(0, 5).join(', ')}${files.length > 5 ? ', …' : ''}).`
+  }
+  return undefined
 }

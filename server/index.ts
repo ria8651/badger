@@ -6,7 +6,9 @@ import { getSessionInfo, listSessions, renameSession } from '@anthropic-ai/claud
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { ClientEvent, ServerEvent, SessionSummary } from '../shared/protocol.ts'
 import { BOARD_AUTO_ALLOWED, BOARD_SERVER, boardServer, cardContext } from './boardTools.ts'
+import { Children } from './children.ts'
 import { type Actor, BadRequest, Store } from './db.ts'
+import { MERGE_TOOL, mergeTool } from './merge.ts'
 import { SessionManager, diskTranscript } from './session.ts'
 import { TERMINAL_AUTO_ALLOWED, TERMINAL_SERVER, terminalServer } from './terminalTools.ts'
 import { Terminals, shellEnv } from './terminals.ts'
@@ -51,17 +53,37 @@ const store = new Store(DATA_DIR, () => broadcast({ type: 'sessions_changed' }))
 /** Changes made through the REST API and WebSocket, i.e. by someone in the browser. */
 const UI: Actor = { source: 'ui' }
 const terminals = new Terminals(DATA_DIR, startEnv)
-const manager = new SessionManager(
+const cardsChanged = () => broadcast({ type: 'cards_changed' })
+// Merging only starts a chat in the main checkout, and that chat asks for anything risky itself.
+const MERGE_TOOL_NAME = `mcp__${BOARD_SERVER}__${MERGE_TOOL}`
+const manager: SessionManager = new SessionManager(
   () => broadcast({ type: 'sessions_changed' }),
   (sessionId, cwd) => ({
     mcpServers: {
-      [BOARD_SERVER]: boardServer(store, sessionId, () => broadcast({ type: 'cards_changed' })),
+      [BOARD_SERVER]: boardServer(store, sessionId, cardsChanged, [
+        mergeTool(
+          {
+            store,
+            manager,
+            terminals,
+            children,
+            onChange: () => {
+              cardsChanged()
+              broadcast({ type: 'sessions_changed' })
+            },
+          },
+          sessionId,
+          cwd,
+          MERGE_TOOL_NAME,
+        ),
+      ]),
       [TERMINAL_SERVER]: terminalServer(terminals, sessionId, cwd),
     },
-    allowedTools: [...BOARD_AUTO_ALLOWED, ...TERMINAL_AUTO_ALLOWED],
+    allowedTools: [...BOARD_AUTO_ALLOWED, MERGE_TOOL_NAME, ...TERMINAL_AUTO_ALLOWED],
     turnContext: () => cardContext(store, sessionId),
   }),
 )
+const children = new Children(manager, store, broadcast)
 
 // ── Terminals: which sockets are watching which terminal ──
 
@@ -102,8 +124,9 @@ function unsubscribeTerminal(ws: WebSocket, id: string): void {
 
 async function snapshotFor(sessionId: string): Promise<ServerEvent> {
   const draft = store.draft(sessionId)
+  const childSessions = store.children(sessionId)
   const live = manager.get(sessionId)
-  if (live) return { ...(await live.snapshot()), draft }
+  if (live) return { ...(await live.snapshot()), draft, children: childSessions }
   const [info, messages] = await Promise.all([getSessionInfo(sessionId), diskTranscript(sessionId)])
   return {
     type: 'snapshot',
@@ -115,6 +138,7 @@ async function snapshotFor(sessionId: string): Promise<ServerEvent> {
     permissions: [],
     bashOutput: {},
     draft,
+    children: childSessions,
   }
 }
 
@@ -158,7 +182,7 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       saveDraft(ws, event.sessionId, event.text)
       return
     case 'interrupt':
-      await manager.get(event.sessionId)?.interrupt()
+      await Promise.all([manager.get(event.sessionId)?.interrupt(), children.interrupt(event.sessionId)])
       return
     case 'set_mode':
       await manager.get(event.sessionId)?.setMode(event.mode)
@@ -186,13 +210,15 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
 async function sessionList(): Promise<SessionSummary[]> {
   const infos = await listSessions({ limit: 200 })
   const archived = store.archivedIds()
+  // Children show inside the chat that started them.
+  const childIds = store.childIds()
   const exists = new Map<string, boolean>()
   const gone = (cwd?: string) => {
     if (!cwd) return false
     if (!exists.has(cwd)) exists.set(cwd, existsSync(cwd))
     return !exists.get(cwd)
   }
-  const summaries: SessionSummary[] = infos.map((s) => ({
+  const summaries: SessionSummary[] = infos.filter((s) => !childIds.has(s.sessionId)).map((s) => ({
     id: s.sessionId,
     title: s.customTitle || s.summary || s.firstPrompt || 'Untitled',
     // A live chat may have moved into a worktree since its transcript was last written.
@@ -204,7 +230,7 @@ async function sessionList(): Promise<SessionSummary[]> {
   }))
   // A brand-new live session may not have a transcript on disk yet.
   for (const id of manager.liveIds()) {
-    if (!summaries.some((s) => s.id === id)) {
+    if (!childIds.has(id) && !summaries.some((s) => s.id === id)) {
       summaries.unshift({ id, title: 'New chat', cwd: manager.get(id)?.cwd, lastModified: Date.now(), running: manager.isRunning(id), archived: false })
     }
   }

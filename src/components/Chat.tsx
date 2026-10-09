@@ -1,14 +1,16 @@
-import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from 'solid-js'
-import { ArrowUp, Check, GitBranch, ListChevronsDownUp, ListChevronsUpDown, Square } from 'lucide-solid'
+import { For, Show, createEffect, createMemo, createResource, createSignal, mapArray, on, onCleanup, onMount } from 'solid-js'
+import { ArrowUp, Check, GitBranch, ListChevronsDownUp, ListChevronsUpDown, Square, Zap } from 'lucide-solid'
 import type { Card, PermissionMode } from '../../shared/protocol.ts'
-import { socket } from '../api.ts'
+import { chatActions } from '../actions.ts'
+import { api, socket } from '../api.ts'
 import { cardWorktreeName, folderItem, isScratch, worktreeOf } from '../folders.ts'
 import { workspaceOf } from '../terminals.ts'
-import { createChat } from '../useChat.ts'
+import { ChildChats, createChat } from '../useChat.ts'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
 import { TerminalButton, TerminalDock } from './Terminals.tsx'
+import { toolLabel } from './ToolCard.tsx'
 import { CardBadge, Transcript, detail, setDetail } from './Transcript.tsx'
-import { IconButton, Select, ltr, type Option } from './ui.tsx'
+import { IconButton, Menu, Select, ltr, type Option } from './ui.tsx'
 
 const MODES: Option<PermissionMode>[] = [
   { value: 'default', label: 'Ask before edits', description: 'Claude asks before changing files or running commands.' },
@@ -54,6 +56,35 @@ export function Chat(props: {
   const where = () => (isScratch(cwd()) ? 'No folder' : (cwd() ?? ''))
 
   createEffect(on(() => state.mode, setMode))
+
+  // Chats this one started and waits on, subscribed once here for their tool calls and their prompts.
+  // Mapped over tool_use_ids, which are strings, so adding a child never resubscribes the others.
+  const childChats = mapArray(
+    createMemo(() => Object.keys(state.children)),
+    (toolUseId) => {
+      const id = state.children[toolUseId]
+      return { id, toolUseId, state: createChat(id).state }
+    },
+  )
+  const childState = (id: string) => childChats().find((c) => c.id === id)?.state
+  const childPrompts = () => childChats().flatMap((c) => c.state.permissions.map((p) => ({ child: c, permission: p })))
+  /** The tool that started a child, to say whose prompt it is. */
+  const toolName = (toolUseId: string) => {
+    for (const m of state.messages) {
+      const content = (m.message as { content?: { type: string; id?: string; name?: string }[] } | undefined)?.content
+      const use = Array.isArray(content) && content.find((b) => b.type === 'tool_use' && b.id === toolUseId)
+      if (use) return use.name ?? ''
+    }
+    return ''
+  }
+
+  // Fetched on opening and again each time a turn ends, since that's when commits happen.
+  const [worktree, { refetch: refetchWorktree }] = createResource(
+    () => state.loaded && worktreeOf(cwd()) && cwd(),
+    (dir) => api.worktree(dir).catch(() => undefined),
+  )
+  createEffect(on(() => state.running, (running) => !running && refetchWorktree(), { defer: true }))
+  const actions = () => chatActions({ worktree: worktree() })
 
   // Unsent text is saved on the server, so it survives leaving the chat or
   // reloading, and every tab on this chat shows the same draft.
@@ -110,21 +141,25 @@ export function Chat(props: {
   })
 
 
-  const submit = () => {
-    const value = text().trim()
-    if (!value) return
+  const send = (value: string) => {
     const worktree = inWorktree() && canWorktree() ? (worktreeName() ?? '') : undefined
     socket.send({ type: 'send', sessionId: props.sessionId, text: value, cwd: cwd(), mode: mode(), worktree })
     if (!started()) {
       setStarted(true)
       props.onStart?.()
     }
+    pinned = true
+    toBottom()
+  }
+
+  const submit = () => {
+    const value = text().trim()
+    if (!value) return
+    send(value)
     // The server clears the saved draft when the message arrives.
     clearTimeout(saveTimer)
     unsaved = false
     setText('')
-    pinned = true
-    toBottom()
   }
 
   const changeMode = (next: PermissionMode) => {
@@ -164,14 +199,17 @@ export function Chat(props: {
                 </div>
               }
             >
-              <Transcript
-                messages={state.messages}
-                partial={state.partial}
-                bashOutput={state.bashOutput}
-                running={state.running}
-                working={state.running && state.permissions.length === 0}
-                cwd={cwd()}
-              />
+              <ChildChats.Provider value={childState}>
+                <Transcript
+                  messages={state.messages}
+                  partial={state.partial}
+                  bashOutput={state.bashOutput}
+                  running={state.running}
+                  working={state.running && state.permissions.length === 0 && childPrompts().length === 0}
+                  cwd={cwd()}
+                  children={state.children}
+                />
+              </ChildChats.Provider>
             </Show>
           </div>
         </div>
@@ -180,6 +218,16 @@ export function Chat(props: {
         <div class="relative mx-auto w-full max-w-3xl space-y-2 px-5 pb-5 before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-bg">
           <For each={state.permissions}>
             {(p) => <PermissionPrompt sessionId={props.sessionId} permission={p} cwd={cwd()} />}
+          </For>
+          <For each={childPrompts()}>
+            {({ child, permission }) => (
+              <PermissionPrompt
+                sessionId={child.id}
+                permission={permission}
+                cwd={child.state.cwd}
+                from={toolLabel(toolName(child.toolUseId)) || 'Another chat'}
+              />
+            )}
           </For>
           <Show when={state.error}>
             <div class="flex items-start gap-3 bg-danger/10 rounded-lg px-3 py-2 text-[13px] text-danger">
@@ -206,6 +254,17 @@ export function Chat(props: {
             <div class="flex items-center gap-2 px-2 pb-2">
               <Select value={mode()} options={MODES} onChange={changeMode} title="Permission mode" />
               <Show when={root()}>{(r) => <TerminalButton root={r()} cwd={cwd()!} />}</Show>
+              <Show when={actions().length}>
+                <Menu
+                  items={actions().map((a) => ({ label: a.label, description: a.description }))}
+                  onPick={(i) => send(actions()[i].prompt)}
+                  title="Chat actions"
+                  triggerClass={(open) =>
+                    `flex h-7 items-center rounded-md px-2 transition-colors hover:bg-surface hover:text-fg-2 ${open ? 'bg-surface text-fg-2' : 'text-fg-3'}`
+                  }
+                  trigger={() => <Zap class="size-3.5" />}
+                />
+              </Show>
               <button
                 type="button"
                 onClick={() => setDetail(detail() === 'full' ? 'result' : 'full')}

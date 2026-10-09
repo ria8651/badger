@@ -56,6 +56,9 @@ export class LiveSession {
   private bash: BashStreams
   private onClose: () => void
   private onCwd: () => void
+  /** Tool calls that have started, by tool_use_id, so a tool's handler can find out which call it is. */
+  private toolUses = new Map<string, string>()
+  private afterTurnCallbacks: (() => void)[] = []
 
   constructor(opts: {
     id: string
@@ -109,6 +112,14 @@ export class LiveSession {
           ],
           PreToolUse: [
             {
+              hooks: [
+                async (input) => {
+                  if (input.hook_event_name === 'PreToolUse') this.toolUses.set(input.tool_use_id, input.tool_name)
+                  return { continue: true }
+                },
+              ],
+            },
+            {
               matcher: 'Bash',
               hooks: [
                 async (input) => {
@@ -123,6 +134,14 @@ export class LiveSession {
           ],
           // Claude can move itself into a worktree mid-chat; follow it so terminals do too.
           PostToolUse: [
+            {
+              hooks: [
+                async (input) => {
+                  if (input.hook_event_name === 'PostToolUse') this.toolUses.delete(input.tool_use_id)
+                  return { continue: true }
+                },
+              ],
+            },
             {
               matcher: 'EnterWorktree|ExitWorktree',
               hooks: [
@@ -145,7 +164,7 @@ export class LiveSession {
   }
 
   /** Transcript from disk merged with anything newer that only exists in memory. */
-  async snapshot(): Promise<Omit<Extract<ServerEvent, { type: 'snapshot' }>, 'draft'>> {
+  async snapshot(): Promise<Omit<Extract<ServerEvent, { type: 'snapshot' }>, 'draft' | 'children'>> {
     // Disk holds history from earlier processes; `live` holds this process's turns in order.
     const disk = await diskTranscript(this.id)
     const seen = new Set(this.live.map((m) => m.uuid))
@@ -205,6 +224,22 @@ export class LiveSession {
         ...(decision === 'allow_always' && p.suggestions ? { updatedPermissions: p.suggestions } : {}),
       })
     }
+  }
+
+  /**
+   * The tool_use_id of the call to this tool that's running now. Called from
+   * the tool's own handler; MCP doesn't pass it, so it comes from PreToolUse.
+   */
+  takeToolUse(toolName: string): string | undefined {
+    const ids = [...this.toolUses].filter(([, name]) => name === toolName).map(([id]) => id)
+    // Calls that were denied before running never got here; drop them with this one.
+    for (const id of ids) this.toolUses.delete(id)
+    return ids.at(-1)
+  }
+
+  /** Run once the current turn ends, e.g. cleanup that can't happen while this chat is still working in its directory. */
+  afterTurn(fn: () => void): void {
+    this.afterTurnCallbacks.push(fn)
   }
 
   close(): void {
@@ -288,6 +323,10 @@ export class LiveSession {
     if (running === this.running) return
     this.running = running
     this.emitStatus()
+    if (!running) {
+      // Outside this call stack: a callback may close this session.
+      for (const fn of this.afterTurnCallbacks.splice(0)) setImmediate(fn)
+    }
   }
 
   private setCwd(cwd: string): void {

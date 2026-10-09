@@ -40,6 +40,8 @@ export function toolSummary(name: string, input: Input, cwd?: string): string {
       return `#${input.id}`
     case 'mcp__badger__list_cards':
       return str(input.status)
+    case 'mcp__badger__merge_worktree':
+      return ''
     case 'Bash':
       return str(input.description) || str(input.command)
     case 'Read':

@@ -124,6 +124,8 @@ export type ServerEvent =
       bashOutput: Record<string, string>
       /** Unsent composer text, in the same message as the transcript so they arrive together. */
       draft: string
+      /** Chats this one started from a tool call and waited on, by that call's tool_use_id. */
+      children: Record<string, string>
     }
   | { type: 'message'; sessionId: string; message: WireMessage }
   /** Another viewer changed the chat's unsent text. */
@@ -134,6 +136,8 @@ export type ServerEvent =
   | { type: 'status'; sessionId: string; running: boolean; mode: PermissionMode; cwd: string }
   | { type: 'permission_request'; sessionId: string; permission: PendingPermission }
   | { type: 'permission_resolved'; sessionId: string; requestId: string }
+  /** The chat started a child chat from a tool call; it's shown inside that call. */
+  | { type: 'child_started'; sessionId: string; toolUseId: string; childId: string }
   | { type: 'sessions_changed' }
   | { type: 'cards_changed' }
   /** Every terminal; sent on connect and whenever any of them changes. */

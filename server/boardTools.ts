@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { createSdkMcpServer, getSessionInfo, tool, type McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk'
+import { createSdkMcpServer, getSessionInfo, tool, type McpSdkServerConfigWithInstance, type SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import { CARD_STATUSES, type Card } from '../shared/protocol.ts'
 import { NO_CARD_CONTEXT, renderCardContext } from '../shared/cardContext.ts'
@@ -40,8 +40,14 @@ const hashOf = (text: string) => createHash('sha1').update(text).digest('hex')
 /**
  * The project board as tools, for one chat. A new instance per Claude Code
  * process: it knows which chat it is so "this chat" means something.
+ * `more` are other Badger tools that go on the same server, e.g. merging a worktree.
  */
-export function boardServer(store: Store, sessionId: string, onChange: () => void): McpSdkServerConfigWithInstance {
+export function boardServer(
+  store: Store,
+  sessionId: string,
+  onChange: () => void,
+  more: SdkMcpToolDefinition<any>[] = [],
+): McpSdkServerConfigWithInstance {
   const actor: Actor = { source: 'claude', sessionId }
   const thisCard = () => store.cards().find((c) => c.sessionIds.includes(sessionId))
   // Claude already knows this state (it wrote or just read it), so don't inject it next turn.
@@ -158,6 +164,7 @@ export function boardServer(store: Store, sessionId: string, onChange: () => voi
         async ({ id }) => (store.deleteCard(id, actor) ? changed(text(`Deleted card #${id}.`)) : error(`No card #${id}.`)),
         { annotations: { destructiveHint: true } },
       ),
+      ...more,
     ],
   })
 }

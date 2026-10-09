@@ -6,7 +6,13 @@ import { Markdown } from './Markdown.tsx'
 import { ToolInput, relPath, toolLabel, toolSummary } from './ToolCard.tsx'
 import { Button, inputClass } from './ui.tsx'
 
-export function PermissionPrompt(props: { sessionId: string; permission: PendingPermission; cwd?: string }) {
+export function PermissionPrompt(props: {
+  sessionId: string
+  permission: PendingPermission
+  cwd?: string
+  /** Set when the prompt is from a chat this one started, e.g. "Merge worktree". */
+  from?: string
+}) {
   const [feedback, setFeedback] = createSignal('')
   const p = () => props.permission
 
@@ -28,7 +34,7 @@ export function PermissionPrompt(props: { sessionId: string; permission: Pending
   return (
     <Switch
       fallback={
-        <Shell title={`Allow ${toolLabel(p().toolName)}?`} subtitle={toolSummary(p().toolName, p().input, props.cwd)}>
+        <Shell from={props.from} title={`Allow ${toolLabel(p().toolName)}?`} subtitle={toolSummary(p().toolName, p().input, props.cwd)}>
           <ToolInput name={p().toolName} input={p().input} />
           <Show when={p().blockedPath}>
             {(path) => (
@@ -48,13 +54,14 @@ export function PermissionPrompt(props: { sessionId: string; permission: Pending
     >
       <Match when={p().toolName === 'AskUserQuestion'}>
         <QuestionPrompt
+          from={props.from}
           input={p().input}
           onAnswer={(answers) => respond('allow', { ...p().input, answers })}
           onSkip={() => respond('deny')}
         />
       </Match>
       <Match when={p().toolName === 'ExitPlanMode'}>
-        <Shell title="Ready to leave plan mode?">
+        <Shell from={props.from} title="Ready to leave plan mode?">
           <div class="max-h-[50vh] overflow-auto border border-line px-4 py-3 rounded-lg">
             <Markdown text={String(p().input.plan ?? '')} />
           </div>
@@ -79,6 +86,7 @@ interface Question {
 }
 
 function QuestionPrompt(props: {
+  from?: string
   input: Record<string, unknown>
   onAnswer: (answers: Record<string, string>) => void
   onSkip: () => void
@@ -97,7 +105,7 @@ function QuestionPrompt(props: {
   const complete = () => questions().every((q) => answer(q))
 
   return (
-    <Shell title="Claude has a question">
+    <Shell from={props.from} title="Claude has a question">
       <For each={questions()}>
         {(q) => (
           <div class="space-y-2">
@@ -147,11 +155,14 @@ function QuestionPrompt(props: {
 }
 
 /** Accent dot: this is waiting on you. */
-function Shell(props: { title: string; subtitle?: string; children: JSX.Element }) {
+function Shell(props: { title: string; subtitle?: string; from?: string; children: JSX.Element }) {
   return (
     <div class="space-y-3 border border-edge p-4 text-[13px] rounded-2xl">
       <div class="flex items-center gap-2.5">
         <span class="size-1.5 shrink-0 rounded-full bg-accent" />
+        <Show when={props.from}>
+          <span class="shrink-0 text-fg-3">{props.from} ·</span>
+        </Show>
         <span class="shrink-0 font-medium">{props.title}</span>
         <Show when={props.subtitle}>
           <span class="min-w-0 truncate font-mono text-xs text-fg-3">{props.subtitle}</span>

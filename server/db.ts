@@ -53,6 +53,15 @@ const MIGRATIONS = [
      after TEXT
    );
    CREATE INDEX audit_log_entity ON audit_log(entity, entity_id);`,
+  // Chats another chat started and waits on, like a subagent: hidden from the sidebar and shown inside the parent's tool call.
+  `CREATE TABLE child_sessions (
+     session_id TEXT PRIMARY KEY,
+     parent_session TEXT NOT NULL,
+     tool_use_id TEXT NOT NULL,
+     kind TEXT NOT NULL,
+     created_at INTEGER NOT NULL
+   );
+   CREATE INDEX child_sessions_parent ON child_sessions(parent_session);`,
 ]
 
 interface CardRow {
@@ -265,6 +274,27 @@ export class Store {
           'INSERT INTO session_drafts (session_id, text, updated_at) VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at',
         )
         .run(sessionId, text, Date.now())
+  }
+
+  addChild(child: { sessionId: string; parentId: string; toolUseId: string; kind: string }): void {
+    this.db
+      .prepare('INSERT INTO child_sessions (session_id, parent_session, tool_use_id, kind, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(child.sessionId, child.parentId, child.toolUseId, child.kind, Date.now())
+  }
+
+  /** Every child chat's id, to keep them out of the sidebar. */
+  childIds(): Set<string> {
+    const rows = this.db.prepare('SELECT session_id FROM child_sessions').all() as { session_id: string }[]
+    return new Set(rows.map((r) => r.session_id))
+  }
+
+  /** A chat's children by the tool call that started each one. */
+  children(parentId: string): Record<string, string> {
+    const rows = this.db.prepare('SELECT session_id, tool_use_id FROM child_sessions WHERE parent_session = ?').all(parentId) as {
+      session_id: string
+      tool_use_id: string
+    }[]
+    return Object.fromEntries(rows.map((r) => [r.tool_use_id, r.session_id]))
   }
 
   contextHash(sessionId: string): string | undefined {

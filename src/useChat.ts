@@ -1,4 +1,4 @@
-import { onCleanup } from 'solid-js'
+import { createContext, onCleanup, useContext } from 'solid-js'
 import { createStore, produce } from 'solid-js/store'
 import type { PendingPermission, PermissionMode, ServerEvent, WireMessage } from '../shared/protocol.ts'
 import { socket } from './api.ts'
@@ -21,6 +21,8 @@ export interface ChatState {
   permissions: PendingPermission[]
   /** Live output of running Bash commands, by tool_use_id. */
   bashOutput: Record<string, string>
+  /** Chats this one started from a tool call, by that call's tool_use_id. */
+  children: Record<string, string>
   error: string | null
 }
 
@@ -37,7 +39,11 @@ function apply(state: ChatState, event: ServerEvent): void {
       state.cwd = event.cwd
       state.permissions = event.permissions
       state.bashOutput = event.bashOutput
+      state.children = event.children
       state.partial = null
+      break
+    case 'child_started':
+      state.children[event.toolUseId] = event.childId
       break
     case 'status':
       state.running = event.running
@@ -108,6 +114,7 @@ export function createChat(sessionId: string) {
     mode: 'auto',
     permissions: [],
     bashOutput: {},
+    children: {},
     error: null,
   })
 
@@ -122,3 +129,11 @@ export function createChat(sessionId: string) {
 
   return { state, clearError: () => setState('error', null) }
 }
+
+/**
+ * Child chats' state, by session id, for everything inside the chat that
+ * started them. The chat subscribes to each child once, so its tool call and
+ * its permission prompts read the same state.
+ */
+export const ChildChats = createContext<(sessionId: string) => ChatState | undefined>(() => undefined)
+export const useChildChat = (sessionId: string) => useContext(ChildChats)(sessionId)

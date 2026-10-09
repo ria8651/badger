@@ -1,12 +1,12 @@
-import { For, Show, createMemo, createSignal, type JSX } from 'solid-js'
+import { For, Show, createMemo, createSignal, useContext, type JSX } from 'solid-js'
 import { unwrap } from 'solid-js/store'
 import { Columns3 } from 'lucide-solid'
 import { parseCardContext, type CardContext } from '../../shared/cardContext.ts'
 import type { CardStatus, WireMessage } from '../../shared/protocol.ts'
-import type { Partial } from '../useChat.ts'
+import { ChildChats, type Partial } from '../useChat.ts'
 import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
-import { Disclosure, Pre, ToolCard, toolLabel, toolSummary, type ToolResult } from './ToolCard.tsx'
+import { Disclosure, Pre, ToolCard, resultText, toolLabel, toolSummary, type ToolResult } from './ToolCard.tsx'
 import { LiveDot } from './ui.tsx'
 
 type Block = { type: string; text?: string; thinking?: string; id?: string; name?: string; input?: Record<string, unknown> }
@@ -179,6 +179,8 @@ export function Transcript(props: {
   /** Running and not stopped on a permission prompt. */
   working: boolean
   cwd?: string
+  /** Chats started from tool calls, by tool_use_id; those calls show the child's transcript. */
+  children?: Record<string, string>
 }) {
   // Track the array and its length, then walk the raw objects so the cache keys are stable.
   const view = createMemo(() => {
@@ -255,7 +257,9 @@ export function Transcript(props: {
         )
       case 'thinking':
         return <Thinking text={item.text} />
-      case 'tool':
+      case 'tool': {
+        const child = props.children?.[item.id]
+        if (child) return <ChildRun sessionId={child} name={item.name} result={view().results.get(item.id)} />
         return (
           <ToolCard
             name={item.name}
@@ -267,6 +271,7 @@ export function Transcript(props: {
             subagentSteps={view().subagentSteps.get(item.id)}
           />
         )
+      }
       case 'result':
         return (
           <div class={`mt-4 text-xs tabular-nums ${item.ok ? 'text-fg-3' : 'text-danger'}`}>
@@ -314,6 +319,68 @@ export function Transcript(props: {
     </div>
   )
 }
+
+/**
+ * A tool call that runs another chat and waits on it, e.g. a merge in the
+ * main checkout: that chat's transcript, nested. Its permission prompts show
+ * with the parent's, by the composer.
+ */
+function ChildRun(props: { sessionId: string; name: string; result?: ToolResult }) {
+  const child = useContext(ChildChats)
+  const state = () => child(props.sessionId)
+  const live = () => !!state()?.running
+  const steps = () => state()?.messages.filter((m) => m.type === 'assistant' && !m.parent_tool_use_id && hasToolUse(m)).length ?? 0
+  return (
+    <Disclosure
+      label={toolLabel(props.name)}
+      detail={state()?.permissions.length ? 'Waiting for you' : live() ? 'Working' : ''}
+      trailing={
+        <>
+          <Show when={steps()}>
+            <span class="shrink-0 text-xs text-fg-3 tabular-nums">{plural(steps(), 'step')}</span>
+          </Show>
+          <Show when={live()}>
+            <LiveDot />
+          </Show>
+          <Show when={props.result?.isError}>
+            <span class="shrink-0 text-xs text-danger">Failed</span>
+          </Show>
+        </>
+      }
+      live={live()}
+    >
+      <div class="border-l border-line pl-4">
+        <Show when={state()?.loaded && state()} fallback={<p class="py-1 text-xs text-fg-3">Loading…</p>}>
+          {(s) => (
+            <Transcript
+              messages={s().messages}
+              partial={s().partial}
+              bashOutput={s().bashOutput}
+              running={s().running}
+              working={s().running && s().permissions.length === 0}
+              cwd={s().cwd}
+            />
+          )}
+        </Show>
+      </div>
+      <Show when={props.result?.isError && props.result}>{(r) => <Pre text={resultText(r().content)} class="text-danger" />}</Show>
+      <a
+        href={`/s/${props.sessionId}`}
+        onClick={(e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
+          e.preventDefault()
+          history.pushState(null, '', `/s/${props.sessionId}`)
+          dispatchEvent(new PopStateEvent('popstate'))
+        }}
+        class="inline-block text-xs text-fg-3 transition-colors hover:text-fg-2"
+      >
+        Open as a chat
+      </a>
+    </Disclosure>
+  )
+}
+
+const hasToolUse = (m: WireMessage) => ((m.message as { content?: Block[] })?.content ?? []).some((b) => b.type === 'tool_use')
 
 function WorkingLine(props: { detail?: string }) {
   return (
