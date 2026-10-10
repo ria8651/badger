@@ -375,7 +375,8 @@ export function Chat(props: {
                 placeholder={state.running ? 'Queue a message' : 'Message Claude'}
                 class="block max-h-[calc(10lh+0.875rem)] min-h-[calc(2lh+0.875rem)] w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed outline-none pointer-coarse:text-base [field-sizing:content] placeholder:text-fg-3"
               />
-              <div class="flex items-center gap-2 px-2 pb-2">
+              {/* Wraps on narrow screens, the right-hand group as one, so Send is never pushed out of view. */}
+              <div class="flex flex-wrap items-center gap-x-0.5 gap-y-1 px-2 pb-2 pointer-coarse:px-1.5 md:gap-x-2">
                 <Select value={mode()} options={MODES} onChange={changeMode} title="Permission mode" />
                 <Show when={models()?.length}>
                   <Select value={modelValue(model(), models()!)} options={modelOptions()} onChange={changeModel} title="Model" />
@@ -384,7 +385,7 @@ export function Chat(props: {
                   type="button"
                   onClick={() => picker.click()}
                   title="Attach images"
-                  class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9"
+                  class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 pointer-coarse:px-1.5"
                 >
                   <ImagePlus class="size-3.5" />
                 </button>
@@ -407,7 +408,7 @@ export function Chat(props: {
                     onPick={(i) => send(actions()[i].prompt)}
                     title="Chat actions"
                     triggerClass={(open) =>
-                      `flex h-7 items-center rounded-md px-2 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 ${open ? 'bg-surface text-fg-2' : 'text-fg-3'}`
+                      `flex h-7 items-center rounded-md px-2 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 pointer-coarse:px-1.5 ${open ? 'bg-surface text-fg-2' : 'text-fg-3'}`
                     }
                     trigger={() => <Zap class="size-3.5" />}
                   />
@@ -416,38 +417,39 @@ export function Chat(props: {
                   type="button"
                   onClick={() => setDetail(detail() === 'full' ? 'result' : 'full')}
                   title={detail() === 'full' ? 'Show results only' : 'Show all work'}
-                  class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9"
+                  class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 pointer-coarse:px-1.5"
                 >
                   {/* Shows what a click does, like play/pause: fold the work away or expand it. */}
                   <Show when={detail() === 'full'} fallback={<ListChevronsUpDown class="size-3.5" />}>
                     <ListChevronsDownUp class="size-3.5" />
                   </Show>
                 </button>
-                <div class="flex-1" />
-                <Show when={state.context}>{(u) => <ContextMeter usage={u()} />}</Show>
-                <Show when={waiting()}>
-                  <button
-                    type="button"
-                    onClick={toBackground}
-                    title="Stop waiting and let them carry on (Ctrl+B)"
-                    class="flex h-7 items-center rounded-md px-2 text-xs text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9"
+                <div class="ml-auto flex items-center gap-x-0.5 md:gap-x-2">
+                  <Show when={state.context}>{(u) => <ContextMeter usage={u()} />}</Show>
+                  <Show when={waiting()}>
+                    <button
+                      type="button"
+                      onClick={toBackground}
+                      title="Stop waiting and let them carry on (Ctrl+B)"
+                      class="flex h-7 items-center rounded-md px-2 text-xs text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 pointer-coarse:px-1.5"
+                    >
+                      Run in background
+                    </button>
+                  </Show>
+                  {/* One slot: stop while running with nothing typed, otherwise send. */}
+                  <Show
+                    when={state.running && !hasInput()}
+                    fallback={
+                      <IconButton onClick={submit} disabled={!hasInput()} title="Send (Enter)">
+                        <ArrowUp class="size-4" />
+                      </IconButton>
+                    }
                   >
-                    Run in background
-                  </button>
-                </Show>
-                {/* One slot: stop while running with nothing typed, otherwise send. */}
-                <Show
-                  when={state.running && !hasInput()}
-                  fallback={
-                    <IconButton onClick={submit} disabled={!hasInput()} title="Send (Enter)">
-                      <ArrowUp class="size-4" />
+                    <IconButton onClick={interrupt} title="Stop (Esc)">
+                      <Square class="size-3 fill-current" />
                     </IconButton>
-                  }
-                >
-                  <IconButton onClick={interrupt} title="Stop (Esc)">
-                    <Square class="size-3 fill-current" />
-                  </IconButton>
-                </Show>
+                  </Show>
+                </div>
               </div>
             </div>
           </div>
