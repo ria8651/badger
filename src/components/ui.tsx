@@ -224,7 +224,7 @@ export function Select<T extends string>(props: {
       title={props.title}
       placement={props.placement}
       triggerClass={(open) =>
-        `flex h-7 items-center gap-1 rounded-md px-2 text-xs transition-colors hover:bg-surface pointer-coarse:h-9 pointer-coarse:px-1.5 ${
+        `flex h-7 items-center gap-1 rounded-md px-2 text-xs transition-colors hover:bg-surface pointer-coarse:h-9 ${
           current()?.tone === 'danger' ? 'text-danger' : open ? 'text-fg-2' : 'text-fg-3 hover:text-fg-2'
         } ${open ? 'bg-surface' : ''}`
       }

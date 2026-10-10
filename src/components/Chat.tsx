@@ -1,17 +1,17 @@
-import { For, Show, createEffect, createMemo, createResource, createSignal, mapArray, on, onCleanup, onMount } from 'solid-js'
-import { ArrowUp, Check, FolderX, GitBranch, ImagePlus, ListChevronsDownUp, ListChevronsUpDown, Square, Zap } from 'lucide-solid'
+import { For, Show, createEffect, createMemo, createResource, createSignal, mapArray, on, onCleanup, onMount, type JSX } from 'solid-js'
+import { ArrowUp, Check, FolderX, GitBranch, ImagePlus, ListChevronsDownUp, ListChevronsUpDown, SlidersHorizontal, Square, SquareTerminal, Zap } from 'lucide-solid'
 import { isLongPaste } from '../../shared/pastes.ts'
 import type { Card, DraftAttachments, PermissionMode } from '../../shared/protocol.ts'
-import { chatActions } from '../actions.ts'
+import { chatActions, type ChatAction } from '../actions.ts'
 import { api, socket } from '../api.ts'
 import { readImage } from '../images.ts'
 import { lastModel, modelValue, models, setLastModel } from '../models.ts'
 import { cardWorktreeName, folderItem, isScratch, worktreeOf } from '../folders.ts'
-import { workspaceOf } from '../terminals.ts'
+import { dockState, terminals, workspaceOf } from '../terminals.ts'
 import { ChildChats, createChat } from '../useChat.ts'
 import { Attachments } from './Attachments.tsx'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
-import { TerminalButton, TerminalDock } from './Terminals.tsx'
+import { TerminalButton, TerminalDock, toggleDock } from './Terminals.tsx'
 import { TaskTray, trayItems, waitingOnTask } from './TaskTray.tsx'
 import { reveal, revealed, toolLabel } from './ToolCard.tsx'
 import { Transcript, createIndex, detail, runInBackground, setDetail } from './Transcript.tsx'
@@ -237,6 +237,22 @@ export function Chat(props: {
   const pendingCard = () => (props.card && state.loaded && state.messages.length === 0 ? { card: props.card } : undefined)
   const interrupt = () => socket.send({ type: 'interrupt', sessionId: props.sessionId })
 
+  /** The panel a narrow composer keeps its mode, model and the rest in. */
+  const [more, setMore] = createSignal(false)
+  let moreButton!: HTMLButtonElement
+  let morePanel: HTMLDivElement | undefined
+  const onOutside = (e: PointerEvent) => {
+    const target = e.target as Node
+    if (more() && !morePanel?.contains(target) && !moreButton.contains(target)) setMore(false)
+  }
+  const onEscape = (e: KeyboardEvent) => e.key === 'Escape' && more() && setMore(false)
+  document.addEventListener('pointerdown', onOutside)
+  document.addEventListener('keydown', onEscape)
+  onCleanup(() => {
+    document.removeEventListener('pointerdown', onOutside)
+    document.removeEventListener('keydown', onEscape)
+  })
+
   return (
     <div class="flex h-full min-w-0 flex-1 flex-col">
       <div
@@ -321,7 +337,7 @@ export function Chat(props: {
             </Show>
             <div
               inert={state.gone}
-              class={`-mx-[calc(1rem+1px)] border transition-colors rounded-2xl focus-within:border-fg-3 ${dragging() ? 'border-fg-3' : 'border-edge'} ${state.gone ? 'opacity-50' : ''}`}
+              class={`@container relative -mx-[calc(1rem+1px)] border transition-colors rounded-2xl focus-within:border-fg-3 ${dragging() ? 'border-fg-3' : 'border-edge'} ${state.gone ? 'opacity-50' : ''}`}
               onDragOver={(e) => {
                 if (!e.dataTransfer?.types.includes('Files')) return
                 e.preventDefault()
@@ -336,6 +352,21 @@ export function Chat(props: {
                 input.focus()
               }}
             >
+              <Show when={more()}>
+                <ComposerPanel
+                  ref={(el) => (morePanel = el)}
+                  mode={mode()}
+                  onMode={changeMode}
+                  model={models()?.length ? modelValue(model(), models()!) : undefined}
+                  models={modelOptions()}
+                  onModel={changeModel}
+                  root={root()}
+                  cwd={cwd()}
+                  actions={actions()}
+                  onAction={(a) => send(a.prompt)}
+                  onClose={() => setMore(false)}
+                />
+              </Show>
               <Show when={pastes().length || images().length || pendingCard()}>
                 <Attachments
                   pastes={pastes()}
@@ -375,17 +406,20 @@ export function Chat(props: {
                 placeholder={state.running ? 'Queue a message' : 'Message Claude'}
                 class="block max-h-[calc(10lh+0.875rem)] min-h-[calc(2lh+0.875rem)] w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed outline-none pointer-coarse:text-base [field-sizing:content] placeholder:text-fg-3"
               />
-              {/* Wraps on narrow screens, the right-hand group as one, so Send is never pushed out of view. */}
-              <div class="flex flex-wrap items-center gap-x-0.5 gap-y-1 px-2 pb-2 pointer-coarse:px-1.5 md:gap-x-2">
-                <Select value={mode()} options={MODES} onChange={changeMode} title="Permission mode" />
-                <Show when={models()?.length}>
-                  <Select value={modelValue(model(), models()!)} options={modelOptions()} onChange={changeModel} title="Model" />
-                </Show>
+              {/* A narrow composer keeps attaching and sending in the bar and puts the rest in a panel; wide ones show it all.
+                  Measured on the composer, not the screen, so the sidebar squeezing it counts too. */}
+              <div class="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 pb-2">
+                <div class="hidden items-center gap-2 @md:flex">
+                  <Select value={mode()} options={MODES} onChange={changeMode} title="Permission mode" />
+                  <Show when={models()?.length}>
+                    <Select value={modelValue(model(), models()!)} options={modelOptions()} onChange={changeModel} title="Model" />
+                  </Show>
+                </div>
                 <button
                   type="button"
                   onClick={() => picker.click()}
                   title="Attach images"
-                  class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 pointer-coarse:px-1.5"
+                  class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9"
                 >
                   <ImagePlus class="size-3.5" />
                 </button>
@@ -401,37 +435,51 @@ export function Chat(props: {
                     input.focus()
                   }}
                 />
-                <Show when={root()}>{(r) => <TerminalButton root={r()} cwd={cwd()!} />}</Show>
-                <Show when={actions().length}>
-                  <Menu
-                    items={actions().map((a) => ({ label: a.label, description: a.description }))}
-                    onPick={(i) => send(actions()[i].prompt)}
-                    title="Chat actions"
-                    triggerClass={(open) =>
-                      `flex h-7 items-center rounded-md px-2 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 pointer-coarse:px-1.5 ${open ? 'bg-surface text-fg-2' : 'text-fg-3'}`
-                    }
-                    trigger={() => <Zap class="size-3.5" />}
-                  />
-                </Show>
-                <button
-                  type="button"
-                  onClick={() => setDetail(detail() === 'full' ? 'result' : 'full')}
-                  title={detail() === 'full' ? 'Show results only' : 'Show all work'}
-                  class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 pointer-coarse:px-1.5"
-                >
-                  {/* Shows what a click does, like play/pause: fold the work away or expand it. */}
-                  <Show when={detail() === 'full'} fallback={<ListChevronsUpDown class="size-3.5" />}>
-                    <ListChevronsDownUp class="size-3.5" />
+                <div class="hidden items-center gap-2 @md:flex">
+                  <Show when={root()}>{(r) => <TerminalButton root={r()} cwd={cwd()!} />}</Show>
+                  <Show when={actions().length}>
+                    <Menu
+                      items={actions().map((a) => ({ label: a.label, description: a.description }))}
+                      onPick={(i) => send(actions()[i].prompt)}
+                      title="Chat actions"
+                      triggerClass={(open) =>
+                        `flex h-7 items-center rounded-md px-2 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 ${open ? 'bg-surface text-fg-2' : 'text-fg-3'}`
+                      }
+                      trigger={() => <Zap class="size-3.5" />}
+                    />
                   </Show>
+                  <button
+                    type="button"
+                    onClick={() => setDetail(detail() === 'full' ? 'result' : 'full')}
+                    title={detail() === 'full' ? 'Show results only' : 'Show all work'}
+                    class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9"
+                  >
+                    {/* Shows what a click does, like play/pause: fold the work away or expand it. */}
+                    <Show when={detail() === 'full'} fallback={<ListChevronsUpDown class="size-3.5" />}>
+                      <ListChevronsDownUp class="size-3.5" />
+                    </Show>
+                  </button>
+                </div>
+                <button
+                  ref={moreButton}
+                  type="button"
+                  onClick={() => setMore((o) => !o)}
+                  title="Mode, model and more"
+                  aria-expanded={more()}
+                  class={`flex h-7 items-center rounded-md px-2 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 @md:hidden ${
+                    mode() === 'bypassPermissions' ? 'text-danger' : more() ? 'bg-surface text-fg-2' : 'text-fg-3'
+                  }`}
+                >
+                  <SlidersHorizontal class="size-3.5" />
                 </button>
-                <div class="ml-auto flex items-center gap-x-0.5 md:gap-x-2">
+                <div class="ml-auto flex items-center gap-2">
                   <Show when={state.context}>{(u) => <ContextMeter usage={u()} />}</Show>
                   <Show when={waiting()}>
                     <button
                       type="button"
                       onClick={toBackground}
                       title="Stop waiting and let them carry on (Ctrl+B)"
-                      class="flex h-7 items-center rounded-md px-2 text-xs text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 pointer-coarse:px-1.5"
+                      class="flex h-7 items-center rounded-md px-2 text-xs text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9"
                     >
                       Run in background
                     </button>
@@ -459,6 +507,113 @@ export function Chat(props: {
         {(r) => <TerminalDock root={r} cwd={cwd()!} onOpenPage={props.onOpenTerminal} onHide={() => input.focus()} />}
       </Show>
     </div>
+  )
+}
+
+/**
+ * What a narrow composer's toolbar has no room for, in a panel above it as wide as the composer:
+ * mode, model, terminals, how much work to show, and the chat's actions.
+ */
+function ComposerPanel(props: {
+  ref: (el: HTMLDivElement) => void
+  mode: PermissionMode
+  onMode: (mode: PermissionMode) => void
+  /** Unset until Claude Code has listed its models. */
+  model?: string
+  models: Option<string>[]
+  onModel: (model: string) => void
+  root?: string
+  cwd?: string
+  actions: ChatAction[]
+  onAction: (action: ChatAction) => void
+  onClose: () => void
+}) {
+  const pick = (f: () => void) => () => {
+    f()
+    props.onClose()
+  }
+  const running = () => terminals().filter((t) => t.root === props.root && t.running).length
+  return (
+    <div
+      ref={props.ref}
+      class="absolute inset-x-0 bottom-full z-10 mb-2 max-h-[70vh] origin-bottom animate-[pop-in_120ms_ease-out] overflow-y-auto rounded-2xl border border-edge bg-bg p-1 shadow-[0_12px_32px_-12px_rgb(0_0_0/0.35)]"
+    >
+      <PanelChoices label="Permission mode" options={MODES} value={props.mode} onPick={props.onMode} />
+      <Show when={props.model}>
+        {(model) => <PanelChoices label="Model" options={props.models} value={model()} onPick={props.onModel} />}
+      </Show>
+      <div class="mx-2.5 my-1 border-t border-line" />
+      <Show when={props.root}>
+        {(root) => (
+          <PanelButton onClick={pick(() => toggleDock(root(), props.cwd!))}>
+            <SquareTerminal class="size-4" />
+            {dockState(root()).open ? 'Hide terminals' : 'Show terminals'}
+            <Show when={running()}>
+              <span class="ml-auto text-xs text-fg-3 tabular-nums">{running()} running</span>
+            </Show>
+          </PanelButton>
+        )}
+      </Show>
+      <PanelButton onClick={pick(() => setDetail(detail() === 'full' ? 'result' : 'full'))}>
+        <Show when={detail() === 'full'} fallback={<ListChevronsUpDown class="size-4" />}>
+          <ListChevronsDownUp class="size-4" />
+        </Show>
+        {detail() === 'full' ? 'Show results only' : 'Show all work'}
+      </PanelButton>
+      <For each={props.actions}>
+        {(a) => (
+          <PanelButton onClick={pick(() => props.onAction(a))}>
+            <Zap class="size-4" />
+            {a.label}
+          </PanelButton>
+        )}
+      </For>
+    </div>
+  )
+}
+
+/** One setting's options as chips, with what the current one means underneath. Picking one leaves the panel open. */
+function PanelChoices<T extends string>(props: { label: string; options: Option<T>[]; value: T; onPick: (value: T) => void }) {
+  const current = () => props.options.find((o) => o.value === props.value)
+  return (
+    <div class="px-2.5 pt-2.5 pb-2">
+      <div class="pb-2 text-[11px] text-fg-3">{props.label}</div>
+      <div class="flex flex-wrap gap-1.5">
+        <For each={props.options}>
+          {(o) => (
+            <button
+              type="button"
+              onClick={() => props.onPick(o.value)}
+              aria-pressed={o.value === props.value}
+              class={`h-9 rounded-full border px-3 text-[13px] transition-colors ${
+                o.value === props.value
+                  ? o.tone === 'danger'
+                    ? 'border-danger bg-danger/10 text-danger'
+                    : 'border-fg-3 bg-surface text-fg'
+                  : `border-edge hover:bg-surface ${o.tone === 'danger' ? 'text-danger' : 'text-fg-2 hover:text-fg'}`
+              }`}
+            >
+              {o.label}
+            </button>
+          )}
+        </For>
+      </div>
+      <Show when={current()?.description}>
+        <p class="mt-2 text-xs leading-snug text-fg-3">{current()!.description}</p>
+      </Show>
+    </div>
+  )
+}
+
+function PanelButton(props: { onClick: () => void; children: JSX.Element }) {
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      class="flex h-10 w-full items-center gap-3 rounded-lg px-2.5 text-left text-[13px] text-fg-2 transition-colors hover:bg-surface hover:text-fg"
+    >
+      {props.children}
+    </button>
   )
 }
 
