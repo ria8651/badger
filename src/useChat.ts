@@ -1,6 +1,6 @@
 import { createContext, onCleanup, useContext } from 'solid-js'
 import { createStore, produce } from 'solid-js/store'
-import type { BackgroundTask, PendingPermission, PermissionMode, ServerEvent, WireMessage } from '../shared/protocol.ts'
+import type { BackgroundTask, ContextUsage, PendingPermission, PermissionMode, ServerEvent, WireMessage } from '../shared/protocol.ts'
 import { socket } from './api.ts'
 
 /** The block currently streaming in, before its full assistant message lands. */
@@ -29,6 +29,8 @@ export interface ChatState {
   children: Record<string, string>
   /** Subagents, shells and the like running in the background now. */
   background: BackgroundTask[]
+  /** How full the context window is; absent until Claude Code has said. */
+  context?: ContextUsage
   error: string | null
 }
 
@@ -53,6 +55,9 @@ function apply(state: ChatState, event: ServerEvent): void {
       break
     case 'background':
       state.background = event.tasks
+      break
+    case 'context':
+      state.context = event.usage
       break
     case 'child_started':
       state.children[event.toolUseId] = event.childId

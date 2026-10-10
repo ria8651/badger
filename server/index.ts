@@ -13,11 +13,15 @@ import { SessionManager, diskTranscript, listModels, transcriptModel } from './s
 import { TERMINAL_AUTO_ALLOWED, TERMINAL_SERVER, terminalServer } from './terminalTools.ts'
 import { Terminals, shellEnv } from './terminals.ts'
 import { suggestTitle } from './titles.ts'
+import { Usage } from './usage.ts'
 import { excludeWorktrees, inaccessible, removeWorktree, workspaceRoot, worktreeStatus } from './workspace.ts'
 
 // Terminals get the environment Badger was started with, before .env adds PORT and friends.
 const startEnv = shellEnv(process.env)
 loadDotEnv()
+
+/** How often plan usage is read again while a tab is open, besides after each turn. */
+const ACCOUNT_POLL_MS = 5 * 60 * 1000
 
 const PORT = Number(process.env.PORT ?? 3001)
 const HOST = process.env.HOST ?? '127.0.0.1'
@@ -83,8 +87,29 @@ const manager: SessionManager = new SessionManager(
     allowedTools: [...BOARD_AUTO_ALLOWED, MERGE_TOOL_NAME, ...TERMINAL_AUTO_ALLOWED],
     turnContext: () => cardContext(store, sessionId),
   }),
+  (sessionId) => {
+    sendContext(sessionId)
+    void usage.refreshAccount()
+  },
 )
 const children = new Children(manager, store, broadcast)
+const usage = new Usage(manager, (u) => broadcast({ type: 'account_usage', usage: u }))
+
+/** Tells one viewer, or all of them, how full the chat's context is. */
+function sendContext(sessionId: string, ws?: WebSocket): void {
+  usage
+    .context(sessionId)
+    .then((u) => {
+      if (!u) return
+      const event: ServerEvent = { type: 'context', sessionId, usage: u }
+      if (ws) send(ws, event)
+      else broadcast(event)
+    })
+    .catch((err) => console.error(`Reading context usage for ${sessionId} failed:`, err instanceof Error ? err.message : err))
+}
+
+// Limits move with use on other machines too, so read them now and then while anyone's looking.
+setInterval(() => sockets.size && void usage.refreshAccount(), ACCOUNT_POLL_MS).unref()
 
 // ── Terminals: which sockets are watching which terminal ──
 
@@ -186,6 +211,8 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       if (!set) viewers.set(event.sessionId, (set = new Set()))
       set.add(ws)
       send(ws, await snapshotFor(event.sessionId))
+      // After the snapshot: it can mean starting a process, which shouldn't hold up the transcript.
+      sendContext(event.sessionId, ws)
       return
     }
     case 'unsubscribe':
@@ -490,6 +517,9 @@ wss.on('connection', (ws: WebSocket) => {
   sockets.add(ws)
   // Before the host has said hello the list is unknown, not empty; it's broadcast once it arrives.
   if (terminals.known) send(ws, { type: 'terminals', terminals: terminals.terminals })
+  const account = usage.latestAccount()
+  if (account) send(ws, { type: 'account_usage', usage: account })
+  void usage.refreshAccount()
   // Handle each socket's events in order so a snapshot can't overtake a later status.
   let chain = Promise.resolve()
   ws.on('message', (raw) => {
