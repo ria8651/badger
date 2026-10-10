@@ -13,7 +13,7 @@ import { attention } from '../attention.ts'
 const STATUS_OPTIONS = CARD_STATUSES.map((value) => ({ value, label: STATUS_LABELS[value] }))
 
 const menuTrigger = (open: boolean) =>
-  `flex h-7 items-center gap-1.5 rounded-md px-2 text-xs transition-colors hover:bg-surface hover:text-fg ${
+  `flex h-7 items-center gap-1.5 rounded-md px-2 text-xs pointer-coarse:h-9 transition-colors hover:bg-surface hover:text-fg ${
     open ? 'bg-surface text-fg' : 'text-fg-3'
   }`
 
@@ -94,7 +94,7 @@ export function CardView(props: {
       <button
         onClick={remove}
         title={isProject() ? 'Delete project' : 'Delete card'}
-        class="grid size-7 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-danger"
+        class="grid size-7 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-danger pointer-coarse:size-9"
       >
         <Trash2 class="size-3.5" />
       </button>
@@ -103,11 +103,17 @@ export function CardView(props: {
 
   const details = (): JSX.Element => (
     <>
-      <input
+      {/* A textarea so long titles wrap rather than run off narrow screens; Enter still ends the edit. */}
+      <textarea
         value={props.card.title}
-        onBlur={(e) => saveTitle(e.currentTarget.value)}
-        onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-        class="w-full bg-transparent text-xl font-medium outline-none"
+        rows={1}
+        onBlur={(e) => saveTitle(e.currentTarget.value.replace(/\s*\n\s*/g, ' '))}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter' || e.isComposing) return
+          e.preventDefault()
+          e.currentTarget.blur()
+        }}
+        class="block w-full resize-none bg-transparent text-xl leading-snug font-medium outline-none [field-sizing:content]"
       />
       <div class="mt-2 -ml-2">
         <Select value={props.card.status} options={STATUS_OPTIONS} onChange={(status) => api.updateCard(props.card.id, { status })} placement="bottom" title="Status" />
@@ -161,12 +167,12 @@ export function CardView(props: {
                 <button onClick={() => props.onOpenChat(s.id)} class="flex min-w-0 flex-1 items-center gap-2 py-2.5 text-left">
                   <span class="min-w-0 flex-1 truncate text-[13px] text-fg-2 group-hover:text-fg">{s.title}</span>
                   <ChatDot running={s.running} attention={attention()[s.id]} />
-                  <span class="shrink-0 text-[11px] text-fg-3">{s.cwd && folderLabel(s.cwd)}</span>
+                  <span class="max-w-[40%] shrink-0 truncate text-[11px] text-fg-3">{s.cwd && folderLabel(s.cwd)}</span>
                 </button>
                 <button
                   onClick={() => setRenaming(s.id)}
                   title="Rename chat"
-                  class="grid size-6 place-items-center rounded-md text-fg-3 opacity-0 transition hover:bg-surface hover:text-fg group-hover:opacity-100 focus-visible:opacity-100"
+                  class="grid size-6 place-items-center rounded-md text-fg-3 opacity-0 transition hover:bg-surface hover:text-fg group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:size-9 pointer-coarse:opacity-100"
                 >
                   <Pencil class="size-3.5" />
                 </button>
@@ -174,7 +180,7 @@ export function CardView(props: {
               <button
                 onClick={() => api.unlinkSession(props.card.id, s.id)}
                 title="Unlink chat"
-                class="grid size-6 place-items-center rounded-md text-fg-3 opacity-0 transition hover:bg-surface hover:text-fg group-hover:opacity-100 focus-visible:opacity-100"
+                class="grid size-6 place-items-center rounded-md text-fg-3 opacity-0 transition hover:bg-surface hover:text-fg group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:size-9 pointer-coarse:opacity-100"
               >
                 <X class="size-3.5" />
               </button>
@@ -294,7 +300,7 @@ function WorktreeRow(props: { path: string; sessions: SessionSummary[] }) {
         <button
           onClick={remove}
           title="Remove worktree (its branch goes too, if merged)"
-          class="grid size-6 place-items-center rounded-md text-fg-3 opacity-0 transition hover:bg-surface hover:text-danger group-hover:opacity-100 focus-visible:opacity-100"
+          class="grid size-6 place-items-center rounded-md text-fg-3 opacity-0 transition hover:bg-surface hover:text-danger group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:size-9 pointer-coarse:opacity-100"
         >
           <Trash2 class="size-3.5" />
         </button>

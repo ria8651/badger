@@ -1,6 +1,6 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
-import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, Pencil, Plus, Radar as RadarIcon } from 'lucide-solid'
+import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, PanelLeft, Pencil, Plus, Radar as RadarIcon } from 'lucide-solid'
 import { descendants, projectOf } from '../shared/cardTree.ts'
 import type { Card, SessionSummary } from '../shared/protocol.ts'
 import { api, socket } from './api.ts'
@@ -108,8 +108,13 @@ export function App() {
         timer = setTimeout(refresh, 300)
       }
     })
-    const onPop = () => setRoute(routeFromPath())
+    const onPop = () => {
+      setRoute(routeFromPath())
+      setDrawer(false)
+    }
     addEventListener('popstate', onPop)
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setDrawer(false)
+    addEventListener('keydown', onKey)
     const offAttention = onAttention((id, state) => {
       const title = sessions().find((s) => s.id === id)?.title ?? 'New chat'
       notify(id, title, state === 'waiting' ? 'Needs your input' : 'Finished', () => go({ kind: 'chat', id }))
@@ -120,12 +125,16 @@ export function App() {
       offAttention()
       offConn()
       removeEventListener('popstate', onPop)
+      removeEventListener('keydown', onKey)
     })
   })
 
+  /** On narrow screens the sidebar is a drawer over the page; going anywhere closes it. */
+  const [drawer, setDrawer] = createSignal(false)
   const go = (r: Route) => {
     history.pushState(null, '', pathFor(r))
     setRoute(r)
+    setDrawer(false)
   }
   const current = () => {
     const r = route()
@@ -217,7 +226,7 @@ export function App() {
         <div class="group relative mb-px">
           <button
             onClick={() => go({ kind: 'chat', id: s().id })}
-            class={`block w-full rounded-lg px-2 py-1.5 text-left transition-colors ${
+            class={`block w-full rounded-lg px-2 py-1.5 text-left transition-colors pointer-coarse:py-2.5 ${
               s().id === current() ? 'bg-surface' : 'hover:bg-surface/60'
             }`}
           >
@@ -238,21 +247,22 @@ export function App() {
             <div class="mt-0.5 flex gap-1.5 text-[11px] text-fg-3 tabular-nums">
               <span class="truncate">{s().cwd && folderLabel(s().cwd!)}</span>
               <Show when={cardOf().get(s().id)}>{(c) => <span class="shrink-0">#{c().id}</span>}</Show>
-              <span class="ml-auto shrink-0 group-hover:invisible">{when(s().lastModified)}</span>
+              <span class={`ml-auto shrink-0 group-hover:invisible ${s().id === current() ? 'pointer-coarse:invisible' : ''}`}>{when(s().lastModified)}</span>
             </div>
           </button>
-          <div class="absolute right-1.5 bottom-1 hidden gap-0.5 group-hover:flex">
+          {/* Touch has no hover, so there the open chat's row shows them instead. */}
+          <div class={`absolute right-1.5 bottom-1 hidden gap-0.5 group-hover:flex ${s().id === current() ? 'pointer-coarse:flex' : ''}`}>
             <button
               onClick={() => setRenaming(s().id)}
               title="Rename"
-              class="grid size-5 place-items-center rounded text-fg-3 transition-colors hover:bg-surface hover:text-fg"
+              class="grid size-5 place-items-center rounded text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-6"
             >
               <Pencil class="size-3.5" />
             </button>
             <button
               onClick={() => toggleArchived(s())}
               title={s().archived ? 'Unarchive' : 'Archive'}
-              class="grid size-5 place-items-center rounded text-fg-3 transition-colors hover:bg-surface hover:text-fg"
+              class="grid size-5 place-items-center rounded text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-6"
             >
               <Show when={s().archived} fallback={<Archive class="size-3.5" />}>
                 <ArchiveRestore class="size-3.5" />
@@ -323,9 +333,28 @@ export function App() {
     setHomeId(uuid())
   }
 
+  /** For the top bar on narrow screens, which has no sidebar beside it to say where you are. */
+  const pageTitle = () => {
+    const r = route()
+    if (r.kind === 'chat') return sessions().find((s) => s.id === r.id)?.title ?? 'New chat'
+    if (r.kind === 'card') return currentCard()?.title ?? ''
+    if (r.kind === 'terminal') {
+      const t = terminals().find((t) => t.id === r.id)
+      return t ? terminalLabel(t) : 'Terminal'
+    }
+    return r.kind === 'board' ? 'Projects' : r.kind === 'radar' ? 'Radar' : 'New chat'
+  }
+
   return (
     <div class="flex h-full">
-      <aside class="hidden w-64 shrink-0 flex-col border-r border-line md:flex">
+      <Show when={drawer()}>
+        <div onClick={() => setDrawer(false)} class="fixed inset-0 z-20 animate-[fade-in_150ms_ease-out] bg-[rgb(0_0_0/0.4)] md:hidden" />
+      </Show>
+      <aside
+        class={`fixed inset-y-0 left-0 z-30 flex w-72 max-w-[85vw] shrink-0 flex-col border-r border-line bg-bg transition-[translate,visibility] duration-200 ease-out md:static md:z-auto md:w-64 md:translate-x-0 md:visible md:transition-none ${
+          drawer() ? 'translate-x-0 shadow-[0_0_48px_rgb(0_0_0/0.3)] md:shadow-none' : 'invisible -translate-x-full'
+        }`}
+      >
         <div class="flex h-12 shrink-0 items-center gap-2 px-4">
           <span class="font-medium tracking-tight">Badger</span>
           <Show when={!connected()}>
@@ -341,7 +370,7 @@ export function App() {
                   ? 'Notifications are blocked in this browser, or need https'
                   : 'Turn on notifications'
             }
-            class="ml-auto grid size-7 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg disabled:opacity-40"
+            class="ml-auto grid size-7 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg disabled:opacity-40 pointer-coarse:size-10"
           >
             <Show when={notifications() === 'on'} fallback={<BellOff class="size-4" />}>
               <Bell class="size-4" />
@@ -363,7 +392,7 @@ export function App() {
             class="w-60"
             title="Which project this tab is working in"
             triggerClass={(open) =>
-              `mb-1 flex h-8 w-full items-center gap-2 rounded-lg border border-line px-2 text-[13px] transition-colors hover:border-edge ${open ? 'border-edge' : ''}`
+              `mb-1 flex h-8 w-full items-center gap-2 rounded-lg border pointer-coarse:h-10 border-line px-2 text-[13px] transition-colors hover:border-edge ${open ? 'border-edge' : ''}`
             }
             trigger={(open) => (
               <>
@@ -375,7 +404,7 @@ export function App() {
           <button
             onClick={() => go({ kind: 'radar' })}
             title="Everything on your radar, across projects"
-            class={`mb-px flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[13px] transition-colors hover:bg-surface hover:text-fg ${
+            class={`mb-px flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[13px] transition-colors hover:bg-surface hover:text-fg pointer-coarse:h-10 ${
               route().kind === 'radar' ? 'bg-surface text-fg' : 'text-fg-2'
             }`}
           >
@@ -386,7 +415,7 @@ export function App() {
           </button>
           <button
             onClick={() => go(focus() ? { kind: 'card', id: focus()!.id } : { kind: 'board' })}
-            class={`mb-px flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[13px] transition-colors hover:bg-surface hover:text-fg ${
+            class={`mb-px flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[13px] transition-colors hover:bg-surface hover:text-fg pointer-coarse:h-10 ${
               route().kind === 'board' || route().kind === 'card' ? 'bg-surface text-fg' : 'text-fg-2'
             }`}
           >
@@ -395,7 +424,7 @@ export function App() {
           <button
             onClick={newHomeChat}
             title={focus() ? `A chat on ${focus()!.title}` : undefined}
-            class={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[13px] transition-colors hover:bg-surface hover:text-fg ${
+            class={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[13px] transition-colors hover:bg-surface hover:text-fg pointer-coarse:h-10 ${
               route().kind === 'home' ? 'bg-surface text-fg' : 'text-fg-2'
             }`}
           >
@@ -410,7 +439,7 @@ export function App() {
                 <button
                   onClick={() => go({ kind: 'terminal', id: t.id })}
                   title={`${terminalLabel(t)}\n${t.cwd}`}
-                  class={`group mb-px flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left transition-colors ${
+                  class={`group mb-px flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left transition-colors pointer-coarse:h-9 ${
                     t.id === currentTerminal() ? 'bg-surface' : 'hover:bg-surface/60'
                   }`}
                 >
@@ -446,50 +475,74 @@ export function App() {
         <Show when={accountUsage()}>{(u) => <AccountLimits usage={u()} />}</Show>
       </aside>
 
-      <Switch>
-        <Match when={current()} keyed>
-          {(id) => {
-            // Same component before and after the first send, so starting a chat doesn't remount it.
-            const home = () => route().kind === 'home'
-            return (
-              <Chat
-                sessionId={id}
-                draftCwd={drafts()[id] ?? defaultCwd()}
-                projects={projects()}
-                worktree={worktreeDrafts()[id]}
-                onPickCwd={(cwd) => setDrafts((d) => ({ ...d, [id]: cwd }))}
-                card={cardOf().get(id)}
-                onStart={() => home() && startHomeChat(id, drafts()[id] ?? defaultCwd())}
-                onOpenTerminal={(tid) => go({ kind: 'terminal', id: tid })}
-              />
-            )
-          }}
-        </Match>
-        <Match when={currentTerminal()} keyed>
-          {(id) => <TerminalPage id={id} onClosed={newHomeChat} />}
-        </Match>
-        <Match when={route().kind === 'radar'}>
-          <Radar cards={cards()} sessions={sessions()} onOpenCard={(id) => go({ kind: 'card', id })} onOpenChat={(id) => go({ kind: 'chat', id })} />
-        </Match>
-        <Match when={route().kind === 'board'}>
-          <Board cards={cards()} sessions={sessions()} setCards={setCards} onOpen={(id) => go({ kind: 'card', id })} />
-        </Match>
-        <Match when={route().kind === 'card'}>
-          <Show when={currentCard()} fallback={<p class="flex flex-1 items-center justify-center text-[13px] text-fg-3">No such card</p>}>
-            {(card) => (
-              <CardView
-                card={card()}
-                cards={cards()}
-                setCards={setCards}
-                sessions={sessions()}
-                onOpenCard={(id) => go(id === null ? { kind: 'board' } : { kind: 'card', id })}
-                onOpenChat={(id) => go({ kind: 'chat', id })}
-                onNewChat={(from) => newChat(from, card().id)}
-              />
-            )}
-          </Show>
-        </Match>
-      </Switch>
+      <div class="flex min-w-0 flex-1 flex-col">
+        <header class="flex h-12 shrink-0 items-center gap-1 border-b border-line px-1.5 md:hidden">
+          <button
+            onClick={() => setDrawer(true)}
+            title="Chats and projects"
+            class="relative grid size-10 place-items-center rounded-lg text-fg-2 transition-colors hover:bg-surface hover:text-fg"
+          >
+            <PanelLeft class="size-5" />
+            <Show when={needsYou()}>
+              <span class="absolute top-2 right-2 size-2 rounded-full bg-accent ring-2 ring-bg" />
+            </Show>
+          </button>
+          <span class="min-w-0 flex-1 truncate text-[13px] font-medium">{pageTitle()}</span>
+          <button
+            onClick={newHomeChat}
+            title={focus() ? `New chat on ${focus()!.title}` : 'New chat'}
+            class="grid size-10 place-items-center rounded-lg text-fg-2 transition-colors hover:bg-surface hover:text-fg"
+          >
+            <Plus class="size-5" />
+          </button>
+        </header>
+        <div class="flex min-h-0 flex-1">
+          <Switch>
+            <Match when={current()} keyed>
+              {(id) => {
+                // Same component before and after the first send, so starting a chat doesn't remount it.
+                const home = () => route().kind === 'home'
+                return (
+                  <Chat
+                    sessionId={id}
+                    draftCwd={drafts()[id] ?? defaultCwd()}
+                    projects={projects()}
+                    worktree={worktreeDrafts()[id]}
+                    onPickCwd={(cwd) => setDrafts((d) => ({ ...d, [id]: cwd }))}
+                    card={cardOf().get(id)}
+                    onStart={() => home() && startHomeChat(id, drafts()[id] ?? defaultCwd())}
+                    onOpenTerminal={(tid) => go({ kind: 'terminal', id: tid })}
+                  />
+                )
+              }}
+            </Match>
+            <Match when={currentTerminal()} keyed>
+              {(id) => <TerminalPage id={id} onClosed={newHomeChat} />}
+            </Match>
+            <Match when={route().kind === 'radar'}>
+              <Radar cards={cards()} sessions={sessions()} onOpenCard={(id) => go({ kind: 'card', id })} onOpenChat={(id) => go({ kind: 'chat', id })} />
+            </Match>
+            <Match when={route().kind === 'board'}>
+              <Board cards={cards()} sessions={sessions()} setCards={setCards} onOpen={(id) => go({ kind: 'card', id })} />
+            </Match>
+            <Match when={route().kind === 'card'}>
+              <Show when={currentCard()} fallback={<p class="flex flex-1 items-center justify-center text-[13px] text-fg-3">No such card</p>}>
+                {(card) => (
+                  <CardView
+                    card={card()}
+                    cards={cards()}
+                    setCards={setCards}
+                    sessions={sessions()}
+                    onOpenCard={(id) => go(id === null ? { kind: 'board' } : { kind: 'card', id })}
+                    onOpenChat={(id) => go({ kind: 'chat', id })}
+                    onNewChat={(from) => newChat(from, card().id)}
+                  />
+                )}
+              </Show>
+            </Match>
+          </Switch>
+        </div>
+      </div>
     </div>
   )
 }

@@ -61,7 +61,7 @@ export function RenameChat(props: { session: SessionSummary; onSaved?: (title: s
           }
         }}
         onBlur={() => finish(typed ? input.value : undefined)}
-        class="-mx-1 min-w-0 flex-1 rounded bg-bg px-1 text-[13px] text-fg ring-1 ring-edge outline-none"
+        class="-mx-1 min-w-0 flex-1 rounded bg-bg px-1 text-[13px] text-fg ring-1 pointer-coarse:text-base ring-edge outline-none"
       />
       <div class="flex min-w-0 items-center gap-1 text-[11px] text-fg-3">
         <Show

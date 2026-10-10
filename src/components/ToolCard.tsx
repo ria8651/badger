@@ -216,9 +216,9 @@ export function Disclosure(props: {
     <div data-id={props.id} class="text-[13px]">
       <button
         onClick={toggle}
-        class="group -mx-2 flex w-[calc(100%+1rem)] items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-surface"
+        class="group -mx-2 flex w-[calc(100%+1rem)] items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-surface pointer-coarse:py-1.5"
       >
-        <span class="shrink-0 text-fg-2 group-hover:text-fg">{props.label}</span>
+        <span class="min-w-0 truncate text-fg-2 group-hover:text-fg">{props.label}</span>
         <span class="min-w-0 flex-1 truncate font-mono text-xs text-fg-3">{props.detail}</span>
         {props.trailing}
         <ChevronRight class={`size-3.5 shrink-0 text-fg-3 transition-transform ${open() ? 'rotate-90' : ''}`} />

@@ -65,6 +65,7 @@
 /* Popovers: in, and a quicker out. Reduced motion keeps the fade only. */
 @keyframes pop-in { from { opacity: 0; transform: translateY(4px) scale(0.98); } }
 @keyframes pop-out { to { opacity: 0; transform: translateY(4px) scale(0.98); } }
+@keyframes fade-in { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   @keyframes pop-in { from { opacity: 0; } }
   @keyframes pop-out { to { opacity: 0; } }
@@ -72,6 +73,8 @@
 
 /* Markdown from Claude. */
 .md { font-size: 15px; line-height: 1.65; overflow-wrap: anywhere; }
+/* iOS zooms into anything editable under 16px when it's focused. */
+@media (pointer: coarse) { .md[contenteditable] { font-size: 16px; } }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
 .md :where(p, ul, ol, pre, blockquote, table) { margin: 0.6em 0; }

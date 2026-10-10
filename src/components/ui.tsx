@@ -26,8 +26,11 @@ export function IconButton(props: JSX.ButtonHTMLAttributes<HTMLButtonElement> & 
   )
 }
 
+/** A touch screen is the main pointer, so there's no hover and no physical keyboard to assume. */
+export const touch = matchMedia('(pointer: coarse)')
+
 export const inputClass =
-  'h-8 w-full border border-edge bg-transparent px-3 text-[13px] outline-none transition-colors rounded-lg placeholder:text-fg-3 focus:border-fg-3'
+  'h-8 w-full border border-edge bg-transparent px-3 text-[13px] outline-none transition-colors rounded-lg placeholder:text-fg-3 focus:border-fg-3 pointer-coarse:text-base'
 
 /** A pulsing dot in the accent colour: something is live. */
 export function LiveDot(props: { class?: string }) {
@@ -176,7 +179,7 @@ export function Menu(props: {
                 aria-selected={!!o.selected}
                 onPointerMove={() => setActive(i())}
                 onClick={() => pick(i())}
-                class={`flex cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2 ${active() === i() ? 'bg-surface' : ''}`}
+                class={`flex cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2 pointer-coarse:py-3 ${active() === i() ? 'bg-surface' : ''}`}
               >
                 <div class="min-w-0 flex-1">
                   <div class={`truncate text-[13px] ${o.tone === 'danger' ? 'text-danger' : 'text-fg'}`}>{o.label}</div>
@@ -221,7 +224,7 @@ export function Select<T extends string>(props: {
       title={props.title}
       placement={props.placement}
       triggerClass={(open) =>
-        `flex h-7 items-center gap-1 rounded-md px-2 text-xs transition-colors hover:bg-surface ${
+        `flex h-7 items-center gap-1 rounded-md px-2 text-xs transition-colors hover:bg-surface pointer-coarse:h-9 ${
           current()?.tone === 'danger' ? 'text-danger' : open ? 'text-fg-2' : 'text-fg-3 hover:text-fg-2'
         } ${open ? 'bg-surface' : ''}`
       }

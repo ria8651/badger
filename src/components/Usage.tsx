@@ -23,7 +23,7 @@ export function ContextMeter(props: { usage: ContextUsage }) {
         onKeyDown={(e) => e.key === 'Escape' && setOpen(false)}
         title={`Context: ${tokens(props.usage.tokens)} of ${tokens(props.usage.max)} tokens`}
         aria-expanded={open()}
-        class={`flex h-7 items-center gap-1.5 rounded-md px-2 text-xs tabular-nums transition-colors hover:bg-surface hover:text-fg-2 ${
+        class={`flex h-7 items-center gap-1.5 rounded-md px-2 text-xs tabular-nums transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 ${
           full() ? 'text-danger' : open() ? 'bg-surface text-fg-2' : 'text-fg-3'
         } ${open() ? 'bg-surface' : ''}`}
       >

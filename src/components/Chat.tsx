@@ -16,7 +16,7 @@ import { TaskTray, trayItems, waitingOnTask } from './TaskTray.tsx'
 import { reveal, revealed, toolLabel } from './ToolCard.tsx'
 import { Transcript, createIndex, detail, runInBackground, setDetail } from './Transcript.tsx'
 import { ContextMeter } from './Usage.tsx'
-import { IconButton, Menu, Select, ltr, type Option } from './ui.tsx'
+import { IconButton, Menu, Select, ltr, touch, type Option } from './ui.tsx'
 
 const MODES: Option<PermissionMode>[] = [
   { value: 'default', label: 'Ask before edits', description: 'Claude asks before changing files or running commands.' },
@@ -189,7 +189,8 @@ export function Chat(props: {
   }
 
   onMount(() => {
-    input.focus()
+    // On a phone, focusing would put the keyboard over the chat you came to read.
+    if (!touch.matches) input.focus()
     // Follow anything that changes size while stuck: messages, streaming, blocks opening, the composer.
     const observer = new ResizeObserver(() => pinned && toBottom())
     observer.observe(content)
@@ -247,7 +248,7 @@ export function Chat(props: {
       >
         {/* One column for the transcript and the composer. Its padding leaves room for your messages and the
             composer to hang out by their own padding, so the text in them lines up with Claude's. */}
-        <div class="mx-auto flex min-h-full max-w-[50rem] flex-col px-9">
+        <div class="mx-auto flex min-h-full max-w-[50rem] flex-col px-6 md:px-9">
           <div ref={content} class="flex-1 py-8">
             <Show
               when={!(state.loaded && state.messages.length === 0)}
@@ -286,7 +287,7 @@ export function Chat(props: {
               scrolls under even where the composer hangs into the padding. */}
           <div
             ref={composer}
-            class="sticky bottom-0 -mx-9 space-y-2 bg-bg px-9 pb-5 before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-bg"
+            class="sticky bottom-0 -mx-6 space-y-2 bg-bg px-6 pb-5 md:-mx-9 md:px-9 before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-bg"
           >
             <For each={state.permissions}>
               {(p) => <PermissionPrompt sessionId={props.sessionId} permission={p} cwd={cwd()} from={p.agent} />}
@@ -359,7 +360,8 @@ export function Chat(props: {
                   attach((a) => ({ ...a, pastes: [...a.pastes, pasted] }))
                 }}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+                  // Phone keyboards have no Shift+Enter, so there Enter is a newline and the button sends.
+                  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !touch.matches) {
                     e.preventDefault()
                     submit()
                   }
@@ -371,7 +373,7 @@ export function Chat(props: {
                 }}
                 rows={Math.min(10, Math.max(2, text().split('\n').length))}
                 placeholder={state.running ? 'Queue a message' : 'Message Claude'}
-                class="block max-h-[calc(10lh+0.875rem)] min-h-[calc(2lh+0.875rem)] w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed outline-none [field-sizing:content] placeholder:text-fg-3"
+                class="block max-h-[calc(10lh+0.875rem)] min-h-[calc(2lh+0.875rem)] w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed outline-none pointer-coarse:text-base [field-sizing:content] placeholder:text-fg-3"
               />
               <div class="flex items-center gap-2 px-2 pb-2">
                 <Select value={mode()} options={MODES} onChange={changeMode} title="Permission mode" />
@@ -382,7 +384,7 @@ export function Chat(props: {
                   type="button"
                   onClick={() => picker.click()}
                   title="Attach images"
-                  class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2"
+                  class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9"
                 >
                   <ImagePlus class="size-3.5" />
                 </button>
@@ -405,7 +407,7 @@ export function Chat(props: {
                     onPick={(i) => send(actions()[i].prompt)}
                     title="Chat actions"
                     triggerClass={(open) =>
-                      `flex h-7 items-center rounded-md px-2 transition-colors hover:bg-surface hover:text-fg-2 ${open ? 'bg-surface text-fg-2' : 'text-fg-3'}`
+                      `flex h-7 items-center rounded-md px-2 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 ${open ? 'bg-surface text-fg-2' : 'text-fg-3'}`
                     }
                     trigger={() => <Zap class="size-3.5" />}
                   />
@@ -414,7 +416,7 @@ export function Chat(props: {
                   type="button"
                   onClick={() => setDetail(detail() === 'full' ? 'result' : 'full')}
                   title={detail() === 'full' ? 'Show results only' : 'Show all work'}
-                  class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2"
+                  class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9"
                 >
                   {/* Shows what a click does, like play/pause: fold the work away or expand it. */}
                   <Show when={detail() === 'full'} fallback={<ListChevronsUpDown class="size-3.5" />}>
@@ -428,7 +430,7 @@ export function Chat(props: {
                     type="button"
                     onClick={toBackground}
                     title="Stop waiting and let them carry on (Ctrl+B)"
-                    class="flex h-7 items-center rounded-md px-2 text-xs text-fg-3 transition-colors hover:bg-surface hover:text-fg-2"
+                    class="flex h-7 items-center rounded-md px-2 text-xs text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9"
                   >
                     Run in background
                   </button>

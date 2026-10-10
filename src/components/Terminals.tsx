@@ -45,7 +45,7 @@ export function TerminalButton(props: { root: string; cwd: string }) {
       type="button"
       onClick={() => toggleDock(props.root, props.cwd)}
       title={`${open() ? 'Hide' : 'Show'} terminals (Ctrl+\`)`}
-      class={`flex h-7 items-center gap-1 rounded-md px-2 text-xs tabular-nums transition-colors hover:bg-surface hover:text-fg-2 ${
+      class={`flex h-7 items-center gap-1 rounded-md px-2 text-xs tabular-nums transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 ${
         open() ? 'bg-surface text-fg-2' : 'text-fg-3'
       }`}
     >

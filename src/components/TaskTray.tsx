@@ -165,7 +165,7 @@ export function TaskTray(props: { sessionId: string; items: Accessor<TrayItem[]>
           title={t().toolUseId ? 'Show in the chat' : undefined}
           class="group flex min-w-0 flex-1 items-baseline gap-2 py-1 text-left enabled:cursor-pointer"
         >
-          <span class="shrink-0 text-fg-2 group-enabled:group-hover:text-fg">{t().label}</span>
+          <span class="min-w-0 truncate text-fg-2 group-enabled:group-hover:text-fg">{t().label}</span>
           <span class="min-w-0 truncate font-mono text-xs text-fg-3">{t().description}</span>
           <Show when={live() && t().activity}>
             <span class="min-w-0 flex-1 truncate text-xs text-fg-3">· {t().activity}</span>
