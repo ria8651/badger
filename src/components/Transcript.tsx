@@ -138,10 +138,23 @@ function buildView(messages: WireMessage[], nested: boolean) {
       lastResult = undefined
     }
   }
-  const items = messages.flatMap(itemsFor)
+  // Card context goes in with the prompt it was injected for, so it's shown as one of its attachments.
+  const cards = new Map<Item, CardContext>()
+  const attached = new Set<Item>()
+  let lastUser: Item | undefined
+  for (const m of messages) {
+    const items = itemsFor(m)
+    if (m.type === 'hook_context') {
+      if (lastUser && items[0]?.kind === 'card') {
+        cards.set(lastUser, items[0].context)
+        attached.add(items[0])
+      }
+    } else if (m.type === 'user' || m.type === 'assistant' || m.type === 'result') lastUser = items.find((i) => i.kind === 'user')
+  }
+  const items = messages.flatMap(itemsFor).filter((i) => !attached.has(i))
   // A subagent's prompt is shown with the call that started it; only messages sent to it later stay.
   const prompt = nested ? items.find((i) => i.kind === 'user') : undefined
-  return { items: prompt ? items.filter((i) => i !== prompt) : items, idleUntil }
+  return { items: prompt ? items.filter((i) => i !== prompt) : items, idleUntil, cards }
 }
 
 const isWork = (i: Item) => i.kind === 'text' || i.kind === 'thinking' || i.kind === 'tool'
@@ -308,7 +321,7 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
       case 'work':
         return <WorkRow work={item} />
       case 'user':
-        return <UserMessage text={item.text} pastes={item.pastes} images={item.images} />
+        return <UserMessage text={item.text} pastes={item.pastes} images={item.images} card={view().cards.get(item)} />
       case 'text':
         return (
           <div class="my-4">
@@ -558,8 +571,8 @@ function WorkingLine(props: { detail?: string }) {
 
 const badge = 'inline-flex max-w-[80%] items-center gap-2 rounded-full border border-line px-3 py-1 text-[13px]'
 
-/** A card as a pill linking to it; `prefix` goes before its number, e.g. "On card". */
-export function CardBadge(props: { card: { id: number; title: string; status: CardStatus }; prefix?: string }) {
+/** A card as a pill linking to it. */
+function CardBadge(props: { card: { id: number; title: string; status: CardStatus } }) {
   return (
     <a
       href={`/c/${props.card.id}`}
@@ -574,9 +587,7 @@ export function CardBadge(props: { card: { id: number; title: string; status: Ca
     >
       <Columns3 class="size-3.5 shrink-0 text-fg-3" />
       <span class="min-w-0 truncate">
-        <span class="text-fg-3">
-          {props.prefix ? `${props.prefix} ` : ''}#{props.card.id}
-        </span>{' '}
+        <span class="text-fg-3">#{props.card.id}</span>{' '}
         {props.card.title}
       </span>
       <span class="shrink-0 text-xs text-fg-3">{STATUS_LABELS[props.card.status]}</span>
@@ -584,7 +595,7 @@ export function CardBadge(props: { card: { id: number; title: string; status: Ca
   )
 }
 
-/** The card Claude was told about with this message, as a badge on the user's side linking to it. */
+/** Card context with no prompt to attach to, as a badge on the user's side linking to the card. */
 function CardContextBadge(props: { context: CardContext }) {
   return (
     <div class="-mt-2 mb-4 flex justify-end">
@@ -596,15 +607,15 @@ function CardContextBadge(props: { context: CardContext }) {
 }
 
 /** A user's message; long ones (big pastes) are clamped with a fade until expanded. */
-function UserMessage(props: { text: string; pastes?: string[]; images?: ImageAttachment[] }) {
+function UserMessage(props: { text: string; pastes?: string[]; images?: ImageAttachment[]; card?: CardContext }) {
   const [overflows, setOverflows] = createSignal(false)
   const [expanded, setExpanded] = createSignal(false)
   const clamped = () => overflows() && !expanded()
   return (
     <div class="mt-8 mb-4 flex justify-end first:mt-0">
       <div class="max-w-[80%] min-w-0 bg-surface rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed">
-        <Show when={props.pastes?.length || props.images?.length}>
-          <Attachments pastes={props.pastes ?? []} images={props.images ?? []} class={props.text ? 'mb-2' : ''} />
+        <Show when={props.pastes?.length || props.images?.length || props.card}>
+          <Attachments pastes={props.pastes ?? []} images={props.images ?? []} card={props.card} class={props.text ? 'mb-2' : ''} />
         </Show>
         <Show when={props.text}>
           <div

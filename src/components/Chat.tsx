@@ -13,7 +13,7 @@ import { Attachments } from './Attachments.tsx'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
 import { TerminalButton, TerminalDock } from './Terminals.tsx'
 import { toolLabel } from './ToolCard.tsx'
-import { CardBadge, Transcript, detail, setDetail } from './Transcript.tsx'
+import { Transcript, detail, setDetail } from './Transcript.tsx'
 import { IconButton, LiveDot, Menu, Select, ltr, type Option } from './ui.tsx'
 
 const MODES: Option<PermissionMode>[] = [
@@ -197,6 +197,8 @@ export function Chat(props: {
     socket.send({ type: 'set_mode', sessionId: props.sessionId, mode: next })
   }
 
+  // A card's new chat sends the card with its first message, so it's shown as attached until then.
+  const pendingCard = () => (props.card && state.loaded && state.messages.length === 0 ? { card: props.card } : undefined)
   const interrupt = () => socket.send({ type: 'interrupt', sessionId: props.sessionId })
 
   return (
@@ -224,8 +226,6 @@ export function Chat(props: {
                   <Show when={canWorktree()}>
                     <WorktreeOption checked={inWorktree()} onChange={setInWorktree} name={worktreeName()} />
                   </Show>
-                  {/* So a card's new chat isn't mistaken for a plain one. */}
-                  <Show when={props.card}>{(card) => <div class="mt-4"><CardBadge card={card()} prefix="On card" /></div>}</Show>
                 </div>
               }
             >
@@ -285,10 +285,11 @@ export function Chat(props: {
               input.focus()
             }}
           >
-            <Show when={pastes().length || images().length}>
+            <Show when={pastes().length || images().length || pendingCard()}>
               <Attachments
                 pastes={pastes()}
                 images={images()}
+                card={pendingCard()}
                 onRemovePaste={(i) => attach((a) => ({ ...a, pastes: a.pastes.filter((_, j) => j !== i) }))}
                 onRemoveImage={(i) => attach((a) => ({ ...a, images: a.images.filter((_, j) => j !== i) }))}
                 class="px-3 pt-3"
