@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import {
   getSessionInfo,
   getSessionMessages,
+  getSubagentMessages,
+  listSubagents,
   query,
   type CanUseTool,
   type McpServerConfig,
@@ -13,7 +15,7 @@ import {
   type Query,
   type SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk'
-import type { PendingPermission, PermissionMode, ServerEvent, WireMessage } from '../shared/protocol.ts'
+import type { BackgroundTask, PendingPermission, PermissionMode, ServerEvent, WireMessage } from '../shared/protocol.ts'
 import { BashStreams, streamEnv } from './bashStream.ts'
 import { MessageQueue } from './queue.ts'
 
@@ -59,6 +61,12 @@ export class LiveSession {
   /** Tool calls that have started, by tool_use_id, so a tool's handler can find out which call it is. */
   private toolUses = new Map<string, string>()
   private afterTurnCallbacks: (() => void)[] = []
+  /** Subagents' descriptions by agent id, to say which one is asking for permission. */
+  private agents = new Map<string, string>()
+  /** Started from the chat itself and running now. They outlive the turn that started them. */
+  private background: BackgroundTask[] = []
+  /** Any background work is running, the subagents' own included; closing the process would kill it. */
+  private busy = false
 
   constructor(opts: {
     id: string
@@ -88,6 +96,8 @@ export class LiveSession {
         permissionMode: this.mode,
         allowDangerouslySkipPermissions: true,
         includePartialMessages: true,
+        // A one-line "what it's doing" for each running subagent, every ~30s.
+        agentProgressSummaries: true,
         systemPrompt: { type: 'preset', preset: 'claude_code' },
         settingSources: ['user', 'project', 'local'],
         canUseTool: this.canUseTool,
@@ -178,6 +188,7 @@ export class LiveSession {
       cwd: this.cwd,
       permissions: [...this.pending.values()].map(publicPermission),
       bashOutput: this.bash.outputs(),
+      background: this.background,
     }
   }
 
@@ -199,6 +210,10 @@ export class LiveSession {
   async interrupt(): Promise<void> {
     for (const p of this.pending.values()) p.resolve({ behavior: 'deny', message: 'Interrupted by user', interrupt: true })
     await this.agent.interrupt().catch(() => {})
+  }
+
+  async stopTask(taskId: string): Promise<void> {
+    await this.agent.stopTask(taskId)
   }
 
   async setMode(mode: PermissionMode): Promise<void> {
@@ -249,7 +264,7 @@ export class LiveSession {
     this.bash.finishAll()
   }
 
-  private canUseTool: CanUseTool = (toolName, input, { signal, suggestions, blockedPath, toolUseID }) =>
+  private canUseTool: CanUseTool = (toolName, input, { signal, suggestions, blockedPath, toolUseID, agentID }) =>
     new Promise<PermissionResult>((resolve) => {
       const requestId = randomUUID()
       const done = (result: PermissionResult) => {
@@ -265,6 +280,7 @@ export class LiveSession {
         blockedPath,
         suggestions,
         canAlwaysAllow: !!suggestions?.length,
+        ...(agentID ? { agent: this.agents.get(agentID) ?? 'A subagent' } : {}),
         resolve: done,
       }
       this.pending.set(requestId, pending)
@@ -299,6 +315,16 @@ export class LiveSession {
         this.emitStatus()
       }
     }
+    if (msg.type === 'system' && msg.subtype === 'task_started' && msg.task_type === 'local_agent') this.agents.set(msg.task_id, msg.description)
+    if (msg.type === 'system' && msg.subtype === 'background_tasks_changed') {
+      const tasks = msg.tasks.filter((t) => !t.ambient)
+      this.busy = tasks.length > 0
+      // A running subagent's own tasks show inside it. One that has paused to wait on them isn't in the set, so they show here.
+      const ids = new Set(tasks.map((t) => t.task_id))
+      this.background = tasks.filter((t) => !t.parent_task_id || !ids.has(t.parent_task_id)).map((t) => ({ id: t.task_id, type: t.task_type, description: t.description }))
+      this.emit({ type: 'background', sessionId: this.id, tasks: this.background })
+      if (!this.running) this.setRunning(false)
+    }
     if (msg.type === 'user') for (const id of toolResultIds(wire)) this.bash.finish(id)
     if (msg.type === 'result') {
       this.bash.finishAll()
@@ -319,7 +345,7 @@ export class LiveSession {
 
   private setRunning(running: boolean): void {
     if (this.idleTimer) clearTimeout(this.idleTimer)
-    if (!running) this.idleTimer = setTimeout(() => this.close(), IDLE_CLOSE_MS)
+    if (!running && !this.busy) this.idleTimer = setTimeout(() => this.close(), IDLE_CLOSE_MS)
     if (running === this.running) return
     this.running = running
     this.emitStatus()
@@ -345,41 +371,59 @@ export class LiveSession {
   }
 }
 
-/** A chat's transcript from disk, with what the SDK's reader leaves out put back: turn results and hook context. */
+/**
+ * A chat's transcript from disk, with what the SDK's reader leaves out put back:
+ * turn results, hook context, which messages are meta, and subagents' work.
+ * Subagent messages come last; each carries the parent_tool_use_id of the call that started it.
+ */
 export async function diskTranscript(id: string): Promise<WireMessage[]> {
-  const [messages, context] = await Promise.all([
+  const [messages, { context, meta }, subagents] = await Promise.all([
     getSessionMessages(id).catch(() => []) as Promise<unknown> as Promise<WireMessage[]>,
-    hookContext(id).catch(() => new Map<string, string[]>()),
+    fileExtras(id).catch(() => ({ context: new Map<string, string[]>(), meta: new Set<string>() })),
+    subagentMessages(id).catch(() => []),
   ])
-  return withTurnResults(
-    messages.flatMap((m) => [
-      m,
-      ...(context.get(m.uuid ?? '') ?? []).map((text, i) => ({ type: 'hook_context', uuid: `${m.uuid}-context-${i}`, after_uuid: m.uuid, text })),
-    ]),
-  )
+  return [
+    ...withTurnResults(
+      messages.flatMap((m) => [
+        // e.g. a subagent's report handed back, which would otherwise read as something the user typed.
+        meta.has(m.uuid ?? '') ? { ...m, isMeta: true } : m,
+        ...(context.get(m.uuid ?? '') ?? []).map((text, i) => ({ type: 'hook_context', uuid: `${m.uuid}-context-${i}`, after_uuid: m.uuid, text })),
+      ]),
+    ),
+    ...subagents,
+  ]
+}
+
+async function subagentMessages(id: string): Promise<WireMessage[]> {
+  const agents = await listSubagents(id)
+  const each = await Promise.all(agents.map((agent) => getSubagentMessages(id, agent).catch(() => [])))
+  return each.flat() as unknown as WireMessage[]
 }
 
 const PROJECTS_DIR = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects')
 
 /**
- * What UserPromptSubmit hooks added to each turn, by the uuid of the prompt it came with.
- * It's stored as attachment entries, which getSessionMessages skips, so read the file directly.
+ * What getSessionMessages leaves out, so read the file directly: what
+ * UserPromptSubmit hooks added to each turn (attachment entries), by the uuid
+ * of the prompt it came with, and the uuids of messages marked meta.
  */
-async function hookContext(id: string): Promise<Map<string, string[]>> {
+async function fileExtras(id: string): Promise<{ context: Map<string, string[]>; meta: Set<string> }> {
   const out = new Map<string, string[]>()
+  const meta = new Set<string>()
   const file = await transcriptFile(id)
-  if (!file) return out
-  type Entry = { type?: string; uuid?: string; parentUuid?: string; attachment?: { type?: string; hookEvent?: string; content?: unknown } }
+  if (!file) return { context: out, meta }
+  type Entry = { type?: string; uuid?: string; parentUuid?: string; isMeta?: boolean; attachment?: { type?: string; hookEvent?: string; content?: unknown } }
   const parents = new Map<string, string>()
   const hooks: Entry[] = []
   for (const line of (await readFile(file, 'utf8')).split('\n')) {
-    if (!line.includes('"attachment"')) continue
+    if (!line.includes('"attachment"') && !line.includes('"isMeta":true')) continue
     let e: Entry
     try {
       e = JSON.parse(line)
     } catch {
       continue
     }
+    if (e.isMeta && e.uuid) meta.add(e.uuid)
     if (e.type !== 'attachment' || !e.uuid || !e.parentUuid) continue
     parents.set(e.uuid, e.parentUuid)
     if (e.attachment?.type === 'hook_additional_context' && e.attachment.hookEvent === 'UserPromptSubmit') hooks.push(e)
@@ -391,7 +435,7 @@ async function hookContext(id: string): Promise<Map<string, string[]>> {
     const content = Array.isArray(e.attachment!.content) ? e.attachment!.content.filter((c): c is string => typeof c === 'string') : []
     out.set(anchor, [...(out.get(anchor) ?? []), ...content])
   }
-  return out
+  return { context: out, meta }
 }
 
 async function transcriptFile(id: string): Promise<string | undefined> {
@@ -450,7 +494,7 @@ function withTurnResults(messages: WireMessage[]): WireMessage[] {
 
 /** A message the user typed, as opposed to tool results or injected context. */
 function isPrompt(m: WireMessage): boolean {
-  if (m.type !== 'user' || m.parent_tool_use_id || !m.timestamp) return false
+  if (m.type !== 'user' || m.parent_tool_use_id || m.isMeta || !m.timestamp) return false
   const content = (m.message as { content?: unknown } | undefined)?.content
   if (typeof content === 'string') return !content.trimStart().startsWith('<')
   return Array.isArray(content) && content.some((b) => b?.type === 'text' && !String(b.text).trimStart().startsWith('<'))
@@ -459,8 +503,11 @@ function isPrompt(m: WireMessage): boolean {
 /** Messages the client renders; everything else (hooks, rate limits, lifecycle) is dropped. */
 function isTranscriptMessage(msg: SDKMessage): boolean {
   if (msg.type === 'user' || msg.type === 'assistant' || msg.type === 'result') return true
-  return msg.type === 'system' && msg.subtype === 'compact_boundary'
+  return msg.type === 'system' && TRANSCRIPT_SYSTEM.has(msg.subtype)
 }
+
+/** Task events say how subagents and background work are going. Claude Code doesn't save them, so they only cover this process. */
+const TRANSCRIPT_SYSTEM = new Set(['compact_boundary', 'task_started', 'task_progress', 'task_updated', 'task_notification'])
 
 function toolResultIds(m: WireMessage): string[] {
   const content = (m.message as { content?: unknown } | undefined)?.content

@@ -1,9 +1,13 @@
 import { For, Match, Show, Switch, createEffect, createSignal, on, type JSX } from 'solid-js'
 import { Check, ChevronRight, Loader2 } from 'lucide-solid'
+import type { Task } from '../tasks.ts'
+import { Markdown } from './Markdown.tsx'
 
 export interface ToolResult {
   content: unknown
   isError: boolean
+  /** The SDK's structured version of the result (`tool_use_result`), on live messages only. */
+  structured?: unknown
 }
 
 type Input = Record<string, unknown>
@@ -60,6 +64,8 @@ export function toolSummary(name: string, input: Input, cwd?: string): string {
     case 'Task':
     case 'Agent':
       return str(input.description)
+    case 'SendMessage':
+      return str(input.to)
     case 'TodoWrite':
       return 'Update todos'
     default: {
@@ -91,6 +97,9 @@ export function ToolInput(props: { name: string; input: Input }) {
       </Match>
       <Match when={props.name === 'Write'}>
         <Pre text={str(props.input.content)} />
+      </Match>
+      <Match when={props.name === 'SendMessage' && typeof props.input.message === 'string'}>
+        <Markdown text={str(props.input.message)} />
       </Match>
     </Switch>
   )
@@ -138,10 +147,20 @@ export function ToolCard(props: {
   liveOutput?: string
   running: boolean
   cwd?: string
-  subagentSteps?: number
+  /** Set when Claude Code tracks the call as a task, e.g. a command left running in the background. */
+  task?: Task
 }) {
   const live = () => (!props.result && props.running ? props.liveOutput : undefined)
-  const status = () => (props.result ? (props.result.isError ? 'error' : 'done') : props.running ? 'running' : 'stopped')
+  const status = () =>
+    props.task?.status === 'running'
+      ? 'running'
+      : props.result
+        ? props.result.isError
+          ? 'error'
+          : 'done'
+        : props.running
+          ? 'running'
+          : 'stopped'
 
   return (
     <Show when={props.name !== 'TodoWrite'} fallback={<Todos todos={(props.input.todos as TodoItem[]) ?? []} />}>
@@ -150,9 +169,6 @@ export function ToolCard(props: {
         detail={toolSummary(props.name, props.input, props.cwd)}
         trailing={
           <>
-            <Show when={props.subagentSteps}>
-              <span class="shrink-0 text-xs text-fg-3 tabular-nums">{props.subagentSteps} steps</span>
-            </Show>
             {/* Success is the norm and stays silent; only work in progress and failures show. */}
             <Switch>
               <Match when={status() === 'running'}>

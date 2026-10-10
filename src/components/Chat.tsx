@@ -1,16 +1,17 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, mapArray, on, onCleanup, onMount } from 'solid-js'
 import { ArrowUp, Check, GitBranch, ListChevronsDownUp, ListChevronsUpDown, Square, Zap } from 'lucide-solid'
-import type { Card, PermissionMode } from '../../shared/protocol.ts'
+import type { BackgroundTask, Card, PermissionMode } from '../../shared/protocol.ts'
 import { chatActions } from '../actions.ts'
 import { api, socket } from '../api.ts'
 import { cardWorktreeName, folderItem, isScratch, worktreeOf } from '../folders.ts'
+import { taskLabel } from '../tasks.ts'
 import { workspaceOf } from '../terminals.ts'
 import { ChildChats, createChat } from '../useChat.ts'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
 import { TerminalButton, TerminalDock } from './Terminals.tsx'
 import { toolLabel } from './ToolCard.tsx'
 import { CardBadge, Transcript, detail, setDetail } from './Transcript.tsx'
-import { IconButton, Menu, Select, ltr, type Option } from './ui.tsx'
+import { IconButton, LiveDot, Menu, Select, ltr, type Option } from './ui.tsx'
 
 const MODES: Option<PermissionMode>[] = [
   { value: 'default', label: 'Ask before edits', description: 'Claude asks before changing files or running commands.' },
@@ -201,6 +202,7 @@ export function Chat(props: {
             >
               <ChildChats.Provider value={childState}>
                 <Transcript
+                  sessionId={props.sessionId}
                   messages={state.messages}
                   partial={state.partial}
                   bashOutput={state.bashOutput}
@@ -217,7 +219,7 @@ export function Chat(props: {
         {/* Fade the transcript out as it scrolls under the composer. */}
         <div class="relative mx-auto w-full max-w-3xl space-y-2 px-5 pb-5 before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-bg">
           <For each={state.permissions}>
-            {(p) => <PermissionPrompt sessionId={props.sessionId} permission={p} cwd={cwd()} />}
+            {(p) => <PermissionPrompt sessionId={props.sessionId} permission={p} cwd={cwd()} from={p.agent} />}
           </For>
           <For each={childPrompts()}>
             {({ child, permission }) => (
@@ -229,6 +231,9 @@ export function Chat(props: {
               />
             )}
           </For>
+          <Show when={state.background.length}>
+            <Background sessionId={props.sessionId} tasks={state.background} />
+          </Show>
           <Show when={state.error}>
             <div class="flex items-start gap-3 bg-danger/10 rounded-lg px-3 py-2 text-[13px] text-danger">
               <span class="flex-1">{state.error}</span>
@@ -297,6 +302,29 @@ export function Chat(props: {
       <Show when={root()} keyed>
         {(r) => <TerminalDock root={r} cwd={cwd()!} onOpenPage={props.onOpenTerminal} onHide={() => input.focus()} />}
       </Show>
+    </div>
+  )
+}
+
+/** What's still running after the call that started it returned, by the composer since it outlives turns. */
+function Background(props: { sessionId: string; tasks: BackgroundTask[] }) {
+  return (
+    <div class="rounded-xl border border-line px-3 py-1 text-[13px]">
+      <For each={props.tasks}>
+        {(t) => (
+          <div class="flex h-7 items-center gap-2">
+            <LiveDot />
+            <span class="shrink-0 text-fg-2">{taskLabel(t.type)}</span>
+            <span class="min-w-0 flex-1 truncate font-mono text-xs text-fg-3">{t.description}</span>
+            <button
+              onClick={() => socket.send({ type: 'stop_task', sessionId: props.sessionId, taskId: t.id })}
+              class="shrink-0 text-xs text-fg-3 transition-colors hover:text-fg-2"
+            >
+              Stop
+            </button>
+          </div>
+        )}
+      </For>
     </div>
   )
 }

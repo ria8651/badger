@@ -139,6 +139,7 @@ async function snapshotFor(sessionId: string): Promise<ServerEvent> {
     bashOutput: {},
     draft,
     children: childSessions,
+    background: [],
   }
 }
 
@@ -183,6 +184,9 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       return
     case 'interrupt':
       await Promise.all([manager.get(event.sessionId)?.interrupt(), children.interrupt(event.sessionId)])
+      return
+    case 'stop_task':
+      await manager.get(event.sessionId)?.stopTask(event.taskId)
       return
     case 'set_mode':
       await manager.get(event.sessionId)?.setMode(event.mode)

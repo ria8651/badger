@@ -1,8 +1,10 @@
-import { For, Show, createMemo, createSignal, useContext, type JSX } from 'solid-js'
+import { For, Show, createContext, createMemo, createSignal, useContext, type Accessor, type JSX } from 'solid-js'
 import { unwrap } from 'solid-js/store'
 import { Columns3 } from 'lucide-solid'
 import { parseCardContext, type CardContext } from '../../shared/cardContext.ts'
 import type { CardStatus, WireMessage } from '../../shared/protocol.ts'
+import { socket } from '../api.ts'
+import { collectTasks, type Task } from '../tasks.ts'
 import { ChildChats, type Partial } from '../useChat.ts'
 import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
@@ -50,8 +52,9 @@ function itemsFor(m: WireMessage): Item[] {
 }
 
 function messageItems(m: WireMessage): Item[] {
-  if (m.parent_tool_use_id) return []
   if (m.type === 'user') {
+    const sent = sentToSubagent(m)
+    if (sent) return [{ kind: 'user', text: sent }]
     if (m.isMeta || m.isSynthetic) return []
     const text = userText(m)
     return text ? [{ kind: 'user', text }] : []
@@ -62,12 +65,16 @@ function messageItems(m: WireMessage): Item[] {
     for (const b of content) {
       if (b.type === 'text' && b.text?.trim()) items.push({ kind: 'text', text: b.text })
       else if (b.type === 'thinking' && b.thinking?.trim()) items.push({ kind: 'thinking', text: b.thinking })
+      // How a subagent hands its report back: that's its reply, not a step.
+      else if (b.type === 'tool_use' && b.name === 'SubagentHandback') items.push({ kind: 'text', text: String(b.input?.message ?? '') })
       else if (b.type === 'tool_use' && b.id) items.push({ kind: 'tool', id: b.id, name: b.name ?? '?', input: b.input ?? {} })
     }
     return items
   }
   if (m.type === 'result') {
     const ok = m.subtype === 'success' && !m.is_error
+    // A background task's notification can start a turn Claude has nothing to say in.
+    if (ok && m.num_turns === 0) return []
     return [
       {
         kind: 'result',
@@ -88,17 +95,40 @@ function messageItems(m: WireMessage): Item[] {
   return []
 }
 
-/** Turn raw SDK messages into renderable items plus a tool_use_id → result map. */
-function buildView(messages: WireMessage[]) {
+/** What a whole chat's messages say, shared by its transcript and the subagent transcripts nested in it. */
+interface Index {
+  sessionId?: string
+  /** Messages by the tool call of the subagent they belong to; the chat's own are under ''. */
+  groups: Map<string, WireMessage[]>
+  /** Tool results by tool_use_id. */
+  results: Map<string, ToolResult>
+  /** Subagents and other tasks by the tool_use_id that started them. */
+  tasks: Map<string, Task>
+}
+
+function buildIndex(messages: WireMessage[], sessionId?: string): Index {
+  const groups = new Map<string, WireMessage[]>()
   const results = new Map<string, ToolResult>()
-  const subagentSteps = new Map<string, number>()
+  for (const m of messages) {
+    const parent = (m.parent_tool_use_id as string | null | undefined) ?? ''
+    let group = groups.get(parent)
+    if (!group) groups.set(parent, (group = []))
+    group.push(m)
+    if (m.type === 'user') collectResults(m, results)
+  }
+  return { sessionId, groups, results, tasks: collectTasks(messages) }
+}
+
+const TranscriptIndex = createContext<Accessor<Index>>()
+const useIndex = () => useContext(TranscriptIndex)!
+const NONE: WireMessage[] = []
+
+/** Turn one conversation's raw SDK messages into renderable items. */
+function buildView(messages: WireMessage[], nested: boolean) {
   // When the user next spoke after each turn; turns without one are idle until now.
   const idleUntil = new Map<Item, number>()
   let lastResult: Item | undefined
   for (const m of messages) {
-    const parent = m.parent_tool_use_id as string | null | undefined
-    if (parent && m.type === 'assistant') subagentSteps.set(parent, (subagentSteps.get(parent) ?? 0) + 1)
-    if (parent || m.type === 'user') collectResults(m, results)
     const items = itemsFor(m)
     if (m.type === 'result') lastResult = items[0]
     else if (lastResult && items[0]?.kind === 'user' && m.timestamp) {
@@ -106,7 +136,10 @@ function buildView(messages: WireMessage[]) {
       lastResult = undefined
     }
   }
-  return { items: messages.flatMap(itemsFor), results, subagentSteps, idleUntil }
+  const items = messages.flatMap(itemsFor)
+  // A subagent's prompt is shown with the call that started it; only messages sent to it later stay.
+  const prompt = nested ? items.find((i) => i.kind === 'user') : undefined
+  return { items: prompt ? items.filter((i) => i !== prompt) : items, idleUntil }
 }
 
 const isWork = (i: Item) => i.kind === 'text' || i.kind === 'thinking' || i.kind === 'tool'
@@ -151,9 +184,18 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 function collectResults(m: WireMessage, results: Map<string, ToolResult>) {
   const content = (m.message as { content?: unknown })?.content
   if (!Array.isArray(content)) return
-  for (const b of content as ContentBlock[]) {
-    if (b.type === 'tool_result' && b.tool_use_id) results.set(b.tool_use_id, { content: b.content, isError: !!b.is_error })
-  }
+  const blocks = (content as ContentBlock[]).filter((b) => b.type === 'tool_result' && b.tool_use_id)
+  // The structured result belongs to the message as a whole, so it's only unambiguous with one result in it.
+  const structured = blocks.length === 1 ? m.tool_use_result : undefined
+  for (const b of blocks) results.set(b.tool_use_id!, { content: b.content, isError: !!b.is_error, structured })
+}
+
+/** A message Claude sent a subagent while it worked, without the framing Claude Code wraps it in. Claude Code marks these meta. */
+function sentToSubagent(m: WireMessage): string | undefined {
+  const content = (m.message as { content?: unknown })?.content
+  if (typeof content !== 'string') return
+  const sent = content.match(/^The coordinator sent a message while you were working:\n([\s\S]*?)(?:\n+Address this before completing your current task\.)?$/)
+  return sent?.[1].trim() || undefined
 }
 
 function userText(m: WireMessage): string {
@@ -171,7 +213,7 @@ function userText(m: WireMessage): string {
   return raw
 }
 
-export function Transcript(props: {
+type TranscriptProps = {
   messages: WireMessage[]
   partial: Partial | null
   bashOutput: Record<string, string>
@@ -181,12 +223,25 @@ export function Transcript(props: {
   cwd?: string
   /** Chats started from tool calls, by tool_use_id; those calls show the child's transcript. */
   children?: Record<string, string>
-}) {
+}
+
+export function Transcript(props: TranscriptProps & { sessionId?: string }) {
   // Track the array and its length, then walk the raw objects so the cache keys are stable.
-  const view = createMemo(() => {
+  const index = createMemo(() => {
     void props.messages.length
-    return buildView(unwrap(props.messages))
+    return buildIndex(unwrap(props.messages), props.sessionId)
   })
+  return (
+    <TranscriptIndex.Provider value={index}>
+      <Messages {...props} messages={index().groups.get('') ?? NONE} />
+    </TranscriptIndex.Provider>
+  )
+}
+
+/** One conversation: the chat's own, or a subagent's nested in the call that started it. */
+function Messages(props: TranscriptProps & { nested?: boolean }) {
+  const index = useIndex()
+  const view = createMemo(() => buildView(props.messages, !!props.nested))
   const folded = createMemo(() => foldWork(view().items))
   const rows = (): Row[] => (detail() === 'full' ? view().items : folded().rows)
 
@@ -259,16 +314,19 @@ export function Transcript(props: {
         return <Thinking text={item.text} />
       case 'tool': {
         const child = props.children?.[item.id]
-        if (child) return <ChildRun sessionId={child} name={item.name} result={view().results.get(item.id)} />
+        if (child) return <ChildRun sessionId={child} name={item.name} result={index().results.get(item.id)} />
+        if (item.name === 'Agent' || item.name === 'Task') {
+          return <AgentRun id={item.id} input={item.input} bashOutput={props.bashOutput} running={props.running} cwd={props.cwd} />
+        }
         return (
           <ToolCard
             name={item.name}
             input={item.input}
-            result={view().results.get(item.id)}
+            result={index().results.get(item.id)}
             liveOutput={props.bashOutput[item.id]}
             running={props.running}
             cwd={props.cwd}
-            subagentSteps={view().subagentSteps.get(item.id)}
+            task={index().tasks.get(item.id)}
           />
         )
       }
@@ -349,20 +407,19 @@ function ChildRun(props: { sessionId: string; name: string; result?: ToolResult 
       }
       live={live()}
     >
-      <div class="border-l border-line pl-4">
-        <Show when={state()?.loaded && state()} fallback={<p class="py-1 text-xs text-fg-3">Loading…</p>}>
-          {(s) => (
-            <Transcript
-              messages={s().messages}
-              partial={s().partial}
-              bashOutput={s().bashOutput}
-              running={s().running}
-              working={s().running && s().permissions.length === 0}
-              cwd={s().cwd}
-            />
-          )}
-        </Show>
-      </div>
+      <Show when={state()?.loaded && state()} fallback={<p class="py-1 text-xs text-fg-3">Loading…</p>}>
+        {(s) => (
+          <Transcript
+            sessionId={props.sessionId}
+            messages={s().messages}
+            partial={s().partial}
+            bashOutput={s().bashOutput}
+            running={s().running}
+            working={s().running && s().permissions.length === 0}
+            cwd={s().cwd}
+          />
+        )}
+      </Show>
       <Show when={props.result?.isError && props.result}>{(r) => <Pre text={resultText(r().content)} class="text-danger" />}</Show>
       <a
         href={`/s/${props.sessionId}`}
@@ -378,6 +435,104 @@ function ChildRun(props: { sessionId: string; name: string; result?: ToolResult 
       </a>
     </Disclosure>
   )
+}
+
+/**
+ * A subagent Claude Code started with the Agent tool: its own work nested in
+ * the call, then its report. One in the background keeps running after the
+ * call returns, until its task says it's done.
+ */
+function AgentRun(props: { id: string; input: Record<string, unknown>; bashOutput: Record<string, string>; running: boolean; cwd?: string }) {
+  const index = useIndex()
+  const messages = () => index().groups.get(props.id) ?? NONE
+  const items = createMemo(() => buildView(messages(), true).items)
+  const task = () => index().tasks.get(props.id)
+  const result = () => index().results.get(props.id)
+  const structured = () => result()?.structured as { status?: string; content?: Block[] } | undefined
+  const launched = () => structured()?.status === 'async_launched' || resultText(result()?.content).startsWith('Async agent launched')
+  const background = () => task()?.background ?? launched()
+  const running = () => {
+    const t = task()
+    return t ? t.status === 'running' : !result() && props.running
+  }
+  const status = () => task()?.status ?? (result()?.isError ? 'failed' : undefined)
+  const steps = () => Math.max(items().filter((i) => i.kind === 'tool').length, task()?.toolUses ?? 0)
+  const type = () => (typeof props.input.subagent_type === 'string' ? props.input.subagent_type : '')
+  const prompt = () => (typeof props.input.prompt === 'string' ? props.input.prompt : '')
+
+  /** The report, when its own transcript doesn't already end with it (live, a foreground agent's last message isn't sent). */
+  const report = () => {
+    if (running() || items().at(-1)?.kind === 'text') return undefined
+    const text = (structured()?.content ?? []).filter((b) => b.type === 'text').map((b) => b.text).join('\n')
+    if (text) return text
+    if (task()?.summary) return task()!.summary
+    if (result() && !launched()) return handBack(resultText(result()!.content))
+  }
+
+  const stop = () => {
+    const sessionId = index().sessionId
+    const t = task()
+    if (sessionId && t) socket.send({ type: 'stop_task', sessionId, taskId: t.id })
+  }
+
+  return (
+    <Disclosure
+      label={type() && type() !== 'general-purpose' ? type() : 'Agent'}
+      detail={String(props.input.description ?? '')}
+      trailing={
+        <>
+          <Show when={running() && background()}>
+            <span class="shrink-0 text-xs text-fg-3">In background</span>
+          </Show>
+          <Show when={steps()}>
+            <span class="shrink-0 text-xs text-fg-3 tabular-nums">
+              {plural(steps(), 'step')}
+              {!running() && task()?.tokens ? ` · ${compact(task()!.tokens!)} tokens` : ''}
+            </span>
+          </Show>
+          <Show when={running()}>
+            <LiveDot />
+          </Show>
+          <Show when={!running() && status() === 'failed'}>
+            <span class="shrink-0 text-xs text-danger">Failed</span>
+          </Show>
+          <Show when={!running() && status() === 'stopped'}>
+            <span class="shrink-0 text-xs text-fg-3">Stopped</span>
+          </Show>
+        </>
+      }
+      // One in the background can run for a long while alongside everything else, so it stays folded.
+      live={running() && !background()}
+      peek={running() && task()?.activity && <p class="truncate text-xs text-fg-3">{task()!.activity}</p>}
+    >
+      <Show when={prompt()}>{(p) => <Markdown text={p()} />}</Show>
+      <Show when={items().length || report()}>
+        <div>
+          <Messages messages={messages()} nested partial={null} bashOutput={props.bashOutput} running={running()} working={running()} cwd={props.cwd} />
+          <Show when={report()}>
+            {(r) => (
+              <div class="my-4">
+                <Markdown text={r()} />
+              </div>
+            )}
+          </Show>
+        </div>
+      </Show>
+      <Show when={running() && task() && index().sessionId}>
+        <button onClick={stop} class="text-xs text-fg-3 transition-colors hover:text-fg-2">
+          Stop agent
+        </button>
+      </Show>
+    </Disclosure>
+  )
+}
+
+/** A foreground agent's report as Claude received it, without the framing around it. */
+function handBack(text: string): string {
+  const marker = 'The report follows:\n'
+  const at = text.indexOf(marker)
+  const report = at < 0 ? text : text.slice(at + marker.length).replace(/^ {2}/gm, '')
+  return report.replace(/\nagentId: [\s\S]*$/, '').trim()
 }
 
 const hasToolUse = (m: WireMessage) => ((m.message as { content?: Block[] })?.content ?? []).some((b) => b.type === 'tool_use')

@@ -1,6 +1,6 @@
 import { createContext, onCleanup, useContext } from 'solid-js'
 import { createStore, produce } from 'solid-js/store'
-import type { PendingPermission, PermissionMode, ServerEvent, WireMessage } from '../shared/protocol.ts'
+import type { BackgroundTask, PendingPermission, PermissionMode, ServerEvent, WireMessage } from '../shared/protocol.ts'
 import { socket } from './api.ts'
 
 /** The block currently streaming in, before its full assistant message lands. */
@@ -23,6 +23,8 @@ export interface ChatState {
   bashOutput: Record<string, string>
   /** Chats this one started from a tool call, by that call's tool_use_id. */
   children: Record<string, string>
+  /** Subagents, shells and the like running in the background now. */
+  background: BackgroundTask[]
   error: string | null
 }
 
@@ -40,7 +42,11 @@ function apply(state: ChatState, event: ServerEvent): void {
       state.permissions = event.permissions
       state.bashOutput = event.bashOutput
       state.children = event.children
+      state.background = event.background
       state.partial = null
+      break
+    case 'background':
+      state.background = event.tasks
       break
     case 'child_started':
       state.children[event.toolUseId] = event.childId
@@ -115,6 +121,7 @@ export function createChat(sessionId: string) {
     permissions: [],
     bashOutput: {},
     children: {},
+    background: [],
     error: null,
   })
 

@@ -13,6 +13,17 @@ export interface PendingPermission {
   /** True when the SDK offered rules that would make this an "always allow". */
   canAlwaysAllow: boolean
   blockedPath?: string
+  /** Set when a subagent asked: its description. */
+  agent?: string
+}
+
+/** Work Claude Code runs alongside the conversation: a background subagent, shell, monitor or workflow. */
+export interface BackgroundTask {
+  /** Claude Code's task id; a subagent's is its agent id. */
+  id: string
+  /** e.g. local_agent, local_bash, monitor, local_workflow. */
+  type: string
+  description: string
 }
 
 export interface SessionSummary {
@@ -94,6 +105,8 @@ export type ClientEvent =
       worktree?: string
     }
   | { type: 'interrupt'; sessionId: string }
+  /** Stop one subagent or background task, leaving the rest of the chat running. */
+  | { type: 'stop_task'; sessionId: string; taskId: string }
   /** The composer's unsent text; replaces the saved draft. */
   | { type: 'draft'; sessionId: string; text: string }
   | { type: 'set_mode'; sessionId: string; mode: PermissionMode }
@@ -126,6 +139,7 @@ export type ServerEvent =
       draft: string
       /** Chats this one started from a tool call and waited on, by that call's tool_use_id. */
       children: Record<string, string>
+      background: BackgroundTask[]
     }
   | { type: 'message'; sessionId: string; message: WireMessage }
   /** Another viewer changed the chat's unsent text. */
@@ -134,6 +148,8 @@ export type ServerEvent =
   | { type: 'bash_output'; sessionId: string; toolUseId: string; chunk: string }
   /** cwd changes when the chat moves into a worktree. */
   | { type: 'status'; sessionId: string; running: boolean; mode: PermissionMode; cwd: string }
+  /** The background tasks running now; replaces the previous set. */
+  | { type: 'background'; sessionId: string; tasks: BackgroundTask[] }
   | { type: 'permission_request'; sessionId: string; permission: PendingPermission }
   | { type: 'permission_resolved'; sessionId: string; requestId: string }
   /** The chat started a child chat from a tool call; it's shown inside that call. */
