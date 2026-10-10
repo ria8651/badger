@@ -1,7 +1,8 @@
 import { For, Show, createSignal } from 'solid-js'
-import { MessageSquare, Plus } from 'lucide-solid'
+import { GitBranch, MessageSquare, Plus } from 'lucide-solid'
 import { CARD_STATUSES, type Card, type CardStatus, type SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
+import { folderLabel, worktreeOf } from '../folders.ts'
 import { LiveDot, inputClass } from './ui.tsx'
 
 export const STATUS_LABELS: Record<CardStatus, string> = {
@@ -87,6 +88,7 @@ export function Board(props: {
                 <For each={column(status)}>
                   {(card) => {
                     const chats = () => props.sessions.filter((s) => card.sessionIds.includes(s.id))
+                    const worktrees = () => [...new Set(chats().flatMap((s) => (s.cwd && !s.gone && worktreeOf(s.cwd) ? [s.cwd] : [])))]
                     return (
                       <>
                         <Show when={isTarget(status, card.id)}>
@@ -123,6 +125,11 @@ export function Board(props: {
                               <span class="flex items-center gap-1">
                                 <MessageSquare class="size-3" />
                                 {chats().length}
+                              </span>
+                            </Show>
+                            <Show when={worktrees().length}>
+                              <span title={worktrees().map(folderLabel).join('\n')} class="flex items-center">
+                                <GitBranch class="size-3" />
                               </span>
                             </Show>
                             <Show when={chats().some((s) => s.running)}>
