@@ -97,3 +97,29 @@
 .md :where(th, td) { padding: 0.4em 0.9em 0.4em 0; border-bottom: 1px solid var(--color-line); text-align: left; }
 .md th { font-weight: 500; color: var(--color-fg-2); }
 .md img { max-width: 100%; border-radius: 8px; }
+
+/* Task lists, the same in rendered and edited Markdown: the checkbox hangs where the bullet would be. */
+.md li:has(> input[type="checkbox"]), .md li[data-checked] { position: relative; list-style: none; }
+.md li > input[type="checkbox"], .md li[data-checked] > label { position: absolute; left: -1.25em; top: 0.42em; margin: 0; }
+.md li[data-checked] > label { display: flex; user-select: none; }
+/* Drawn here rather than by the browser, which fades chat's read-only (disabled) ones. Checked is a filled box with the tick cut out. */
+.md :where(li > input, li > label > input)[type="checkbox"] { appearance: none; display: block; width: 0.85em; height: 0.85em; margin: 0; border: 1.5px solid var(--color-fg-3); border-radius: 3px; }
+.md :where(li > input, li > label > input)[type="checkbox"]:checked {
+  border: none;
+  background: var(--color-fg-3);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='white'/%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") luminance;
+}
+.md li:has(> input[type="checkbox"]:checked), .md li[data-checked="true"] > div { color: var(--color-fg-3); text-decoration: line-through; }
+
+/* The description editor (Tiptap). Its structure differs from marked's, so it's evened out here to render the same. */
+.tiptap p.is-editor-empty:first-child::before { content: attr(data-placeholder); float: left; height: 0; pointer-events: none; color: var(--color-fg-3); }
+/* marked writes tight list items as bare text; Tiptap always wraps them in a paragraph. */
+.tiptap :where(li, li > div) > p { margin: 0; }
+.tiptap :where(li, li > div) > p + p { margin-top: 0.6em; }
+.tiptap li[data-checked] input { cursor: pointer; }
+.tiptap .tableWrapper { margin: 0; overflow: visible; }
+.tiptap :where(th, td) { position: relative; }
+.tiptap :where(th, td) > p { margin: 0; }
+.tiptap .selectedCell::after { content: ''; position: absolute; inset: 0; background: var(--color-surface); opacity: 0.6; pointer-events: none; }
+.tiptap a { cursor: text; }
+.tiptap hr.ProseMirror-selectednode { border-color: var(--color-fg-3); }

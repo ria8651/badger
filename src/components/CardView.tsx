@@ -5,7 +5,7 @@ import { CARD_STATUSES, type Card, type SessionSummary } from '../../shared/prot
 import { api } from '../api.ts'
 import { folderLabel, isScratch, lastWorkedIn, worktreeOf } from '../folders.ts'
 import { Columns, STATUS_LABELS } from './Board.tsx'
-import { Markdown } from './Markdown.tsx'
+import { MarkdownEditor } from './MarkdownEditor.tsx'
 import { RenameChat } from './RenameChat.tsx'
 import { ChatDot, Menu, Select } from './ui.tsx'
 import { attention } from '../attention.ts'
@@ -56,20 +56,13 @@ export function CardView(props: {
     const fallback = lastWorkedIn(props.sessions.filter((s) => projectIds.includes(s.id)))
     props.onNewChat(lastWorkedIn(chats()) ?? (fallback && { cwd: fallback.cwd, worktree: false }))
   }
-  const [editing, setEditing] = createSignal(false)
-  // What was just typed, shown until the saved card comes back so the old text doesn't flash.
-  const [draft, setDraft] = createSignal<string>()
-  createEffect(on(() => props.card.description, () => setDraft(undefined), { defer: true }))
-  const description = () => draft() ?? props.card.description
   // A project with nothing on its board yet opens with its brief showing, so there's somewhere to start.
   const [showBrief, setShowBrief] = createSignal(!inside().length)
   createEffect(on(() => props.card.id, () => setShowBrief(!inside().length), { defer: true }))
 
-  const save = (patch: { title?: string; description?: string }) => {
-    const [key, value] = Object.entries(patch)[0] as ['title' | 'description', string]
-    if (value.trim() === props.card[key].trim()) return
-    if (key === 'title' && !value.trim()) return
-    api.updateCard(props.card.id, patch)
+  const saveTitle = (title: string) => {
+    if (!title.trim() || title.trim() === props.card.title.trim()) return
+    api.updateCard(props.card.id, { title })
   }
 
   const remove = () => {
@@ -112,7 +105,7 @@ export function CardView(props: {
     <>
       <input
         value={props.card.title}
-        onBlur={(e) => save({ title: e.currentTarget.value })}
+        onBlur={(e) => saveTitle(e.currentTarget.value)}
         onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
         class="w-full bg-transparent text-xl font-medium outline-none"
       />
@@ -120,31 +113,16 @@ export function CardView(props: {
         <Select value={props.card.status} options={STATUS_OPTIONS} onChange={(status) => api.updateCard(props.card.id, { status })} placement="bottom" title="Status" />
       </div>
 
-      <Show
-        when={editing() || !description().trim()}
-        fallback={
-          <div
-            onClick={(e) => !(e.target as Element).closest('a') && setEditing(true)}
-            title="Click to edit"
-            class="mt-4 min-h-[6.6em] cursor-text"
-          >
-            <Markdown text={description()} />
-          </div>
-        }
-      >
-        <textarea
-          ref={(el) => editing() && queueMicrotask(() => el.focus())}
-          value={description()}
-          onBlur={(e) => {
-            setDraft(e.currentTarget.value)
-            save({ description: e.currentTarget.value })
-            setEditing(false)
-          }}
-          onKeyDown={(e) => e.key === 'Escape' && e.currentTarget.blur()}
-          placeholder={isProject() ? 'What this project is for, and anything every chat in it should know' : 'Describe the work'}
-          rows={Math.max(4, description().split('\n').length + 1)}
-          class="mt-4 block w-full resize-none bg-transparent text-[15px] leading-relaxed outline-none placeholder:text-fg-3"
-        />
+      {/* Keyed so switching cards saves the last one's edits to it before loading the next. */}
+      <Show when={props.card.id} keyed>
+        {(id) => (
+          <MarkdownEditor
+            value={props.card.description}
+            onSave={(description) => api.updateCard(id, { description })}
+            placeholder={isProject() ? 'What this project is for, and anything every chat in it should know' : 'Describe the work'}
+            class="mt-4 min-h-[6.6em]"
+          />
+        )}
       </Show>
 
       <div class="mt-8 flex items-center gap-1 border-b border-line pb-2">
