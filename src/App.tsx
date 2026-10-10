@@ -1,15 +1,16 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
-import { Archive, ArchiveRestore, ChevronRight, Columns3, Pencil, Plus } from 'lucide-solid'
+import { Archive, ArchiveRestore, Bell, BellOff, ChevronRight, Columns3, Pencil, Plus } from 'lucide-solid'
 import type { Card, SessionSummary } from '../shared/protocol.ts'
 import { api, socket } from './api.ts'
+import { attention, looking, notifications, notify, onAttention, toggleNotifications } from './attention.ts'
 import { basename, folderLabel, isScratch, setScratch } from './folders.ts'
 import { Board } from './components/Board.tsx'
 import { CardView } from './components/CardView.tsx'
 import { Chat } from './components/Chat.tsx'
 import { RenameChat } from './components/RenameChat.tsx'
 import { StatusDot, TerminalPage } from './components/Terminals.tsx'
-import { LiveDot } from './components/ui.tsx'
+import { ChatDot } from './components/ui.tsx'
 import { terminalLabel, terminals } from './terminals.ts'
 
 /** crypto.randomUUID needs a secure context; fall back for plain-http hosts. */
@@ -101,9 +102,14 @@ export function App() {
     })
     const onPop = () => setRoute(routeFromPath())
     addEventListener('popstate', onPop)
+    const offAttention = onAttention((id, state) => {
+      const title = sessions().find((s) => s.id === id)?.title ?? 'New chat'
+      notify(id, title, state === 'waiting' ? 'Needs your input' : 'Finished', () => go({ kind: 'chat', id }))
+    })
     onCleanup(() => {
       clearTimeout(timer)
       off()
+      offAttention()
       offConn()
       removeEventListener('popstate', onPop)
     })
@@ -129,6 +135,18 @@ export function App() {
   const sortedTerminals = createMemo(() =>
     [...terminals()].sort((a, b) => a.root.localeCompare(b.root) || a.createdAt - b.createdAt),
   )
+  // Looking at a chat reads it, including a turn that ends while you watch.
+  createEffect(() => {
+    const id = current()
+    if (id && looking() && attention()[id] === 'unread') socket.send({ type: 'seen', sessionId: id })
+  })
+  // Archived chats are put away, so they don't count.
+  const needsYou = createMemo(() => {
+    const archived = new Set(sessions().flatMap((s) => (s.archived ? [s.id] : [])))
+    return Object.keys(attention()).filter((id) => !archived.has(id)).length
+  })
+  createEffect(() => (document.title = needsYou() ? `(${needsYou()}) Badger` : 'Badger'))
+
   const active = createMemo(() => sessions().filter((s) => !s.archived))
   const archived = createMemo(() => sessions().filter((s) => s.archived))
   const [showArchived, setShowArchived] = createSignal(false)
@@ -165,14 +183,16 @@ export function App() {
             <div class="flex items-center gap-2">
               <span
                 class={`min-w-0 flex-1 truncate text-[13px] ${
-                  s().id === current() ? 'text-fg' : s().archived ? 'text-fg-3 group-hover:text-fg' : 'text-fg-2 group-hover:text-fg'
+                  s().id === current() || attention()[s().id]
+                    ? 'text-fg'
+                    : s().archived
+                      ? 'text-fg-3 group-hover:text-fg'
+                      : 'text-fg-2 group-hover:text-fg'
                 }`}
               >
                 {s().title}
               </span>
-              <Show when={s().running}>
-                <LiveDot />
-              </Show>
+              <ChatDot running={s().running} attention={attention()[s().id]} />
             </div>
             <div class="mt-0.5 flex gap-1.5 text-[11px] text-fg-3 tabular-nums">
               <span class="truncate">{s().cwd && folderLabel(s().cwd!)}</span>
@@ -257,6 +277,22 @@ export function App() {
           <Show when={!connected()}>
             <span class="text-xs text-fg-3">Reconnecting…</span>
           </Show>
+          <button
+            onClick={toggleNotifications}
+            disabled={notifications() === 'blocked'}
+            title={
+              notifications() === 'on'
+                ? 'Notifications on: chats that finish or need you while you’re away'
+                : notifications() === 'blocked'
+                  ? 'Notifications are blocked in this browser, or need https'
+                  : 'Turn on notifications'
+            }
+            class="ml-auto grid size-7 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg disabled:opacity-40"
+          >
+            <Show when={notifications() === 'on'} fallback={<BellOff class="size-4" />}>
+              <Bell class="size-4" />
+            </Show>
+          </button>
         </div>
         <div class="px-2 pb-3">
           <button

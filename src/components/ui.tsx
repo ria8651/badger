@@ -1,5 +1,6 @@
 import { For, Show, createSignal, createUniqueId, onCleanup, splitProps, type JSX } from 'solid-js'
 import { Check, ChevronDown } from 'lucide-solid'
+import type { AttentionState } from '../../shared/protocol.ts'
 
 /** Ink-filled when primary; otherwise a hairline outline. */
 export function Button(props: JSX.ButtonHTMLAttributes<HTMLButtonElement> & { primary?: boolean }) {
@@ -31,6 +32,25 @@ export const inputClass =
 /** A pulsing dot in the accent colour: something is live. */
 export function LiveDot(props: { class?: string }) {
   return <span class={`inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-accent ${props.class ?? ''}`} />
+}
+
+/**
+ * A chat's state at a glance: a ringed dot when it's waiting on the user,
+ * pulsing while it works, an ink dot when it finished and hasn't been looked at.
+ */
+export function ChatDot(props: { running?: boolean; attention?: AttentionState; class?: string }) {
+  return (
+    <Show
+      when={props.attention !== 'waiting'}
+      fallback={<span title="Needs your input" class={`inline-block size-2 shrink-0 rounded-full bg-accent ring-2 ring-accent/25 ${props.class ?? ''}`} />}
+    >
+      <Show when={!props.running} fallback={<LiveDot class={props.class} />}>
+        <Show when={props.attention === 'unread'}>
+          <span title="Finished" class={`inline-block size-1.5 shrink-0 rounded-full bg-fg ${props.class ?? ''}`} />
+        </Show>
+      </Show>
+    </Show>
+  )
 }
 
 /**

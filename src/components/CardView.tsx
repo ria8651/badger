@@ -6,7 +6,8 @@ import { folderLabel, isScratch, worktreeOf } from '../folders.ts'
 import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
 import { RenameChat } from './RenameChat.tsx'
-import { LiveDot, Menu, Select } from './ui.tsx'
+import { ChatDot, Menu, Select } from './ui.tsx'
+import { attention } from '../attention.ts'
 
 const STATUS_OPTIONS = CARD_STATUSES.map((value) => ({ value, label: STATUS_LABELS[value] }))
 
@@ -139,9 +140,7 @@ export function CardView(props: {
                 >
                   <button onClick={() => props.onOpenChat(s.id)} class="flex min-w-0 flex-1 items-center gap-2 py-2.5 text-left">
                     <span class="min-w-0 flex-1 truncate text-[13px] text-fg-2 group-hover:text-fg">{s.title}</span>
-                    <Show when={s.running}>
-                      <LiveDot />
-                    </Show>
+                    <ChatDot running={s.running} attention={attention()[s.id]} />
                     <span class="shrink-0 text-[11px] text-fg-3">{s.cwd && folderLabel(s.cwd)}</span>
                   </button>
                   <button

@@ -3,7 +3,8 @@ import { GitBranch, MessageSquare, Plus } from 'lucide-solid'
 import { CARD_STATUSES, type Card, type CardStatus, type SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { folderLabel, worktreeOf } from '../folders.ts'
-import { LiveDot, inputClass } from './ui.tsx'
+import { ChatDot, inputClass } from './ui.tsx'
+import { attention } from '../attention.ts'
 
 export const STATUS_LABELS: Record<CardStatus, string> = {
   backlog: 'Backlog',
@@ -88,6 +89,11 @@ export function Board(props: {
                 <For each={column(status)}>
                   {(card) => {
                     const chats = () => props.sessions.filter((s) => card.sessionIds.includes(s.id))
+                    // The most urgent of its chats'.
+                    const cardAttention = () => {
+                      const states = card.sessionIds.map((id) => attention()[id])
+                      return states.includes('waiting') ? 'waiting' : states.includes('unread') ? 'unread' : undefined
+                    }
                     const worktrees = () => [...new Set(chats().flatMap((s) => (s.cwd && !s.gone && worktreeOf(s.cwd) ? [s.cwd] : [])))]
                     return (
                       <>
@@ -132,9 +138,7 @@ export function Board(props: {
                                 <GitBranch class="size-3" />
                               </span>
                             </Show>
-                            <Show when={chats().some((s) => s.running)}>
-                              <LiveDot class="ml-auto" />
-                            </Show>
+                            <ChatDot class="ml-auto" running={chats().some((s) => s.running)} attention={cardAttention()} />
                           </div>
                         </button>
                       </>

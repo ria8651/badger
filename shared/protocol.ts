@@ -41,6 +41,12 @@ export interface BackgroundTask {
   description: string
 }
 
+/**
+ * Why a chat needs the user: a prompt or question is waiting on them, or a
+ * turn ended that they haven't looked at yet.
+ */
+export type AttentionState = 'waiting' | 'unread'
+
 export interface SessionSummary {
   id: string
   title: string
@@ -150,6 +156,8 @@ export type ClientEvent =
     }
   /** Answers picked so far in a pending AskUserQuestion; replaces what's saved. */
   | { type: 'answer_draft'; sessionId: string; requestId: string; answers: AnswerDraft }
+  /** The user is looking at this chat, so it's no longer unread. */
+  | { type: 'seen'; sessionId: string }
   | { type: 'term_subscribe'; id: string }
   | { type: 'term_unsubscribe'; id: string }
   | { type: 'term_input'; id: string; data: string }
@@ -193,6 +201,8 @@ export type ServerEvent =
   /** The chat started a child chat from a tool call; it's shown inside that call. */
   | { type: 'child_started'; sessionId: string; toolUseId: string; childId: string }
   | { type: 'sessions_changed' }
+  /** Every chat that needs the user, by id; sent on connect and whenever it changes. Children count as their parent. */
+  | { type: 'attention'; chats: Record<string, AttentionState> }
   | { type: 'cards_changed' }
   /** Every terminal; sent on connect and whenever any of them changes. */
   | { type: 'terminals'; terminals: TerminalInfo[] }

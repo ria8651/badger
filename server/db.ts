@@ -64,6 +64,11 @@ const MIGRATIONS = [
    CREATE INDEX child_sessions_parent ON child_sessions(parent_session);`,
   // Pastes and images waiting in a chat's composer, as JSON DraftAttachments.
   `ALTER TABLE session_drafts ADD COLUMN attachments TEXT;`,
+  // Chats whose turn ended since anyone last looked at them. One user for now, so one set.
+  `CREATE TABLE unread_sessions (
+     session_id TEXT PRIMARY KEY,
+     at INTEGER NOT NULL
+   );`,
 ]
 
 interface CardRow {
@@ -285,6 +290,25 @@ export class Store {
           'INSERT INTO session_drafts (session_id, text, attachments, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET text = excluded.text, attachments = excluded.attachments, updated_at = excluded.updated_at',
         )
         .run(sessionId, text, attached ? JSON.stringify(attachments) : null, Date.now())
+  }
+
+  unreadIds(): Set<string> {
+    const rows = this.db.prepare('SELECT session_id FROM unread_sessions').all() as { session_id: string }[]
+    return new Set(rows.map((r) => r.session_id))
+  }
+
+  /** Returns whether anything changed. */
+  setUnread(sessionId: string, unread: boolean): boolean {
+    const result = unread
+      ? this.db.prepare('INSERT INTO unread_sessions (session_id, at) VALUES (?, ?) ON CONFLICT DO NOTHING').run(sessionId, Date.now())
+      : this.db.prepare('DELETE FROM unread_sessions WHERE session_id = ?').run(sessionId)
+    return result.changes > 0
+  }
+
+  /** The chat that started this one, if it's a child. */
+  parentOf(sessionId: string): string | undefined {
+    const row = this.db.prepare('SELECT parent_session FROM child_sessions WHERE session_id = ?').get(sessionId) as { parent_session: string } | undefined
+    return row?.parent_session
   }
 
   addChild(child: { sessionId: string; parentId: string; toolUseId: string; kind: string }): void {
