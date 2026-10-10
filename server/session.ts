@@ -15,7 +15,7 @@ import {
   type Query,
   type SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk'
-import type { BackgroundTask, ImageAttachment, PendingPermission, PermissionMode, ServerEvent, WireMessage } from '../shared/protocol.ts'
+import type { AnswerDraft, BackgroundTask, ImageAttachment, ModelOption, PendingPermission, PermissionMode, ServerEvent, WireMessage } from '../shared/protocol.ts'
 import { wrapPaste } from '../shared/pastes.ts'
 import { BashStreams, streamEnv } from './bashStream.ts'
 import { MessageQueue } from './queue.ts'
@@ -47,6 +47,8 @@ export class LiveSession {
   /** Changes when Claude moves into or out of a worktree. */
   cwd: string
   mode: PermissionMode
+  /** What the chat was started with or switched to; otherwise what Claude Code reports it's using. */
+  model?: string
   running = false
 
   private queue = new MessageQueue()
@@ -73,6 +75,7 @@ export class LiveSession {
     id: string
     cwd: string
     mode: PermissionMode
+    model?: string
     resume: boolean
     /** Start a new session in this worktree (Claude Code's --worktree); empty lets Claude name it. */
     worktree?: string
@@ -83,6 +86,7 @@ export class LiveSession {
     this.id = opts.id
     this.cwd = opts.cwd
     this.mode = opts.mode
+    this.model = opts.model
     this.onClose = opts.onClose
     this.onCwd = opts.onCwd
     this.bash = new BashStreams(this.id, (toolUseId, chunk) =>
@@ -95,6 +99,7 @@ export class LiveSession {
         cwd: this.cwd,
         ...(opts.resume ? { resume: this.id } : { sessionId: this.id }),
         permissionMode: this.mode,
+        ...(opts.model && opts.model !== 'default' ? { model: opts.model } : {}),
         allowDangerouslySkipPermissions: true,
         includePartialMessages: true,
         // A one-line "what it's doing" for each running subagent, every ~30s.
@@ -186,6 +191,7 @@ export class LiveSession {
       messages,
       running: this.running,
       mode: this.mode,
+      model: this.model,
       cwd: this.cwd,
       permissions: [...this.pending.values()].map(publicPermission),
       bashOutput: this.bash.outputs(),
@@ -228,6 +234,12 @@ export class LiveSession {
     this.emitStatus()
   }
 
+  async setModel(model: string): Promise<void> {
+    await this.agent.setModel(model === 'default' ? undefined : model)
+    this.model = model
+    this.emitStatus()
+  }
+
   resolvePermission(
     requestId: string,
     decision: 'allow' | 'allow_always' | 'deny',
@@ -245,6 +257,14 @@ export class LiveSession {
         ...(decision === 'allow_always' && p.suggestions ? { updatedPermissions: p.suggestions } : {}),
       })
     }
+  }
+
+  /** Keeps answers picked so far with the pending question. False if it's no longer pending. */
+  draftAnswers(requestId: string, answers: AnswerDraft): boolean {
+    const p = this.pending.get(requestId)
+    if (!p) return false
+    p.answers = answers
+    return true
   }
 
   /**
@@ -313,7 +333,13 @@ export class LiveSession {
       return
     }
     // With --worktree, Claude Code reports where it actually ended up.
-    if (msg.type === 'system' && msg.subtype === 'init') this.setCwd(msg.cwd)
+    if (msg.type === 'system' && msg.subtype === 'init') {
+      this.setCwd(msg.cwd)
+      if (!this.model && msg.model) {
+        this.model = msg.model
+        this.emitStatus()
+      }
+    }
     if (msg.type === 'system' && 'permissionMode' in msg && msg.permissionMode) {
       const mode = msg.permissionMode as PermissionMode
       if (mode !== this.mode) {
@@ -369,7 +395,7 @@ export class LiveSession {
   }
 
   private emitStatus(): void {
-    this.emit({ type: 'status', sessionId: this.id, running: this.running, mode: this.mode, cwd: this.cwd })
+    this.emit({ type: 'status', sessionId: this.id, running: this.running, mode: this.mode, model: this.model, cwd: this.cwd })
   }
 
   private emit(event: ServerEvent): void {
@@ -521,6 +547,39 @@ function toolResultIds(m: WireMessage): string[] {
   return content.filter((b) => b?.type === 'tool_result' && b.tool_use_id).map((b) => b.tool_use_id as string)
 }
 
+/** The model a transcript's main agent last answered with: a model id, e.g. `claude-opus-5-5`. */
+export function transcriptModel(messages: WireMessage[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    const model = m.type === 'assistant' && !m.parent_tool_use_id && (m.message as { model?: string } | undefined)?.model
+    // API errors are recorded as answers from a "<synthetic>" model.
+    if (model && !model.startsWith('<')) return model
+  }
+  return undefined
+}
+
+let models: Promise<ModelOption[]> | undefined
+
+/**
+ * The models Claude Code offers this account, asked once of a process that's
+ * started for it and closed again; nothing is sent to the API.
+ */
+export function listModels(): Promise<ModelOption[]> {
+  models ??= (async () => {
+    const idle: AsyncIterable<never> = { [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }) }
+    const q = query({ prompt: idle, options: { cwd: homedir(), settingSources: ['user'], persistSession: false } })
+    try {
+      const { models } = await q.initializationResult()
+      return models.map(({ value, resolvedModel, displayName, description }) => ({ value, resolvedModel, displayName, description }))
+    } finally {
+      q.close()
+    }
+  })()
+  // Ask again next time rather than keep a failure.
+  models.catch(() => (models = undefined))
+  return models
+}
+
 function publicPermission({ resolve: _r, suggestions: _s, ...rest }: Pending): PendingPermission {
   return rest
 }
@@ -553,7 +612,7 @@ export class SessionManager {
     return [...this.sessions.values()].filter((s) => s.cwd === cwd)
   }
 
-  async open(id: string, opts: { cwd?: string; mode?: PermissionMode; worktree?: string }): Promise<LiveSession> {
+  async open(id: string, opts: { cwd?: string; mode?: PermissionMode; model?: string; worktree?: string }): Promise<LiveSession> {
     const existing = this.sessions.get(id)
     if (existing) return existing
 
@@ -565,6 +624,7 @@ export class SessionManager {
       id,
       cwd,
       mode: opts.mode ?? 'auto',
+      model: opts.model,
       resume: !!info,
       // Only a new chat can start in a new worktree; a resumed one already runs where it left off.
       worktree: info ? undefined : opts.worktree,

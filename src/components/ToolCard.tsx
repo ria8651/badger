@@ -86,6 +86,50 @@ export function resultText(content: unknown): string {
   return content == null ? '' : JSON.stringify(content, null, 2)
 }
 
+export interface Question {
+  question: string
+  header: string
+  multiSelect: boolean
+  options: { label: string; description: string; preview?: string }[]
+}
+
+/**
+ * The answers to an AskUserQuestion call. Reloaded transcripts only have the text
+ * Claude saw, `"question"="answer", …`, so that's split on the questions it asked.
+ */
+function questionAnswers(questions: Question[], result: ToolResult): (string | undefined)[] | undefined {
+  const structured = (result.structured as { answers?: Record<string, string> } | undefined)?.answers
+  if (structured) return questions.map((q) => structured[q.question])
+  const text = resultText(result.content)
+  const starts = questions.map((q) => {
+    const at = text.indexOf(`"${q.question}"="`)
+    return at < 0 ? -1 : at + q.question.length + 4
+  })
+  if (starts.every((s) => s < 0)) return undefined
+  return starts.map((start, i) => {
+    if (start < 0) return undefined
+    const next = starts.slice(i + 1).find((s) => s >= 0)
+    const end = next === undefined ? text.indexOf('".', start) : text.lastIndexOf('", "', next)
+    return text.slice(start, end < start ? undefined : end)
+  })
+}
+
+/** What the user answered, laid out like the questions were. */
+function Answers(props: { questions: Question[]; answers: (string | undefined)[] }) {
+  return (
+    <div class="my-3 space-y-2.5 border-l-2 border-line pl-4 text-[13px]">
+      <For each={props.questions}>
+        {(q, i) => (
+          <div>
+            <div class="text-fg-3 whitespace-pre-wrap">{q.question}</div>
+            <div class="mt-0.5 whitespace-pre-wrap text-fg">{props.answers[i()] ?? '—'}</div>
+          </div>
+        )}
+      </For>
+    </div>
+  )
+}
+
 export function ToolInput(props: { name: string; input: Input }) {
   return (
     <Switch fallback={<Pre text={JSON.stringify(props.input, null, 2)} />}>
@@ -179,35 +223,48 @@ export function ToolCard(props: {
           ? 'running'
           : 'stopped'
 
+  const questions = () => (props.input.questions as Question[] | undefined) ?? []
+  const answers = () =>
+    props.name === 'AskUserQuestion' && props.result && !props.result.isError
+      ? questionAnswers(questions(), props.result)
+      : undefined
+
   return (
-    <Show when={props.name !== 'TodoWrite'} fallback={<Todos todos={(props.input.todos as TodoItem[]) ?? []} />}>
-      <Disclosure
-        id={props.id}
-        label={toolLabel(props.name)}
-        detail={toolSummary(props.name, props.input, props.cwd)}
-        trailing={
-          <>
-            {/* Success is the norm and stays silent; only work in progress and failures show. */}
-            <Switch>
-              <Match when={status() === 'running'}>
-                <Loader2 class="size-3.5 shrink-0 animate-spin text-fg-3" />
-              </Match>
-              <Match when={status() === 'error'}>
-                <span class="shrink-0 text-xs text-danger">Failed</span>
-              </Match>
-            </Switch>
-          </>
-        }
-        live={status() === 'running'}
-        peek={live() && <LiveOutput text={live()!} class="max-h-40" />}
-      >
-        <ToolInput name={props.name} input={props.input} />
-        <Show when={live()}>{(text) => <LiveOutput text={text()} class="max-h-96" />}</Show>
-        <Show when={props.result}>
-          {(r) => <Pre text={resultText(r().content) || '(no output)'} class={r().isError ? 'text-danger' : ''} />}
-        </Show>
-      </Disclosure>
-    </Show>
+    <Switch
+      fallback={
+        <Disclosure
+          id={props.id}
+          label={toolLabel(props.name)}
+          detail={toolSummary(props.name, props.input, props.cwd)}
+          trailing={
+            <>
+              {/* Success is the norm and stays silent; only work in progress and failures show. */}
+              <Switch>
+                <Match when={status() === 'running'}>
+                  <Loader2 class="size-3.5 shrink-0 animate-spin text-fg-3" />
+                </Match>
+                <Match when={status() === 'error'}>
+                  <span class="shrink-0 text-xs text-danger">Failed</span>
+                </Match>
+              </Switch>
+            </>
+          }
+          live={status() === 'running'}
+          peek={live() && <LiveOutput text={live()!} class="max-h-40" />}
+        >
+          <ToolInput name={props.name} input={props.input} />
+          <Show when={live()}>{(text) => <LiveOutput text={text()} class="max-h-96" />}</Show>
+          <Show when={props.result}>
+            {(r) => <Pre text={resultText(r().content) || '(no output)'} class={r().isError ? 'text-danger' : ''} />}
+          </Show>
+        </Disclosure>
+      }
+    >
+      <Match when={props.name === 'TodoWrite'}>
+        <Todos todos={(props.input.todos as TodoItem[]) ?? []} />
+      </Match>
+      <Match when={answers()}>{(a) => <Answers questions={questions()} answers={a()} />}</Match>
+    </Switch>
   )
 }
 

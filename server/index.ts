@@ -4,12 +4,12 @@ import { homedir } from 'node:os'
 import { extname, isAbsolute, join, resolve } from 'node:path'
 import { getSessionInfo, listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { IMAGE_TYPES, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
+import { IMAGE_TYPES, type AnswerDraft, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
 import { BOARD_AUTO_ALLOWED, BOARD_SERVER, boardServer, cardContext } from './boardTools.ts'
 import { Children } from './children.ts'
 import { type Actor, BadRequest, type Draft, Store } from './db.ts'
 import { MERGE_TOOL, mergeTool } from './merge.ts'
-import { SessionManager, diskTranscript } from './session.ts'
+import { SessionManager, diskTranscript, listModels, transcriptModel } from './session.ts'
 import { TERMINAL_AUTO_ALLOWED, TERMINAL_SERVER, terminalServer } from './terminalTools.ts'
 import { Terminals, shellEnv } from './terminals.ts'
 import { suggestTitle } from './titles.ts'
@@ -134,6 +134,7 @@ async function snapshotFor(sessionId: string): Promise<ServerEvent> {
     messages,
     running: false,
     mode: 'auto',
+    model: transcriptModel(messages),
     cwd: info?.cwd,
     permissions: [],
     bashOutput: {},
@@ -165,6 +166,17 @@ function checkAttachments(a: Partial<DraftAttachments>): DraftAttachments {
   return { pastes, images }
 }
 
+/** Checks question answers from a client, throwing on anything malformed. */
+function checkAnswers(a: Partial<AnswerDraft> | undefined): AnswerDraft {
+  const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+  const { picked = {}, other = {} } = a ?? {}
+  if (!isRecord(picked) || Object.values(picked).some((l) => !Array.isArray(l) || l.some((s) => typeof s !== 'string'))) {
+    throw new BadRequest('picked must map questions to lists of labels')
+  }
+  if (!isRecord(other) || Object.values(other).some((s) => typeof s !== 'string')) throw new BadRequest('other must map questions to text')
+  return { picked, other } as AnswerDraft
+}
+
 async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
   switch (event.type) {
     case 'subscribe': {
@@ -189,7 +201,8 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
           throw new Error(`${event.cwd} isn't a git repository, so it can't have worktrees`)
         })
       }
-      const session = await manager.open(event.sessionId, { cwd: event.cwd, mode: event.mode, worktree: event.worktree })
+      if (event.model !== undefined && typeof event.model !== 'string') throw new BadRequest('model must be a string')
+      const session = await manager.open(event.sessionId, { cwd: event.cwd, mode: event.mode, model: event.model, worktree: event.worktree })
       if (isNew) session.subscribe(broadcast)
       if (!session.send(event.text, pastes, images)) throw new Error('Session is closed; try again')
       return
@@ -207,9 +220,22 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
     case 'set_mode':
       await manager.get(event.sessionId)?.setMode(event.mode)
       return
+    case 'set_model':
+      if (typeof event.model !== 'string') throw new BadRequest('model must be a string')
+      // A chat that isn't running takes the model with its next message.
+      await manager.get(event.sessionId)?.setModel(event.model)
+      return
     case 'permission':
       manager.get(event.sessionId)?.resolvePermission(event.requestId, event.decision, event.message, event.updatedInput)
       return
+    case 'answer_draft': {
+      const answers = checkAnswers(event.answers)
+      // Shown to the chat's other viewers; the one answering already has it.
+      if (!manager.get(event.sessionId)?.draftAnswers(event.requestId, answers)) return
+      const update: ServerEvent = { type: 'answer_draft', sessionId: event.sessionId, requestId: event.requestId, answers }
+      for (const other of viewers.get(event.sessionId) ?? []) if (other !== ws) send(other, update)
+      return
+    }
     case 'term_subscribe':
       subscribeTerminal(ws, event.id)
       return
@@ -413,6 +439,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/config') return json(200, { defaultCwd: WORKSPACE_DIR, scratchCwd: SCRATCH_DIR })
     if (url.pathname.startsWith('/api/')) {
       if (url.pathname === '/api/sessions') return json(200, await sessionList())
+      if (url.pathname === '/api/models') return json(200, await listModels())
       if (url.pathname === '/api/workspace') {
         const cwd = url.searchParams.get('cwd')
         if (!cwd) throw new BadRequest('cwd is required')

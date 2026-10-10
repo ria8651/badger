@@ -1,9 +1,10 @@
-import { For, Match, Show, Switch, createSignal, type JSX } from 'solid-js'
-import { createStore } from 'solid-js/store'
-import type { PendingPermission, PermissionMode } from '../../shared/protocol.ts'
+import { For, Match, Show, Switch, createEffect, createSignal, on, onCleanup, type JSX } from 'solid-js'
+import { createStore, reconcile } from 'solid-js/store'
+import { Check } from 'lucide-solid'
+import type { AnswerDraft, PendingPermission, PermissionMode } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
 import { Markdown } from './Markdown.tsx'
-import { ToolInput, relPath, toolLabel, toolSummary } from './ToolCard.tsx'
+import { ToolInput, relPath, toolLabel, toolSummary, type Question } from './ToolCard.tsx'
 import { Button, inputClass } from './ui.tsx'
 
 export function PermissionPrompt(props: {
@@ -55,7 +56,10 @@ export function PermissionPrompt(props: {
       <Match when={p().toolName === 'AskUserQuestion'}>
         <QuestionPrompt
           from={props.from}
+          sessionId={props.sessionId}
+          requestId={p().requestId}
           input={p().input}
+          draft={p().answers}
           onAnswer={(answers) => respond('allow', { ...p().input, answers })}
           onSkip={() => respond('deny')}
         />
@@ -78,77 +82,158 @@ export function PermissionPrompt(props: {
   )
 }
 
-interface Question {
-  question: string
-  header: string
-  multiSelect: boolean
-  options: { label: string; description: string }[]
-}
+/** A plain copy of store data, which structuredClone can't take. */
+const copy = <T,>(value: T): T => JSON.parse(JSON.stringify(value))
 
+/**
+ * Every question at once, so ones that depend on each other can be read together.
+ * The questions scroll inside a capped height so the buttons stay on screen.
+ * Half-finished answers are saved with the pending question on the server, so they
+ * survive reloads and switching chats, and every tab shows the same ones.
+ */
 function QuestionPrompt(props: {
   from?: string
+  sessionId: string
+  requestId: string
   input: Record<string, unknown>
+  /** Saved answers; changes when another tab edits them. */
+  draft?: AnswerDraft
   onAnswer: (answers: Record<string, string>) => void
   onSkip: () => void
 }) {
   const questions = () => (props.input.questions as Question[]) ?? []
-  const [picked, setPicked] = createStore<Record<string, string[]>>({})
-  const [other, setOther] = createStore<Record<string, string>>({})
+  const [picked, setPicked] = createStore<Record<string, string[]>>(copy(props.draft?.picked ?? {}))
+  const [other, setOther] = createStore<Record<string, string>>(copy(props.draft?.other ?? {}))
+
+  let saveTimer: ReturnType<typeof setTimeout> | undefined
+  let unsaved = false
+  const save = () => {
+    clearTimeout(saveTimer)
+    if (!unsaved) return
+    unsaved = false
+    const answers = copy({ picked, other })
+    socket.send({ type: 'answer_draft', sessionId: props.sessionId, requestId: props.requestId, answers })
+  }
+  const edited = () => {
+    unsaved = true
+    clearTimeout(saveTimer)
+    saveTimer = setTimeout(save, 300)
+  }
+  onCleanup(save)
+  // Another tab's edit never overwrites what's picked here and not yet saved.
+  createEffect(
+    on(
+      () => props.draft,
+      (draft) => {
+        if (!draft || unsaved) return
+        setPicked(reconcile(copy(draft.picked)))
+        setOther(reconcile(copy(draft.other)))
+      },
+      { defer: true },
+    ),
+  )
 
   const toggle = (q: Question, label: string) => {
     const cur = picked[q.question] ?? []
-    if (!q.multiSelect) setPicked(q.question, [label])
-    else setPicked(q.question, cur.includes(label) ? cur.filter((l) => l !== label) : [...cur, label])
+    if (q.multiSelect) setPicked(q.question, cur.includes(label) ? cur.filter((l) => l !== label) : [...cur, label])
+    else setPicked(q.question, cur.includes(label) ? [] : [label])
+    edited()
   }
 
-  const answer = (q: Question) => [...(picked[q.question] ?? []), other[q.question]?.trim()].filter(Boolean).join(', ')
-  const complete = () => questions().every((q) => answer(q))
+  // With an option picked, the text box is a note on it rather than another answer.
+  const answer = (q: Question) => {
+    const labels = (picked[q.question] ?? []).join(', ')
+    const note = other[q.question]?.trim() ?? ''
+    return labels && note ? `${labels} — ${note}` : labels || note
+  }
+  const unanswered = () => questions().filter((q) => !answer(q)).length
+
+  const submit = () => {
+    clearTimeout(saveTimer)
+    unsaved = false
+    props.onAnswer(Object.fromEntries(questions().map((q) => [q.question, answer(q) || 'No answer'])))
+  }
 
   return (
-    <Shell from={props.from} title="Claude has a question">
-      <For each={questions()}>
-        {(q) => (
-          <div class="space-y-2">
-            <p class="text-fg">{q.question}</p>
-            <div class="grid gap-1.5">
-              <For each={q.options}>
-                {(o) => (
-                  <button
-                    onClick={() => toggle(q, o.label)}
-                    class={`border px-3 py-2 text-left transition-colors rounded-lg ${
-                      picked[q.question]?.includes(o.label) ? 'border-fg-3 bg-surface' : 'border-line hover:bg-surface/60'
-                    }`}
-                  >
-                    <div class="text-fg">{o.label}</div>
-                    <Show when={o.description}>
-                      <div class="mt-0.5 text-xs text-fg-3">{o.description}</div>
-                    </Show>
-                  </button>
-                )}
-              </For>
-              <input
-                value={other[q.question] ?? ''}
-                onInput={(e) => {
-                  const value = e.currentTarget.value
-                  setOther(q.question, value)
-                  if (!q.multiSelect && value) setPicked(q.question, [])
-                }}
-                placeholder="Other…"
-                class={inputClass}
-              />
-            </div>
-          </div>
-        )}
-      </For>
-      <div class="flex gap-2 pt-1">
-        <Button
-          primary
-          disabled={!complete()}
-          onClick={() => props.onAnswer(Object.fromEntries(questions().map((q) => [q.question, answer(q)])))}
-        >
+    <Shell from={props.from} title={questions().length > 1 ? `Claude has ${questions().length} questions` : 'Claude has a question'}>
+      <div class="-mx-4 max-h-[60vh] space-y-5 overflow-y-auto px-4">
+        <For each={questions()}>
+          {(q) => {
+            // Only the picked option's preview: following the pointer would reflow the options under it.
+            const preview = () => q.options.find((o) => o.label === picked[q.question]?.[0])?.preview
+            return (
+              <div class="space-y-2">
+                <div class="flex items-baseline gap-2">
+                  <Show when={q.header && questions().length > 1}>
+                    <span class="shrink-0 text-xs text-fg-3">{q.header}</span>
+                  </Show>
+                  <p class="min-w-0 whitespace-pre-wrap text-fg">{q.question}</p>
+                </div>
+                <Show when={q.multiSelect}>
+                  <p class="text-xs text-fg-3">Pick any that apply.</p>
+                </Show>
+                <div class="grid gap-1.5">
+                  <For each={q.options}>
+                    {(o) => {
+                      const on = () => picked[q.question]?.includes(o.label)
+                      return (
+                        <button
+                          onClick={() => toggle(q, o.label)}
+                          class={`flex items-start gap-2.5 border px-3 py-2 text-left transition-colors rounded-lg ${
+                            on() ? 'border-fg-3 bg-surface' : 'border-line hover:bg-surface/60'
+                          }`}
+                        >
+                          <span
+                            class={`mt-0.5 grid size-3.5 shrink-0 place-items-center border ${
+                              q.multiSelect ? 'rounded' : 'rounded-full'
+                            } ${on() ? 'border-fg bg-fg text-bg' : 'border-edge'}`}
+                          >
+                            <Show when={on()}>
+                              <Check size={10} stroke-width={3} />
+                            </Show>
+                          </span>
+                          <span class="min-w-0">
+                            <span class="block text-fg">{o.label}</span>
+                            <Show when={o.description}>
+                              <span class="mt-0.5 block text-xs text-fg-3">{o.description}</span>
+                            </Show>
+                          </span>
+                        </button>
+                      )
+                    }}
+                  </For>
+                  <textarea
+                    value={other[q.question] ?? ''}
+                    onInput={(e) => {
+                      setOther(q.question, e.currentTarget.value)
+                      edited()
+                    }}
+                    placeholder={picked[q.question]?.length ? 'Add a note…' : 'Other…'}
+                    rows={1}
+                    class={`${inputClass} block h-auto min-h-8 resize-none py-1.5 leading-5 [field-sizing:content]`}
+                  />
+                </div>
+                <Show when={preview()}>
+                  {(text) => (
+                    <div class="border border-line px-4 py-3 rounded-lg">
+                      <Markdown text={text()} />
+                    </div>
+                  )}
+                </Show>
+              </div>
+            )
+          }}
+        </For>
+      </div>
+      <div class="flex flex-wrap items-center gap-2 pt-1">
+        {/* Unanswered questions go back as "No answer"; Skip declines the whole set. */}
+        <Button primary disabled={unanswered() === questions().length} onClick={submit}>
           Submit
         </Button>
-        <Button onClick={props.onSkip}>Skip</Button>
+        <Button onClick={props.onSkip}>{questions().length > 1 ? 'Skip all' : 'Skip'}</Button>
+        <Show when={unanswered() && questions().length > 1}>
+          <span class="ml-auto text-xs tabular-nums text-fg-3">{unanswered()} unanswered</span>
+        </Show>
       </div>
     </Shell>
   )

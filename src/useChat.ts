@@ -17,6 +17,8 @@ export interface ChatState {
   partial: Partial | null
   running: boolean
   mode: PermissionMode
+  /** Absent for a chat that hasn't run yet. */
+  model?: string
   cwd?: string
   permissions: PendingPermission[]
   /** Live output of running Bash commands, by tool_use_id. */
@@ -38,6 +40,7 @@ function apply(state: ChatState, event: ServerEvent): void {
       state.messages = event.messages
       state.running = event.running
       state.mode = event.mode
+      state.model = event.model
       state.cwd = event.cwd
       state.permissions = event.permissions
       state.bashOutput = event.bashOutput
@@ -54,12 +57,18 @@ function apply(state: ChatState, event: ServerEvent): void {
     case 'status':
       state.running = event.running
       state.mode = event.mode
+      if (event.model) state.model = event.model
       state.cwd = event.cwd
       if (!event.running) state.partial = null
       break
     case 'permission_request':
       state.permissions.push(event.permission)
       break
+    case 'answer_draft': {
+      const p = state.permissions.find((p) => p.requestId === event.requestId)
+      if (p) p.answers = event.answers
+      break
+    }
     case 'permission_resolved':
       state.permissions = state.permissions.filter((p) => p.requestId !== event.requestId)
       break
