@@ -20,6 +20,8 @@ export interface ChatState {
   /** Absent for a chat that hasn't run yet. */
   model?: string
   cwd?: string
+  /** Its folder is gone or can't be opened, so it can't take messages. */
+  gone: boolean
   permissions: PendingPermission[]
   /** Live output of running Bash commands, by tool_use_id. */
   bashOutput: Record<string, string>
@@ -42,6 +44,7 @@ function apply(state: ChatState, event: ServerEvent): void {
       state.mode = event.mode
       state.model = event.model
       state.cwd = event.cwd
+      state.gone = !!event.gone
       state.permissions = event.permissions
       state.bashOutput = event.bashOutput
       state.children = event.children
@@ -127,6 +130,7 @@ export function createChat(sessionId: string) {
     partial: null,
     running: false,
     mode: 'auto',
+    gone: false,
     permissions: [],
     bashOutput: {},
     children: {},

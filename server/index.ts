@@ -13,7 +13,7 @@ import { SessionManager, diskTranscript, listModels, transcriptModel } from './s
 import { TERMINAL_AUTO_ALLOWED, TERMINAL_SERVER, terminalServer } from './terminalTools.ts'
 import { Terminals, shellEnv } from './terminals.ts'
 import { suggestTitle } from './titles.ts'
-import { excludeWorktrees, removeWorktree, workspaceRoot, worktreeStatus } from './workspace.ts'
+import { excludeWorktrees, inaccessible, removeWorktree, workspaceRoot, worktreeStatus } from './workspace.ts'
 
 // Terminals get the environment Badger was started with, before .env adds PORT and friends.
 const startEnv = shellEnv(process.env)
@@ -136,6 +136,7 @@ async function snapshotFor(sessionId: string): Promise<ServerEvent> {
     mode: 'auto',
     model: transcriptModel(messages),
     cwd: info?.cwd,
+    gone: !!info?.cwd && inaccessible(info.cwd),
     permissions: [],
     bashOutput: {},
     draft,
@@ -261,7 +262,7 @@ async function sessionList(): Promise<SessionSummary[]> {
   const exists = new Map<string, boolean>()
   const gone = (cwd?: string) => {
     if (!cwd) return false
-    if (!exists.has(cwd)) exists.set(cwd, existsSync(cwd))
+    if (!exists.has(cwd)) exists.set(cwd, !inaccessible(cwd))
     return !exists.get(cwd)
   }
   const summaries: SessionSummary[] = infos.filter((s) => !childIds.has(s.sessionId)).map((s) => ({

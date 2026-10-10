@@ -18,6 +18,7 @@ import {
 import type { AnswerDraft, BackgroundTask, ImageAttachment, ModelOption, PendingPermission, PermissionMode, ServerEvent, WireMessage } from '../shared/protocol.ts'
 import { wrapPaste } from '../shared/pastes.ts'
 import { BashStreams, streamEnv } from './bashStream.ts'
+import { inaccessible } from './workspace.ts'
 import { MessageQueue } from './queue.ts'
 
 /** Close an idle Claude Code process after this long; the next message resumes it. */
@@ -619,6 +620,8 @@ export class SessionManager {
     const info = await getSessionInfo(id)
     const cwd = info?.cwd ?? opts.cwd
     if (!cwd) throw new Error('Unknown session and no working directory given')
+    // Otherwise Claude Code fails to start with a misleading "binary failed to launch".
+    if (info && inaccessible(cwd)) throw new Error(`This chat's folder is gone or can't be opened: ${cwd}`)
 
     const session = new LiveSession({
       id,

@@ -165,6 +165,8 @@ export type ServerEvent =
       /** A ModelOption value, or a model id from the transcript. Absent until the chat has run. */
       model?: string
       cwd?: string
+      /** Its folder is gone or can't be opened, e.g. a worktree removed after merging, so it can't run. */
+      gone?: boolean
       permissions: PendingPermission[]
       /** Output so far of Bash commands still running, by tool_use_id. */
       bashOutput: Record<string, string>

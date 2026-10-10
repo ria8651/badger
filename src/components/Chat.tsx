@@ -1,5 +1,5 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, mapArray, on, onCleanup, onMount } from 'solid-js'
-import { ArrowUp, Check, GitBranch, ImagePlus, ListChevronsDownUp, ListChevronsUpDown, Square, Zap } from 'lucide-solid'
+import { ArrowUp, Check, FolderX, GitBranch, ImagePlus, ListChevronsDownUp, ListChevronsUpDown, Square, Zap } from 'lucide-solid'
 import { isLongPaste } from '../../shared/pastes.ts'
 import type { BackgroundTask, Card, DraftAttachments, PermissionMode } from '../../shared/protocol.ts'
 import { chatActions } from '../actions.ts'
@@ -181,6 +181,7 @@ export function Chat(props: {
 
 
   const send = (value: string, attachments: DraftAttachments = NO_ATTACHMENTS) => {
+    if (state.gone) return
     const worktree = inWorktree() && canWorktree() ? (worktreeName() ?? '') : undefined
     socket.send({ type: 'send', sessionId: props.sessionId, text: value, ...attachments, cwd: cwd(), mode: mode(), model: model(), worktree })
     if (!started()) {
@@ -284,8 +285,17 @@ export function Chat(props: {
               <button onClick={clearError} class="opacity-70 hover:opacity-100">Dismiss</button>
             </div>
           </Show>
+          <Show when={state.gone}>
+            <div class="flex items-start gap-3 bg-surface rounded-lg px-3 py-2 text-[13px] text-fg-2">
+              <FolderX class="size-4 shrink-0 mt-0.5" />
+              <span class="flex-1">
+                This chat's folder is gone or can't be opened, so it can't take messages. <span class="text-fg-3 break-all">{cwd()}</span>
+              </span>
+            </div>
+          </Show>
           <div
-            class={`border transition-colors rounded-2xl focus-within:border-fg-3 ${dragging() ? 'border-fg-3' : 'border-edge'}`}
+            inert={state.gone}
+            class={`border transition-colors rounded-2xl focus-within:border-fg-3 ${dragging() ? 'border-fg-3' : 'border-edge'} ${state.gone ? 'opacity-50' : ''}`}
             onDragOver={(e) => {
               if (!e.dataTransfer?.types.includes('Files')) return
               e.preventDefault()

@@ -1,4 +1,5 @@
 import { execFile, execFileSync } from 'node:child_process'
+import { accessSync, constants, statSync } from 'node:fs'
 import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -10,6 +11,17 @@ export function workspaceRoot(cwd: string): string {
     return execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || cwd
   } catch {
     return cwd
+  }
+}
+
+/** A folder Claude Code can't run in: removed (like a merged worktree), not a folder, or not readable. */
+export function inaccessible(dir: string): boolean {
+  try {
+    if (!statSync(dir).isDirectory()) return true
+    accessSync(dir, constants.R_OK | constants.X_OK)
+    return false
+  } catch {
+    return true
   }
 }
 
