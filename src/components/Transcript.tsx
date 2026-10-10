@@ -629,10 +629,10 @@ function CardBadge(props: { card: { id: number; title: string; status: CardStatu
   )
 }
 
-/** Card context with no prompt to attach to, as a badge on the user's side linking to the card. */
+/** Card context with no prompt to attach to, as a badge under the user's message linking to the card. */
 function CardContextBadge(props: { context: CardContext }) {
   return (
-    <div class="-mt-2 mb-4 flex justify-end">
+    <div class="-mt-2 mb-4 -ml-3 flex justify-start">
       <Show when={props.context.card} fallback={<span class={`${badge} text-fg-3`}><Columns3 class="size-3.5" />No longer on a card</span>}>
         {(card) => <CardBadge card={card()} />}
       </Show>
@@ -640,14 +640,17 @@ function CardContextBadge(props: { context: CardContext }) {
   )
 }
 
-/** A user's message; long ones (big pastes) are clamped with a fade until expanded. */
+/**
+ * A user's message; long ones (big pastes) are clamped with a fade until expanded. Left-aligned, hanging
+ * its padding into the margin so the text lines up with Claude's.
+ */
 function UserMessage(props: { text: string; pastes?: string[]; images?: ImageAttachment[]; card?: CardContext }) {
   const [overflows, setOverflows] = createSignal(false)
   const [expanded, setExpanded] = createSignal(false)
   const clamped = () => overflows() && !expanded()
   return (
-    <div class="mt-8 mb-4 flex justify-end first:mt-0">
-      <div class="max-w-[80%] min-w-0 bg-surface rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed">
+    <div class="mt-8 mb-4 flex justify-start first:mt-0">
+      <div class="-ml-4 max-w-[80%] min-w-0 bg-surface rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed">
         <Show when={props.pastes?.length || props.images?.length || props.card}>
           <Attachments pastes={props.pastes ?? []} images={props.images ?? []} card={props.card} class={props.text ? 'mb-2' : ''} />
         </Show>

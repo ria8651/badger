@@ -77,6 +77,7 @@ export function Chat(props: {
   const canWorktree = () => !started() && !state.cwd && !!cwd() && !isScratch(cwd()) && !worktreeOf(cwd())
   let scroller!: HTMLDivElement
   let content!: HTMLDivElement
+  let composer!: HTMLDivElement
   let input!: HTMLTextAreaElement
   let pinned = true
   let lastTop = 0
@@ -192,6 +193,7 @@ export function Chat(props: {
     // Follow anything that changes size while stuck: messages, streaming, blocks opening, the composer.
     const observer = new ResizeObserver(() => pinned && toBottom())
     observer.observe(content)
+    observer.observe(composer)
     observer.observe(scroller)
     onCleanup(() => observer.disconnect())
   })
@@ -236,15 +238,17 @@ export function Chat(props: {
 
   return (
     <div class="flex h-full min-w-0 flex-1 flex-col">
-      <div class="flex min-h-0 flex-1 flex-col">
-        <div
-          ref={scroller}
-          onScroll={onScroll}
-          // Unstick on the gesture itself, before streamed content can push the bottom away.
-          onWheel={(e) => e.deltaY < 0 && scroller.scrollHeight > scroller.clientHeight && (pinned = false)}
-          class="flex-1 overflow-y-auto [overflow-anchor:none]"
-        >
-          <div ref={content} class="mx-auto max-w-3xl px-5 py-8">
+      <div
+        ref={scroller}
+        onScroll={onScroll}
+        // Unstick on the gesture itself, before streamed content can push the bottom away.
+        onWheel={(e) => e.deltaY < 0 && scroller.scrollHeight > scroller.clientHeight && (pinned = false)}
+        class="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]"
+      >
+        {/* One column for the transcript and the composer. Its padding leaves room for your messages and the
+            composer to hang out by their own padding, so the text in them lines up with Claude's. */}
+        <div class="mx-auto flex min-h-full max-w-[50rem] flex-col px-9">
+          <div ref={content} class="flex-1 py-8">
             <Show
               when={!(state.loaded && state.messages.length === 0)}
               fallback={
@@ -277,168 +281,172 @@ export function Chat(props: {
               </ChildChats.Provider>
             </Show>
           </div>
-        </div>
 
-        {/* Fade the transcript out as it scrolls under the composer. */}
-        <div class="relative mx-auto w-full max-w-3xl space-y-2 px-5 pb-5 before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-bg">
-          <For each={state.permissions}>
-            {(p) => <PermissionPrompt sessionId={props.sessionId} permission={p} cwd={cwd()} from={p.agent} />}
-          </For>
-          <For each={childPrompts()}>
-            {({ child, permission }) => (
-              <PermissionPrompt
-                sessionId={child.id}
-                permission={permission}
-                cwd={child.state.cwd}
-                from={toolLabel(toolName(child.toolUseId)) || 'Another chat'}
-              />
-            )}
-          </For>
-          <Show when={tasks().length}>
-            <TaskTray sessionId={props.sessionId} items={tasks} onJump={jump} />
-          </Show>
-          <Show when={state.error}>
-            <div class="flex items-start gap-3 bg-danger/10 rounded-lg px-3 py-2 text-[13px] text-danger">
-              <span class="flex-1">{state.error}</span>
-              <button onClick={clearError} class="opacity-70 hover:opacity-100">Dismiss</button>
-            </div>
-          </Show>
-          <Show when={state.gone}>
-            <div class="flex items-start gap-3 bg-surface rounded-lg px-3 py-2 text-[13px] text-fg-2">
-              <FolderX class="size-4 shrink-0 mt-0.5" />
-              <span class="flex-1">
-                This chat's folder is gone or can't be opened, so it can't take messages. <span class="text-fg-3 break-all">{cwd()}</span>
-              </span>
-            </div>
-          </Show>
+          {/* Stuck to the bottom of the column and as wide as it, padding included, so the transcript fades out as it
+              scrolls under even where the composer hangs into the padding. */}
           <div
-            inert={state.gone}
-            class={`border transition-colors rounded-2xl focus-within:border-fg-3 ${dragging() ? 'border-fg-3' : 'border-edge'} ${state.gone ? 'opacity-50' : ''}`}
-            onDragOver={(e) => {
-              if (!e.dataTransfer?.types.includes('Files')) return
-              e.preventDefault()
-              setDragging(true)
-            }}
-            onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && setDragging(false)}
-            onDrop={(e) => {
-              setDragging(false)
-              if (!e.dataTransfer?.files.length) return
-              e.preventDefault()
-              addImages(e.dataTransfer.files)
-              input.focus()
-            }}
+            ref={composer}
+            class="sticky bottom-0 -mx-9 space-y-2 bg-bg px-9 pb-5 before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-bg"
           >
-            <Show when={pastes().length || images().length || pendingCard()}>
-              <Attachments
-                pastes={pastes()}
-                images={images()}
-                card={pendingCard()}
-                onRemovePaste={(i) => attach((a) => ({ ...a, pastes: a.pastes.filter((_, j) => j !== i) }))}
-                onRemoveImage={(i) => attach((a) => ({ ...a, images: a.images.filter((_, j) => j !== i) }))}
-                class="px-3 pt-3"
-              />
+            <For each={state.permissions}>
+              {(p) => <PermissionPrompt sessionId={props.sessionId} permission={p} cwd={cwd()} from={p.agent} />}
+            </For>
+            <For each={childPrompts()}>
+              {({ child, permission }) => (
+                <PermissionPrompt
+                  sessionId={child.id}
+                  permission={permission}
+                  cwd={child.state.cwd}
+                  from={toolLabel(toolName(child.toolUseId)) || 'Another chat'}
+                />
+              )}
+            </For>
+            <Show when={tasks().length}>
+              <TaskTray sessionId={props.sessionId} items={tasks} onJump={jump} />
             </Show>
-            <textarea
-              ref={input}
-              value={text()}
-              onInput={(e) => edit(e.currentTarget.value)}
-              onPaste={(e) => {
-                // Images and big pastes become attachments, so the composer stays editable.
-                // Office apps copy text with a picture of it too; the text is what's wanted then.
-                const pasted = e.clipboardData?.getData('text/plain')
-                if (!pasted && e.clipboardData && addImages(e.clipboardData.files)) return e.preventDefault()
-                if (!pasted || !isLongPaste(pasted)) return
+            <Show when={state.error}>
+              <div class="flex items-start gap-3 bg-danger/10 rounded-lg px-3 py-2 text-[13px] text-danger">
+                <span class="flex-1">{state.error}</span>
+                <button onClick={clearError} class="opacity-70 hover:opacity-100">Dismiss</button>
+              </div>
+            </Show>
+            <Show when={state.gone}>
+              <div class="flex items-start gap-3 bg-surface rounded-lg px-3 py-2 text-[13px] text-fg-2">
+                <FolderX class="size-4 shrink-0 mt-0.5" />
+                <span class="flex-1">
+                  This chat's folder is gone or can't be opened, so it can't take messages. <span class="text-fg-3 break-all">{cwd()}</span>
+                </span>
+              </div>
+            </Show>
+            <div
+              inert={state.gone}
+              class={`-mx-[calc(1rem+1px)] border transition-colors rounded-2xl focus-within:border-fg-3 ${dragging() ? 'border-fg-3' : 'border-edge'} ${state.gone ? 'opacity-50' : ''}`}
+              onDragOver={(e) => {
+                if (!e.dataTransfer?.types.includes('Files')) return
                 e.preventDefault()
-                attach((a) => ({ ...a, pastes: [...a.pastes, pasted] }))
+                setDragging(true)
               }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-                  e.preventDefault()
-                  submit()
-                }
-                if (e.key === 'Escape' && state.running) interrupt()
-                if (e.key === 'b' && e.ctrlKey && !e.metaKey && waiting()) {
-                  e.preventDefault()
-                  toBackground()
-                }
+              onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && setDragging(false)}
+              onDrop={(e) => {
+                setDragging(false)
+                if (!e.dataTransfer?.files.length) return
+                e.preventDefault()
+                addImages(e.dataTransfer.files)
+                input.focus()
               }}
-              rows={Math.min(10, Math.max(2, text().split('\n').length))}
-              placeholder={state.running ? 'Queue a message' : 'Message Claude'}
-              class="block max-h-[calc(10lh+0.875rem)] min-h-[calc(2lh+0.875rem)] w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed outline-none [field-sizing:content] placeholder:text-fg-3"
-            />
-            <div class="flex items-center gap-2 px-2 pb-2">
-              <Select value={mode()} options={MODES} onChange={changeMode} title="Permission mode" />
-              <Show when={models()?.length}>
-                <Select value={modelValue(model(), models()!)} options={modelOptions()} onChange={changeModel} title="Model" />
-              </Show>
-              <button
-                type="button"
-                onClick={() => picker.click()}
-                title="Attach images"
-                class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2"
-              >
-                <ImagePlus class="size-3.5" />
-              </button>
-              <input
-                ref={picker}
-                type="file"
-                accept="image/*"
-                multiple
-                class="hidden"
-                onChange={(e) => {
-                  addImages(e.currentTarget.files ?? [])
-                  e.currentTarget.value = ''
-                  input.focus()
-                }}
-              />
-              <Show when={root()}>{(r) => <TerminalButton root={r()} cwd={cwd()!} />}</Show>
-              <Show when={actions().length}>
-                <Menu
-                  items={actions().map((a) => ({ label: a.label, description: a.description }))}
-                  onPick={(i) => send(actions()[i].prompt)}
-                  title="Chat actions"
-                  triggerClass={(open) =>
-                    `flex h-7 items-center rounded-md px-2 transition-colors hover:bg-surface hover:text-fg-2 ${open ? 'bg-surface text-fg-2' : 'text-fg-3'}`
-                  }
-                  trigger={() => <Zap class="size-3.5" />}
+            >
+              <Show when={pastes().length || images().length || pendingCard()}>
+                <Attachments
+                  pastes={pastes()}
+                  images={images()}
+                  card={pendingCard()}
+                  onRemovePaste={(i) => attach((a) => ({ ...a, pastes: a.pastes.filter((_, j) => j !== i) }))}
+                  onRemoveImage={(i) => attach((a) => ({ ...a, images: a.images.filter((_, j) => j !== i) }))}
+                  class="px-3 pt-3"
                 />
               </Show>
-              <button
-                type="button"
-                onClick={() => setDetail(detail() === 'full' ? 'result' : 'full')}
-                title={detail() === 'full' ? 'Show results only' : 'Show all work'}
-                class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2"
-              >
-                {/* Shows what a click does, like play/pause: fold the work away or expand it. */}
-                <Show when={detail() === 'full'} fallback={<ListChevronsUpDown class="size-3.5" />}>
-                  <ListChevronsDownUp class="size-3.5" />
+              <textarea
+                ref={input}
+                value={text()}
+                onInput={(e) => edit(e.currentTarget.value)}
+                onPaste={(e) => {
+                  // Images and big pastes become attachments, so the composer stays editable.
+                  // Office apps copy text with a picture of it too; the text is what's wanted then.
+                  const pasted = e.clipboardData?.getData('text/plain')
+                  if (!pasted && e.clipboardData && addImages(e.clipboardData.files)) return e.preventDefault()
+                  if (!pasted || !isLongPaste(pasted)) return
+                  e.preventDefault()
+                  attach((a) => ({ ...a, pastes: [...a.pastes, pasted] }))
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+                    e.preventDefault()
+                    submit()
+                  }
+                  if (e.key === 'Escape' && state.running) interrupt()
+                  if (e.key === 'b' && e.ctrlKey && !e.metaKey && waiting()) {
+                    e.preventDefault()
+                    toBackground()
+                  }
+                }}
+                rows={Math.min(10, Math.max(2, text().split('\n').length))}
+                placeholder={state.running ? 'Queue a message' : 'Message Claude'}
+                class="block max-h-[calc(10lh+0.875rem)] min-h-[calc(2lh+0.875rem)] w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed outline-none [field-sizing:content] placeholder:text-fg-3"
+              />
+              <div class="flex items-center gap-2 px-2 pb-2">
+                <Select value={mode()} options={MODES} onChange={changeMode} title="Permission mode" />
+                <Show when={models()?.length}>
+                  <Select value={modelValue(model(), models()!)} options={modelOptions()} onChange={changeModel} title="Model" />
                 </Show>
-              </button>
-              <div class="flex-1" />
-              <Show when={state.context}>{(u) => <ContextMeter usage={u()} />}</Show>
-              <Show when={waiting()}>
                 <button
                   type="button"
-                  onClick={toBackground}
-                  title="Stop waiting and let them carry on (Ctrl+B)"
-                  class="flex h-7 items-center rounded-md px-2 text-xs text-fg-3 transition-colors hover:bg-surface hover:text-fg-2"
+                  onClick={() => picker.click()}
+                  title="Attach images"
+                  class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2"
                 >
-                  Run in background
+                  <ImagePlus class="size-3.5" />
                 </button>
-              </Show>
-              {/* One slot: stop while running with nothing typed, otherwise send. */}
-              <Show
-                when={state.running && !hasInput()}
-                fallback={
-                  <IconButton onClick={submit} disabled={!hasInput()} title="Send (Enter)">
-                    <ArrowUp class="size-4" />
+                <input
+                  ref={picker}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  class="hidden"
+                  onChange={(e) => {
+                    addImages(e.currentTarget.files ?? [])
+                    e.currentTarget.value = ''
+                    input.focus()
+                  }}
+                />
+                <Show when={root()}>{(r) => <TerminalButton root={r()} cwd={cwd()!} />}</Show>
+                <Show when={actions().length}>
+                  <Menu
+                    items={actions().map((a) => ({ label: a.label, description: a.description }))}
+                    onPick={(i) => send(actions()[i].prompt)}
+                    title="Chat actions"
+                    triggerClass={(open) =>
+                      `flex h-7 items-center rounded-md px-2 transition-colors hover:bg-surface hover:text-fg-2 ${open ? 'bg-surface text-fg-2' : 'text-fg-3'}`
+                    }
+                    trigger={() => <Zap class="size-3.5" />}
+                  />
+                </Show>
+                <button
+                  type="button"
+                  onClick={() => setDetail(detail() === 'full' ? 'result' : 'full')}
+                  title={detail() === 'full' ? 'Show results only' : 'Show all work'}
+                  class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2"
+                >
+                  {/* Shows what a click does, like play/pause: fold the work away or expand it. */}
+                  <Show when={detail() === 'full'} fallback={<ListChevronsUpDown class="size-3.5" />}>
+                    <ListChevronsDownUp class="size-3.5" />
+                  </Show>
+                </button>
+                <div class="flex-1" />
+                <Show when={state.context}>{(u) => <ContextMeter usage={u()} />}</Show>
+                <Show when={waiting()}>
+                  <button
+                    type="button"
+                    onClick={toBackground}
+                    title="Stop waiting and let them carry on (Ctrl+B)"
+                    class="flex h-7 items-center rounded-md px-2 text-xs text-fg-3 transition-colors hover:bg-surface hover:text-fg-2"
+                  >
+                    Run in background
+                  </button>
+                </Show>
+                {/* One slot: stop while running with nothing typed, otherwise send. */}
+                <Show
+                  when={state.running && !hasInput()}
+                  fallback={
+                    <IconButton onClick={submit} disabled={!hasInput()} title="Send (Enter)">
+                      <ArrowUp class="size-4" />
+                    </IconButton>
+                  }
+                >
+                  <IconButton onClick={interrupt} title="Stop (Esc)">
+                    <Square class="size-3 fill-current" />
                   </IconButton>
-                }
-              >
-                <IconButton onClick={interrupt} title="Stop (Esc)">
-                  <Square class="size-3 fill-current" />
-                </IconButton>
-              </Show>
+                </Show>
+              </div>
             </div>
           </div>
         </div>
