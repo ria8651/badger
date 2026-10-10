@@ -265,10 +265,11 @@ export function Chat(props: {
             </Show>
           </div>
 
-          {/* Stuck to the bottom of the column; the transcript fades out as it scrolls under. */}
+          {/* Stuck to the bottom of the column and as wide as it, padding included, so the transcript fades out as it
+              scrolls under even where the composer hangs into the padding. */}
           <div
             ref={composer}
-            class="sticky bottom-0 space-y-2 bg-bg pb-5 before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-bg"
+            class="sticky bottom-0 -mx-9 space-y-2 bg-bg px-9 pb-5 before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-bg"
           >
             <For each={state.permissions}>
               {(p) => <PermissionPrompt sessionId={props.sessionId} permission={p} cwd={cwd()} from={p.agent} />}
