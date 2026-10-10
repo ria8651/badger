@@ -94,6 +94,9 @@ export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'
 /** A pasted or dropped image, base64 encoded, sent to Claude as an image block. */
 export type ImageAttachment = { mediaType: (typeof IMAGE_TYPES)[number]; data: string }
 
+/** Big pastes and images waiting in the composer to be sent. */
+export type DraftAttachments = { pastes: string[]; images: ImageAttachment[] }
+
 /** Anything the SDK emits, or a transcript entry read back from disk. */
 export type WireMessage = { type: string; uuid?: string; [key: string]: unknown }
 
@@ -115,8 +118,8 @@ export type ClientEvent =
   | { type: 'interrupt'; sessionId: string }
   /** Stop one subagent or background task, leaving the rest of the chat running. */
   | { type: 'stop_task'; sessionId: string; taskId: string }
-  /** The composer's unsent text; replaces the saved draft. */
-  | { type: 'draft'; sessionId: string; text: string }
+  /** The composer's unsent text and attachments; each one given replaces what's saved. */
+  | { type: 'draft'; sessionId: string; text?: string; attachments?: DraftAttachments }
   | { type: 'set_mode'; sessionId: string; mode: PermissionMode }
   | {
       type: 'permission'
@@ -145,13 +148,14 @@ export type ServerEvent =
       bashOutput: Record<string, string>
       /** Unsent composer text, in the same message as the transcript so they arrive together. */
       draft: string
+      draftAttachments: DraftAttachments
       /** Chats this one started from a tool call and waited on, by that call's tool_use_id. */
       children: Record<string, string>
       background: BackgroundTask[]
     }
   | { type: 'message'; sessionId: string; message: WireMessage }
-  /** Another viewer changed the chat's unsent text. */
-  | { type: 'draft'; sessionId: string; text: string }
+  /** Another viewer changed the chat's unsent text or attachments. */
+  | { type: 'draft'; sessionId: string; text?: string; attachments?: DraftAttachments }
   /** Live output from a running Bash command; the tool_result still carries the final output. */
   | { type: 'bash_output'; sessionId: string; toolUseId: string; chunk: string }
   /** cwd changes when the chat moves into a worktree. */

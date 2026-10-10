@@ -1,7 +1,7 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, mapArray, on, onCleanup, onMount } from 'solid-js'
 import { ArrowUp, Check, GitBranch, ImagePlus, ListChevronsDownUp, ListChevronsUpDown, Square, Zap } from 'lucide-solid'
 import { isLongPaste } from '../../shared/pastes.ts'
-import type { BackgroundTask, Card, ImageAttachment, PermissionMode } from '../../shared/protocol.ts'
+import type { BackgroundTask, Card, DraftAttachments, PermissionMode } from '../../shared/protocol.ts'
 import { chatActions } from '../actions.ts'
 import { api, socket } from '../api.ts'
 import { readImage } from '../images.ts'
@@ -24,11 +24,7 @@ const MODES: Option<PermissionMode>[] = [
   { value: 'bypassPermissions', label: 'Bypass permissions', description: 'Never asks. Anything can run.', tone: 'danger' },
 ]
 
-/**
- * Unsent pastes and images by chat. Kept outside the component so they survive
- * switching chats, though not a reload: unlike the draft, they aren't saved on the server.
- */
-const unsent = new Map<string, { pastes: string[]; images: ImageAttachment[] }>()
+const NO_ATTACHMENTS: DraftAttachments = { pastes: [], images: [] }
 
 export function Chat(props: {
   sessionId: string
@@ -46,14 +42,20 @@ export function Chat(props: {
 }) {
   const { state, clearError } = createChat(props.sessionId)
   const [text, setText] = createSignal('')
-  const [pastes, setPastes] = createSignal(unsent.get(props.sessionId)?.pastes ?? [])
-  const [images, setImages] = createSignal(unsent.get(props.sessionId)?.images ?? [])
-  createEffect(() => unsent.set(props.sessionId, { pastes: pastes(), images: images() }))
+  const [attached, setAttached] = createSignal(NO_ATTACHMENTS)
+  const pastes = () => attached().pastes
+  const images = () => attached().images
+  // Saved as soon as they change, unlike typing: they change rarely and can be big.
+  const attach = (change: (a: DraftAttachments) => DraftAttachments) => {
+    const next = change(attached())
+    setAttached(next)
+    socket.send({ type: 'draft', sessionId: props.sessionId, attachments: next })
+  }
   const hasInput = () => !!text().trim() || pastes().length > 0 || images().length > 0
   /** Adds the images among these files, and says whether there were any. */
   const addImages = (files: Iterable<File>) => {
     const found = [...files].filter((f) => f.type.startsWith('image/'))
-    for (const f of found) void readImage(f).then((image) => image && setImages((list) => [...list, image]))
+    for (const f of found) void readImage(f).then((image) => image && attach((a) => ({ ...a, images: [...a.images, image] })))
     return found.length > 0
   }
   const [dragging, setDragging] = createSignal(false)
@@ -108,8 +110,8 @@ export function Chat(props: {
   createEffect(on(() => state.running, (running) => !running && refetchWorktree(), { defer: true }))
   const actions = () => chatActions({ worktree: worktree() })
 
-  // Unsent text is saved on the server, so it survives leaving the chat or
-  // reloading, and every tab on this chat shows the same draft.
+  // Unsent text and attachments are saved on the server, so they survive leaving
+  // the chat or reloading, and every tab on this chat shows the same draft.
   let saveTimer: ReturnType<typeof setTimeout> | undefined
   let unsaved = false
   const saveDraft = () => {
@@ -126,9 +128,15 @@ export function Chat(props: {
   }
   // Someone else's edit never overwrites what's typed here and not yet saved.
   const offDraft = socket.on((e) => {
-    if (!('sessionId' in e) || e.sessionId !== props.sessionId || unsaved) return
-    if (e.type === 'snapshot') setText(e.draft)
-    if (e.type === 'draft') setText(e.text)
+    if (!('sessionId' in e) || e.sessionId !== props.sessionId) return
+    if (e.type === 'snapshot') {
+      setAttached(e.draftAttachments)
+      if (!unsaved) setText(e.draft)
+    }
+    if (e.type === 'draft') {
+      if (e.attachments) setAttached(e.attachments)
+      if (e.text !== undefined && !unsaved) setText(e.text)
+    }
   })
   addEventListener('pagehide', saveDraft)
   onCleanup(() => {
@@ -163,9 +171,9 @@ export function Chat(props: {
   })
 
 
-  const send = (value: string, attached: { pastes: string[]; images: ImageAttachment[] } = { pastes: [], images: [] }) => {
+  const send = (value: string, attachments: DraftAttachments = NO_ATTACHMENTS) => {
     const worktree = inWorktree() && canWorktree() ? (worktreeName() ?? '') : undefined
-    socket.send({ type: 'send', sessionId: props.sessionId, text: value, ...attached, cwd: cwd(), mode: mode(), worktree })
+    socket.send({ type: 'send', sessionId: props.sessionId, text: value, ...attachments, cwd: cwd(), mode: mode(), worktree })
     if (!started()) {
       setStarted(true)
       props.onStart?.()
@@ -176,13 +184,12 @@ export function Chat(props: {
 
   const submit = () => {
     if (!hasInput()) return
-    send(text().trim(), { pastes: pastes(), images: images() })
+    send(text().trim(), attached())
     // The server clears the saved draft when the message arrives.
     clearTimeout(saveTimer)
     unsaved = false
     setText('')
-    setPastes([])
-    setImages([])
+    setAttached(NO_ATTACHMENTS)
   }
 
   const changeMode = (next: PermissionMode) => {
@@ -282,8 +289,8 @@ export function Chat(props: {
               <Attachments
                 pastes={pastes()}
                 images={images()}
-                onRemovePaste={(i) => setPastes(pastes().filter((_, j) => j !== i))}
-                onRemoveImage={(i) => setImages(images().filter((_, j) => j !== i))}
+                onRemovePaste={(i) => attach((a) => ({ ...a, pastes: a.pastes.filter((_, j) => j !== i) }))}
+                onRemoveImage={(i) => attach((a) => ({ ...a, images: a.images.filter((_, j) => j !== i) }))}
                 class="px-3 pt-3"
               />
             </Show>
@@ -298,7 +305,7 @@ export function Chat(props: {
                 if (!pasted && e.clipboardData && addImages(e.clipboardData.files)) return e.preventDefault()
                 if (!pasted || !isLongPaste(pasted)) return
                 e.preventDefault()
-                setPastes([...pastes(), pasted])
+                attach((a) => ({ ...a, pastes: [...a.pastes, pasted] }))
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {

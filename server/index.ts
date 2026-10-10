@@ -4,10 +4,10 @@ import { homedir } from 'node:os'
 import { extname, isAbsolute, join, resolve } from 'node:path'
 import { getSessionInfo, listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { IMAGE_TYPES, type ClientEvent, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
+import { IMAGE_TYPES, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
 import { BOARD_AUTO_ALLOWED, BOARD_SERVER, boardServer, cardContext } from './boardTools.ts'
 import { Children } from './children.ts'
-import { type Actor, BadRequest, Store } from './db.ts'
+import { type Actor, BadRequest, type Draft, Store } from './db.ts'
 import { MERGE_TOOL, mergeTool } from './merge.ts'
 import { SessionManager, diskTranscript } from './session.ts'
 import { TERMINAL_AUTO_ALLOWED, TERMINAL_SERVER, terminalServer } from './terminalTools.ts'
@@ -123,10 +123,10 @@ function unsubscribeTerminal(ws: WebSocket, id: string): void {
 }
 
 async function snapshotFor(sessionId: string): Promise<ServerEvent> {
-  const draft = store.draft(sessionId)
+  const { text: draft, attachments: draftAttachments } = store.draft(sessionId)
   const childSessions = store.children(sessionId)
   const live = manager.get(sessionId)
-  if (live) return { ...(await live.snapshot()), draft, children: childSessions }
+  if (live) return { ...(await live.snapshot()), draft, draftAttachments, children: childSessions }
   const [info, messages] = await Promise.all([getSessionInfo(sessionId), diskTranscript(sessionId)])
   return {
     type: 'snapshot',
@@ -138,16 +138,31 @@ async function snapshotFor(sessionId: string): Promise<ServerEvent> {
     permissions: [],
     bashOutput: {},
     draft,
+    draftAttachments,
     children: childSessions,
     background: [],
   }
 }
 
-/** Stores a chat's draft and shows it to the chat's other viewers; the one typing it already has it. */
-function saveDraft(from: WebSocket, sessionId: string, text: string): void {
-  if (store.draft(sessionId) === text) return
-  store.setDraft(sessionId, text)
-  for (const ws of viewers.get(sessionId) ?? []) if (ws !== from) send(ws, { type: 'draft', sessionId, text })
+/** Stores parts of a chat's draft and shows them to the chat's other viewers; the one editing it already has them. */
+function saveDraft(from: WebSocket, sessionId: string, change: Partial<Draft>): void {
+  const saved = store.draft(sessionId)
+  const same = (change.text === undefined || change.text === saved.text) && (!change.attachments || !hasAttachments(change.attachments) && !hasAttachments(saved.attachments))
+  if (same) return
+  store.setDraft(sessionId, change)
+  for (const ws of viewers.get(sessionId) ?? []) if (ws !== from) send(ws, { type: 'draft', sessionId, ...change })
+}
+
+const hasAttachments = (a: DraftAttachments) => a.pastes.length > 0 || a.images.length > 0
+
+/** Checks attachments from a client, throwing on anything malformed. */
+function checkAttachments(a: Partial<DraftAttachments>): DraftAttachments {
+  const { pastes = [], images = [] } = a
+  if (!Array.isArray(pastes) || pastes.some((p) => typeof p !== 'string')) throw new BadRequest('pastes must be strings')
+  if (!Array.isArray(images) || images.some((i) => !IMAGE_TYPES.includes(i?.mediaType) || typeof i.data !== 'string')) {
+    throw new BadRequest(`images must be ${IMAGE_TYPES.join(', ')}`)
+  }
+  return { pastes, images }
 }
 
 async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
@@ -163,16 +178,11 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       viewers.get(event.sessionId)?.delete(ws)
       return
     case 'send': {
-      const pastes = event.pastes ?? []
-      if (!Array.isArray(pastes) || pastes.some((p) => typeof p !== 'string')) throw new BadRequest('pastes must be strings')
-      const images = event.images ?? []
-      if (!Array.isArray(images) || images.some((i) => !IMAGE_TYPES.includes(i?.mediaType) || typeof i.data !== 'string')) {
-        throw new BadRequest(`images must be ${IMAGE_TYPES.join(', ')}`)
-      }
+      const { pastes, images } = checkAttachments(event)
       // Picking an archived chat back up brings it back to the sidebar.
       store.setArchived(event.sessionId, false, UI)
       // Sending empties the composer in every tab, not just the one that sent.
-      saveDraft(ws, event.sessionId, '')
+      saveDraft(ws, event.sessionId, { text: '', attachments: { pastes: [], images: [] } })
       const isNew = !manager.get(event.sessionId)
       if (isNew && event.worktree !== undefined && event.cwd) {
         await excludeWorktrees(event.cwd).catch(() => {
@@ -185,8 +195,8 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       return
     }
     case 'draft':
-      if (typeof event.text !== 'string') throw new BadRequest('text must be a string')
-      saveDraft(ws, event.sessionId, event.text)
+      if (event.text !== undefined && typeof event.text !== 'string') throw new BadRequest('text must be a string')
+      saveDraft(ws, event.sessionId, { text: event.text, attachments: event.attachments && checkAttachments(event.attachments) })
       return
     case 'interrupt':
       await Promise.all([manager.get(event.sessionId)?.interrupt(), children.interrupt(event.sessionId)])

@@ -104,9 +104,10 @@ class Socket {
     if (this.ws?.readyState === WebSocket.OPEN) this.raw(event)
     // Subscriptions are replayed on connect; keystrokes typed into a dead connection are dropped rather than replayed later.
     else if (event.type === 'draft') {
-      // Only the latest draft matters.
-      this.outbox = this.outbox.filter((e) => !(e.type === 'draft' && e.sessionId === event.sessionId))
-      this.outbox.push(event)
+      // Only the latest of each part matters: later text replaces earlier text, but not earlier attachments.
+      const queued = this.outbox.find((e) => e.type === 'draft' && e.sessionId === event.sessionId)
+      this.outbox = this.outbox.filter((e) => e !== queued)
+      this.outbox.push(queued?.type === 'draft' ? { ...queued, ...event } : event)
     } else if (!['subscribe', 'unsubscribe', 'term_subscribe', 'term_unsubscribe', 'term_input'].includes(event.type)) this.outbox.push(event)
   }
 

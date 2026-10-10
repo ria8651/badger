@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { CARD_STATUSES, type Card, type CardStatus } from '../shared/protocol.ts'
+import { CARD_STATUSES, type Card, type CardStatus, type DraftAttachments } from '../shared/protocol.ts'
 
 /** Each entry runs once, in order; PRAGMA user_version counts how many have run. Never edit one that has shipped. */
 const MIGRATIONS = [
@@ -62,6 +62,8 @@ const MIGRATIONS = [
      created_at INTEGER NOT NULL
    );
    CREATE INDEX child_sessions_parent ON child_sessions(parent_session);`,
+  // Pastes and images waiting in a chat's composer, as JSON DraftAttachments.
+  `ALTER TABLE session_drafts ADD COLUMN attachments TEXT;`,
 ]
 
 interface CardRow {
@@ -77,6 +79,9 @@ interface CardRow {
 export type CardPatch = Partial<Pick<Card, 'title' | 'description' | 'status' | 'position'>>
 
 /** Who made a change. There are no users yet, so for now it's where the change came from. */
+/** A chat's unsent composer contents. */
+export type Draft = { text: string; attachments: DraftAttachments }
+
 export type Actor = { source: 'ui' } | { source: 'claude'; sessionId: string }
 
 type AuditEntity = 'card' | 'card_session' | 'archived_session'
@@ -260,20 +265,26 @@ export class Store {
     return changed
   }
 
-  draft(sessionId: string): string {
-    const row = this.db.prepare('SELECT text FROM session_drafts WHERE session_id = ?').get(sessionId) as { text: string } | undefined
-    return row?.text ?? ''
+  draft(sessionId: string): Draft {
+    const row = this.db.prepare('SELECT text, attachments FROM session_drafts WHERE session_id = ?').get(sessionId) as
+      | { text: string; attachments: string | null }
+      | undefined
+    return { text: row?.text ?? '', attachments: row?.attachments ? JSON.parse(row.attachments) : { pastes: [], images: [] } }
   }
 
-  /** An empty draft is deleted rather than stored. */
-  setDraft(sessionId: string, text: string): void {
-    if (!text) this.db.prepare('DELETE FROM session_drafts WHERE session_id = ?').run(sessionId)
+  /** Replaces the parts of the draft given. An empty draft is deleted rather than stored. */
+  setDraft(sessionId: string, change: Partial<Draft>): void {
+    const saved = this.draft(sessionId)
+    const text = change.text ?? saved.text
+    const attachments = change.attachments ?? saved.attachments
+    const attached = attachments.pastes.length > 0 || attachments.images.length > 0
+    if (!text && !attached) this.db.prepare('DELETE FROM session_drafts WHERE session_id = ?').run(sessionId)
     else
       this.db
         .prepare(
-          'INSERT INTO session_drafts (session_id, text, updated_at) VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at',
+          'INSERT INTO session_drafts (session_id, text, attachments, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET text = excluded.text, attachments = excluded.attachments, updated_at = excluded.updated_at',
         )
-        .run(sessionId, text, Date.now())
+        .run(sessionId, text, attached ? JSON.stringify(attachments) : null, Date.now())
   }
 
   addChild(child: { sessionId: string; parentId: string; toolUseId: string; kind: string }): void {
