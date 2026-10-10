@@ -1,17 +1,19 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
-import { Archive, ArchiveRestore, Bell, BellOff, ChevronRight, Columns3, Pencil, Plus } from 'lucide-solid'
+import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, Pencil, Plus, Radar as RadarIcon } from 'lucide-solid'
+import { descendants, projectOf } from '../shared/cardTree.ts'
 import type { Card, SessionSummary } from '../shared/protocol.ts'
 import { api, socket } from './api.ts'
 import { attention, looking, notifications, notify, onAttention, toggleNotifications } from './attention.ts'
-import { basename, folderLabel, isScratch, setScratch } from './folders.ts'
+import { basename, folderLabel, isScratch, lastWorkedIn, setScratch } from './folders.ts'
 import { Board } from './components/Board.tsx'
 import { CardView } from './components/CardView.tsx'
+import { Radar } from './components/Radar.tsx'
 import { Chat } from './components/Chat.tsx'
 import { RenameChat } from './components/RenameChat.tsx'
 import { AccountLimits } from './components/Usage.tsx'
 import { StatusDot, TerminalPage } from './components/Terminals.tsx'
-import { ChatDot } from './components/ui.tsx'
+import { ChatDot, Menu } from './components/ui.tsx'
 import { terminalLabel, terminals } from './terminals.ts'
 import { accountUsage } from './usage.ts'
 
@@ -29,6 +31,7 @@ type Route =
   | { kind: 'home' }
   | { kind: 'chat'; id: string }
   | { kind: 'board' }
+  | { kind: 'radar' }
   | { kind: 'card'; id: number }
   | { kind: 'terminal'; id: string }
 
@@ -41,6 +44,7 @@ function routeFromPath(): Route {
   const terminal = path.match(/^\/t\/([0-9a-f]+)/)
   if (terminal) return { kind: 'terminal', id: terminal[1] }
   if (path === '/board') return { kind: 'board' }
+  if (path === '/radar') return { kind: 'radar' }
   return { kind: 'home' }
 }
 
@@ -53,7 +57,9 @@ const pathFor = (r: Route) =>
         ? `/t/${r.id}`
         : r.kind === 'board'
           ? '/board'
-          : '/'
+          : r.kind === 'radar'
+            ? '/radar'
+            : '/'
 
 
 export function App() {
@@ -125,6 +131,39 @@ export function App() {
     const r = route()
     return r.kind === 'chat' ? r.id : r.kind === 'home' ? homeId() : null
   }
+  /**
+   * The project this tab is working in, or null for all of them. Per tab, so two tabs can be on two projects.
+   * It scopes the sidebar, the Board button and new chats.
+   */
+  const [focusId, setFocusId] = createSignal<number | null>(Number(sessionStorage.getItem(FOCUS_KEY)) || null)
+  createEffect(() => {
+    const id = focusId()
+    if (id === null) sessionStorage.removeItem(FOCUS_KEY)
+    else sessionStorage.setItem(FOCUS_KEY, String(id))
+  })
+  /** Projects are the top-level cards. */
+  const allProjects = createMemo(() => cards().filter((c) => (c.parentId ?? null) === null))
+  // Undefined while cards load, or if the project was deleted or moved, in which case the tab shows everything.
+  const focus = createMemo(() => allProjects().find((c) => c.id === focusId()))
+  const projectOfChat = (id: string) => {
+    const card = cardOf().get(id)
+    return card && projectOf(cards(), card.id)
+  }
+  // Focus follows where you go: a project's board focuses it, the projects board shows them all,
+  // and opening something in another project moves there. Chats on no card leave it alone.
+  createEffect(() => {
+    const r = route()
+    if (r.kind === 'board') return setFocusId(null)
+    const card = r.kind === 'card' ? cards().find((c) => c.id === r.id) : r.kind === 'chat' ? cardOf().get(r.id) : undefined
+    if (!card) return
+    if ((card.parentId ?? null) === null && r.kind === 'card') return setFocusId(card.id)
+    const project = projectOf(cards(), card.id)
+    if (project && untrack(focusId) !== null && project.id !== untrack(focusId)) setFocusId(project.id)
+  })
+  const inFocus = (s: SessionSummary) => {
+    const f = focus()
+    return !f || s.id === current() || projectOfChat(s.id)?.id === f.id
+  }
   const currentCard = () => {
     const r = route()
     return r.kind === 'card' ? cards().find((c) => c.id === r.id) : undefined
@@ -149,8 +188,8 @@ export function App() {
   })
   createEffect(() => (document.title = needsYou() ? `(${needsYou()}) Badger` : 'Badger'))
 
-  const active = createMemo(() => sessions().filter((s) => !s.archived))
-  const archived = createMemo(() => sessions().filter((s) => s.archived))
+  const active = createMemo(() => sessions().filter((s) => !s.archived && inFocus(s)))
+  const archived = createMemo(() => sessions().filter((s) => s.archived && inFocus(s)))
   const [showArchived, setShowArchived] = createSignal(false)
   const toggleArchived = (s: SessionSummary) => {
     // Move it straight away; the server's sessions_changed confirms it.
@@ -262,7 +301,20 @@ export function App() {
     if (sessions().some((s) => s.id === untrack(homeId))) setHomeId(uuid())
   })
 
-  const newHomeChat = () => go({ kind: 'home' })
+  /** In a project, a new chat goes on the project's card and starts where its work last happened; otherwise it's the blank home chat. */
+  const newHomeChat = () => {
+    const f = focus()
+    if (!f) return go({ kind: 'home' })
+    const ids = [f, ...descendants(cards(), f.id)].flatMap((c) => c.sessionIds)
+    const from = lastWorkedIn(sessions().filter((s) => ids.includes(s.id)))
+    newChat(from && { cwd: from.cwd, worktree: false }, f.id)
+  }
+  /** For the switcher: how far along a project is. */
+  const projectSummary = (p: Card) => {
+    const inside = cards().filter((c) => c.parentId === p.id)
+    return inside.length ? `${inside.filter((c) => c.status === 'done').length}/${inside.length} cards done` : 'No cards yet'
+  }
+  const switchable = createMemo(() => [null, ...allProjects().filter((c) => c.status !== 'done' || c.id === focusId())])
   /** The home chat's first message went out: give it its own URL and a fresh blank chat for next time. */
   const startHomeChat = (id: string, cwd?: string) => {
     if (cwd) setDrafts((d) => ({ ...d, [id]: cwd }))
@@ -297,16 +349,52 @@ export function App() {
           </button>
         </div>
         <div class="px-2 pb-3">
+          <Menu
+            items={switchable().map((c) =>
+              c
+                ? { label: c.title, description: projectSummary(c), selected: c.id === focus()?.id }
+                : { label: 'All projects', description: 'Everything', selected: !focus() },
+            )}
+            onPick={(i) => {
+              const c = switchable()[i]
+              go(c ? { kind: 'card', id: c.id } : { kind: 'board' })
+            }}
+            placement="bottom"
+            class="w-60"
+            title="Which project this tab is working in"
+            triggerClass={(open) =>
+              `mb-1 flex h-8 w-full items-center gap-2 rounded-lg border border-line px-2 text-[13px] transition-colors hover:border-edge ${open ? 'border-edge' : ''}`
+            }
+            trigger={(open) => (
+              <>
+                <span class={`min-w-0 flex-1 truncate text-left ${focus() ? 'text-fg' : 'text-fg-2'}`}>{focus()?.title ?? 'All projects'}</span>
+                <ChevronDown class={`size-3.5 text-fg-3 transition-transform ${open() ? 'rotate-180' : ''}`} />
+              </>
+            )}
+          />
           <button
-            onClick={() => go({ kind: 'board' })}
+            onClick={() => go({ kind: 'radar' })}
+            title="Everything on your radar, across projects"
+            class={`mb-px flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[13px] transition-colors hover:bg-surface hover:text-fg ${
+              route().kind === 'radar' ? 'bg-surface text-fg' : 'text-fg-2'
+            }`}
+          >
+            <RadarIcon class="size-4" /> Radar
+            <Show when={needsYou()}>
+              <span class="ml-auto text-[11px] text-accent tabular-nums">{needsYou()}</span>
+            </Show>
+          </button>
+          <button
+            onClick={() => go(focus() ? { kind: 'card', id: focus()!.id } : { kind: 'board' })}
             class={`mb-px flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[13px] transition-colors hover:bg-surface hover:text-fg ${
               route().kind === 'board' || route().kind === 'card' ? 'bg-surface text-fg' : 'text-fg-2'
             }`}
           >
-            <Columns3 class="size-4" /> Board
+            <Columns3 class="size-4" /> {focus() ? 'Board' : 'Projects'}
           </button>
           <button
             onClick={newHomeChat}
+            title={focus() ? `A chat on ${focus()!.title}` : undefined}
             class={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[13px] transition-colors hover:bg-surface hover:text-fg ${
               route().kind === 'home' ? 'bg-surface text-fg' : 'text-fg-2'
             }`}
@@ -380,6 +468,9 @@ export function App() {
         <Match when={currentTerminal()} keyed>
           {(id) => <TerminalPage id={id} onClosed={newHomeChat} />}
         </Match>
+        <Match when={route().kind === 'radar'}>
+          <Radar cards={cards()} sessions={sessions()} onOpenCard={(id) => go({ kind: 'card', id })} onOpenChat={(id) => go({ kind: 'chat', id })} />
+        </Match>
         <Match when={route().kind === 'board'}>
           <Board cards={cards()} sessions={sessions()} setCards={setCards} onOpen={(id) => go({ kind: 'card', id })} />
         </Match>
@@ -388,10 +479,12 @@ export function App() {
             {(card) => (
               <CardView
                 card={card()}
+                cards={cards()}
+                setCards={setCards}
                 sessions={sessions()}
+                onOpenCard={(id) => go(id === null ? { kind: 'board' } : { kind: 'card', id })}
                 onOpenChat={(id) => go({ kind: 'chat', id })}
                 onNewChat={(from) => newChat(from, card().id)}
-                onBack={() => go({ kind: 'board' })}
               />
             )}
           </Show>
@@ -402,6 +495,7 @@ export function App() {
 }
 
 const HOME_KEY = 'badger.homeId'
+const FOCUS_KEY = 'badger.focus'
 
 const TEMP = /^\/(private\/)?(tmp|var\/folders)\//
 

@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { descendants } from '../shared/cardTree.ts'
 import { CARD_STATUSES, type Card, type CardStatus, type DraftAttachments } from '../shared/protocol.ts'
 
 /** Each entry runs once, in order; PRAGMA user_version counts how many have run. Never edit one that has shipped. */
@@ -69,10 +70,28 @@ const MIGRATIONS = [
      session_id TEXT PRIMARY KEY,
      at INTEGER NOT NULL
    );`,
+  // Cards hold cards: each card is a board of its own. Null is the top-level board.
+  `ALTER TABLE cards ADD COLUMN parent_id INTEGER REFERENCES cards(id);
+   CREATE INDEX cards_parent ON cards(parent_id);`,
+  // Deleting a card only marks it, so it stays in the table and is migrated like any other row, ready for a restore feature later.
+  // The cards inside it aren't marked; they're hidden because it is (see VISIBLE).
+  `ALTER TABLE cards ADD COLUMN deleted_at INTEGER;`,
 ]
+
+/**
+ * Cards that aren't deleted and aren't inside one that is. Only the card someone deleted is marked, so restoring
+ * one later is clearing that mark, and a card deleted on its own before its project would stay deleted.
+ */
+const VISIBLE = `WITH RECURSIVE hidden(id) AS (
+    SELECT id FROM cards WHERE deleted_at IS NOT NULL
+    UNION SELECT cards.id FROM cards JOIN hidden ON cards.parent_id = hidden.id
+  )
+  SELECT * FROM cards WHERE id NOT IN (SELECT id FROM hidden)`
 
 interface CardRow {
   id: number
+  parent_id: number | null
+  deleted_at: number | null
   title: string
   description: string
   status: CardStatus
@@ -81,7 +100,7 @@ interface CardRow {
   updated_at: number
 }
 
-export type CardPatch = Partial<Pick<Card, 'title' | 'description' | 'status' | 'position'>>
+export type CardPatch = Partial<Pick<Card, 'title' | 'description' | 'status' | 'position' | 'parentId'>>
 
 /** Who made a change. There are no users yet, so for now it's where the change came from. */
 /** A chat's unsent composer contents. */
@@ -151,19 +170,21 @@ export class Store {
       )
   }
 
+  /** Every card that isn't deleted. */
   cards(): Card[] {
-    const rows = this.db.prepare('SELECT * FROM cards ORDER BY position').all() as unknown as CardRow[]
+    const rows = this.db.prepare(`${VISIBLE} ORDER BY position`).all() as unknown as CardRow[]
     const links = this.db.prepare('SELECT card_id, session_id FROM card_sessions ORDER BY created_at').all() as {
       card_id: number
       session_id: string
     }[]
     const sessions = new Map<number, string[]>()
     for (const l of links) sessions.set(l.card_id, [...(sessions.get(l.card_id) ?? []), l.session_id])
-    return rows.map((r) => toCard(r, sessions.get(r.id) ?? []))
+    const moved = this.statusChanges()
+    return rows.map((r) => toCard(r, sessions.get(r.id) ?? [], moved.get(r.id)))
   }
 
   card(id: number): Card | undefined {
-    const row = this.db.prepare('SELECT * FROM cards WHERE id = ?').get(id) as CardRow | undefined
+    const row = this.db.prepare(`${VISIBLE} AND id = ?`).get(id) as CardRow | undefined
     if (!row) return undefined
     const links = this.db.prepare('SELECT session_id FROM card_sessions WHERE card_id = ? ORDER BY created_at').all(id) as {
       session_id: string
@@ -171,17 +192,31 @@ export class Store {
     return toCard(
       row,
       links.map((l) => l.session_id),
+      this.statusChanges(id).get(id),
     )
   }
 
-  createCard(input: { title: string; description?: string; status?: CardStatus }, actor: Actor): Card {
+  /** When each card (or just `id`) last changed status, by the audit log. Creating one counts. */
+  private statusChanges(id?: number): Map<number, number> {
+    const rows = this.db
+      .prepare(
+        `SELECT entity_id, MAX(at) AS at FROM audit_log
+         WHERE entity = 'card' AND action IN ('create', 'update') AND json_extract(after, '$.status') IS NOT NULL ${id === undefined ? '' : 'AND entity_id = ?'}
+         GROUP BY entity_id`,
+      )
+      .all(...(id === undefined ? [] : [String(id)])) as { entity_id: string; at: number }[]
+    return new Map(rows.map((r) => [Number(r.entity_id), r.at]))
+  }
+
+  createCard(input: { title: string; description?: string; status?: CardStatus; parentId?: number | null }, actor: Actor): Card {
     const title = requireTitle(input.title)
     const status = requireStatus(input.status ?? 'backlog')
+    const parentId = this.requireParent(input.parentId ?? null)
     const now = Date.now()
     return this.transaction(() => {
       const { lastInsertRowid } = this.db
-        .prepare('INSERT INTO cards (title, description, status, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(title, input.description ?? '', status, this.endOf(status), now, now)
+        .prepare('INSERT INTO cards (title, description, status, position, parent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(title, input.description ?? '', status, this.endOf(status), parentId, now, now)
       const card = this.card(Number(lastInsertRowid))!
       this.audit(actor, 'card', card.id, 'create', null, editable(card))
       return card
@@ -195,12 +230,13 @@ export class Store {
     if (patch.title !== undefined) next.title = requireTitle(patch.title)
     if (patch.description !== undefined) next.description = String(patch.description)
     if (patch.status !== undefined) next.status = requireStatus(patch.status)
+    if (patch.parentId !== undefined) next.parentId = this.requireParent(patch.parentId, id)
     if (patch.position !== undefined) next.position = Number(patch.position)
     // Moving columns without a position lands at the bottom of the new one.
     else if (next.status !== current.status) next.position = this.endOf(next.status)
     const before: CardPatch = {}
     const after: CardPatch = {}
-    for (const key of ['title', 'description', 'status', 'position'] as const) {
+    for (const key of ['title', 'description', 'status', 'position', 'parentId'] as const) {
       if (next[key] === current[key]) continue
       Object.assign(before, { [key]: current[key] })
       Object.assign(after, { [key]: next[key] })
@@ -209,8 +245,8 @@ export class Store {
     if (!Object.keys(after).length) return current
     this.transaction(() => {
       this.db
-        .prepare('UPDATE cards SET title = ?, description = ?, status = ?, position = ?, updated_at = ? WHERE id = ?')
-        .run(next.title, next.description, next.status, next.position, Date.now(), id)
+        .prepare('UPDATE cards SET title = ?, description = ?, status = ?, position = ?, parent_id = ?, updated_at = ? WHERE id = ?')
+        .run(next.title, next.description, next.status, next.position, next.parentId, Date.now(), id)
       this.audit(actor, 'card', id, 'update', before, after)
       // Finishing a card puts its chats away; reopening it brings them back.
       if (next.status === 'done' && current.status !== 'done') for (const s of current.sessionIds) this.setArchived(s, true, actor)
@@ -219,13 +255,12 @@ export class Store {
     return this.card(id)
   }
 
-  /** The log keeps the whole card, chats included, so a deleted card can be restored. */
+  /** Marks just this card deleted; the cards inside it are hidden with it. Chats stay linked but are no longer on a card. */
   deleteCard(id: number, actor: Actor): boolean {
-    const card = this.card(id)
-    if (!card) return false
+    if (!this.card(id)) return false
     this.transaction(() => {
-      this.db.prepare('DELETE FROM cards WHERE id = ?').run(id)
-      this.audit(actor, 'card', id, 'delete', card, null)
+      this.db.prepare('UPDATE cards SET deleted_at = ? WHERE id = ?').run(Date.now(), id)
+      this.audit(actor, 'card', id, 'delete', null, null)
     })
     return true
   }
@@ -345,6 +380,16 @@ export class Store {
         .run(sessionId, hash)
   }
 
+  /** A card to put cards on, checked to exist and, when moving `cardId`, not to be it or below it. */
+  private requireParent(parentId: unknown, cardId?: number): number | null {
+    if (parentId === null) return null
+    const id = Number(parentId)
+    if (!Number.isInteger(id) || !this.card(id)) throw new BadRequest(`No card #${parentId}`)
+    if (cardId !== undefined && (id === cardId || descendants(this.cards(), cardId).some((c) => c.id === id)))
+      throw new BadRequest(`Card #${cardId} can't go inside itself`)
+    return id
+  }
+
   private endOf(status: CardStatus): number {
     const { max } = this.db.prepare('SELECT MAX(position) AS max FROM cards WHERE status = ?').get(status) as { max: number | null }
     return (max ?? 0) + 1
@@ -352,18 +397,21 @@ export class Store {
 }
 
 function editable(c: Card): CardPatch {
-  return { title: c.title, description: c.description, status: c.status, position: c.position }
+  return { title: c.title, description: c.description, status: c.status, position: c.position, parentId: c.parentId }
 }
 
-function toCard(r: CardRow, sessionIds: string[]): Card {
+function toCard(r: CardRow, sessionIds: string[], statusChangedAt?: number): Card {
   return {
     id: r.id,
+    parentId: r.parent_id,
     title: r.title,
     description: r.description,
     status: r.status,
     position: r.position,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    // Cards older than the audit log have no record of it.
+    statusChangedAt: statusChangedAt ?? r.created_at,
     sessionIds,
   }
 }

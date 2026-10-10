@@ -1,5 +1,6 @@
 import { For, Show, createSignal } from 'solid-js'
-import { GitBranch, MessageSquare, Plus } from 'lucide-solid'
+import { GitBranch, ListChecks, MessageSquare, Plus } from 'lucide-solid'
+import { descendants } from '../../shared/cardTree.ts'
 import { CARD_STATUSES, type Card, type CardStatus, type SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { folderLabel, worktreeOf } from '../folders.ts'
@@ -20,18 +21,34 @@ interface DropTarget {
   index: number
 }
 
-export function Board(props: {
+type BoardProps = {
+  /** Every card; each board shows the ones inside its parent. */
   cards: Card[]
   sessions: SessionSummary[]
   /** Optimistic local update; the server's cards_changed brings the truth. */
   setCards: (cards: Card[]) => void
   onOpen: (id: number) => void
-}) {
+}
+
+/** The top-level board: projects, which are the cards that aren't inside another. */
+export function Board(props: BoardProps) {
+  return (
+    <div class="flex h-full min-w-0 flex-1 flex-col">
+      <div class="flex h-12 shrink-0 items-center px-5">
+        <h1 class="font-medium">Projects</h1>
+      </div>
+      <Columns {...props} parentId={null} class="flex-1" />
+    </div>
+  )
+}
+
+/** One board's status columns: the cards inside `parentId`, or the top level for null. */
+export function Columns(props: BoardProps & { parentId: number | null; class?: string }) {
   const [dragging, setDragging] = createSignal<number | null>(null)
   const [target, setTarget] = createSignal<DropTarget | null>(null)
   const [adding, setAdding] = createSignal<CardStatus | null>(null)
 
-  const column = (status: CardStatus) => props.cards.filter((c) => c.status === status).sort((a, b) => a.position - b.position)
+  const column = (status: CardStatus) => props.cards.filter((c) => (c.parentId ?? null) === props.parentId && c.status === status).sort((a, b) => a.position - b.position)
   const others = (status: CardStatus) => column(status).filter((c) => c.id !== dragging())
 
   const drop = () => {
@@ -50,15 +67,11 @@ export function Board(props: {
 
   const create = (status: CardStatus, title: string) => {
     if (!title.trim()) return setAdding(null)
-    api.createCard({ title, status })
+    api.createCard({ title, status, parentId: props.parentId })
   }
 
   return (
-    <div class="flex h-full min-w-0 flex-1 flex-col">
-      <div class="flex h-12 shrink-0 items-center px-5">
-        <h1 class="font-medium">Board</h1>
-      </div>
-      <div class="flex flex-1 gap-3 overflow-x-auto px-5 pb-5">
+    <div class={`flex gap-3 overflow-x-auto px-5 pb-5 ${props.class ?? ''}`}>
         <For each={CARD_STATUSES}>
           {(status) => (
             <section
@@ -89,9 +102,13 @@ export function Board(props: {
                 <For each={column(status)}>
                   {(card) => {
                     const chats = () => props.sessions.filter((s) => card.sessionIds.includes(s.id))
+                    const inside = () => props.cards.filter((c) => c.parentId === card.id)
+                    const done = () => inside().filter((c) => c.status === 'done').length
+                    // Chats on the cards inside it count too, so a project shows when anything in it needs you.
+                    const allIds = () => [card, ...descendants(props.cards, card.id)].flatMap((c) => c.sessionIds)
                     // The most urgent of its chats'.
                     const cardAttention = () => {
-                      const states = card.sessionIds.map((id) => attention()[id])
+                      const states = allIds().map((id) => attention()[id])
                       return states.includes('waiting') ? 'waiting' : states.includes('unread') ? 'unread' : undefined
                     }
                     const worktrees = () => [...new Set(chats().flatMap((s) => (s.cwd && !s.gone && worktreeOf(s.cwd) ? [s.cwd] : [])))]
@@ -133,12 +150,22 @@ export function Board(props: {
                                 {chats().length}
                               </span>
                             </Show>
+                            <Show when={inside().length}>
+                              <span title="Cards inside it that are done" class="flex items-center gap-1">
+                                <ListChecks class="size-3" />
+                                {done()}/{inside().length}
+                              </span>
+                            </Show>
                             <Show when={worktrees().length}>
                               <span title={worktrees().map(folderLabel).join('\n')} class="flex items-center">
                                 <GitBranch class="size-3" />
                               </span>
                             </Show>
-                            <ChatDot class="ml-auto" running={chats().some((s) => s.running)} attention={cardAttention()} />
+                            <ChatDot
+                              class="ml-auto"
+                              running={props.sessions.some((s) => s.running && allIds().includes(s.id))}
+                              attention={cardAttention()}
+                            />
                           </div>
                         </button>
                       </>
@@ -173,7 +200,6 @@ export function Board(props: {
             </section>
           )}
         </For>
-      </div>
     </div>
   )
 

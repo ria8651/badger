@@ -3,6 +3,7 @@ import { createSdkMcpServer, getSessionInfo, tool, type McpSdkServerConfigWithIn
 import { z } from 'zod'
 import { CARD_STATUSES, type Card } from '../shared/protocol.ts'
 import { NO_CARD_CONTEXT, renderCardContext } from '../shared/cardContext.ts'
+import { ancestors, descendants, projectOf } from '../shared/cardTree.ts'
 import type { Actor, Store } from './db.ts'
 
 export const BOARD_SERVER = 'badger'
@@ -21,14 +22,15 @@ const status = z.enum(CARD_STATUSES)
  * and survives resumes, and the stored hash stops it being repeated.
  */
 export function cardContext(store: Store, sessionId: string): string | undefined {
-  const card = store.cards().find((c) => c.sessionIds.includes(sessionId))
+  const cards = store.cards()
+  const card = cards.find((c) => c.sessionIds.includes(sessionId))
   const last = store.contextHash(sessionId)
   if (!card) {
     if (last === undefined) return undefined
     store.setContextHash(sessionId, null)
     return NO_CARD_CONTEXT
   }
-  const rendered = renderCardContext(card)
+  const rendered = renderCardContext(card, ancestors(cards, card.id))
   const hash = hashOf(rendered)
   if (hash === last) return undefined
   store.setContextHash(sessionId, hash)
@@ -52,7 +54,7 @@ export function boardServer(
   const thisCard = () => store.cards().find((c) => c.sessionIds.includes(sessionId))
   // Claude already knows this state (it wrote or just read it), so don't inject it next turn.
   const markSeen = (card: Card) => {
-    if (card.sessionIds.includes(sessionId)) store.setContextHash(sessionId, hashOf(renderCardContext(card)))
+    if (card.sessionIds.includes(sessionId)) store.setContextHash(sessionId, hashOf(renderCardContext(card, ancestors(store.cards(), card.id))))
   }
   const changed = <T>(value: T): T => {
     onChange()
@@ -65,18 +67,24 @@ export function boardServer(
     instructions: [
       "This chat runs inside Badger, which has a project board: cards are units of work, each with a status column and the chats working on it. Cards aren't tied to a repo; one card can hold chats in several repos.",
       "When this chat is on a card, the card's current state is added to the conversation whenever it changes. get_card with no id fetches it on demand.",
+      'Top-level cards are projects. Each has its own board of cards, one per piece of work. When you find a follow-up or bug while working, add it as a card to the same project.',
       'Use these tools when the user talks about cards, the board, tasks or what to work on. Keep a card you are working on up to date: move its status as work progresses and write what you learn into its description.',
       `Statuses, in board order: ${CARD_STATUSES.join(', ')}.`,
     ].join('\n'),
     tools: [
       tool(
         'list_cards',
-        'List cards on the board, in board order. Marks the card this chat belongs to.',
-        { status: status.optional().describe('Only cards in this column') },
+        'List cards as a tree, each indented under the card it sits inside, in board order. Marks the card this chat belongs to.',
+        {
+          parent_id: z.number().int().optional().describe('Only the cards inside this one. Omit for every card'),
+          status: status.optional().describe('Only cards in this column, plus the cards they sit inside'),
+        },
         async (args) => {
+          const all = store.cards()
+          if (args.parent_id !== undefined && !all.some((c) => c.id === args.parent_id)) return error(`No card #${args.parent_id}.`)
           const mine = thisCard()?.id
-          const cards = store.cards().filter((c) => !args.status || c.status === args.status)
-          return text(cards.length ? cards.map((c) => summary(c, c.id === mine)).join('\n') : 'No cards.')
+          const lines = tree(all, args.parent_id ?? null, args.status, mine)
+          return text(lines.length ? lines.join('\n') : 'No cards.')
         },
         { annotations: { readOnlyHint: true } },
       ),
@@ -88,7 +96,7 @@ export function boardServer(
           const card = args.id === undefined ? thisCard() : store.card(args.id)
           if (!card) return error(args.id === undefined ? 'This chat is not on a card.' : `No card #${args.id}.`)
           markSeen(card)
-          return text(await detail(card, sessionId, store.archivedIds()))
+          return text(await detail(card, store.cards(), sessionId, store.archivedIds()))
         },
         { annotations: { readOnlyHint: true } },
       ),
@@ -97,29 +105,39 @@ export function boardServer(
         'Create a card. It goes to the bottom of its column.',
         {
           title: z.string().min(1),
+          parent_id: z
+            .number()
+            .int()
+            .nullable()
+            .optional()
+            .describe("The project to put it in. Defaults to the project this chat's card is in; null makes it a new project"),
           description: z.string().optional().describe('Markdown'),
           status: status.optional().describe('Defaults to backlog'),
           link_this_chat: z.boolean().optional().describe('Also put this chat on the new card'),
         },
         async (args) => {
-          const card = store.createCard(args, actor)
+          const mine = thisCard()
+          const parentId = args.parent_id !== undefined ? args.parent_id : ((mine && projectOf(store.cards(), mine.id)?.id) ?? null)
+          const card = store.createCard({ ...args, parentId }, actor)
           if (args.link_this_chat) store.linkSession(card.id, sessionId, actor)
           const created = store.card(card.id)!
           markSeen(created)
-          return changed(text(`Created ${summary(created, !!args.link_this_chat)}`))
+          const where = parentId === null ? ' as a new project' : ` in project #${parentId}`
+          return changed(text(`Created ${summary(created, !!args.link_this_chat)}${where}`))
         },
       ),
       tool(
         'update_card',
-        "Change a card's title, description or status. Description replaces the whole text, so read it first with get_card.",
+        "Change a card's title, description, status or parent. Description replaces the whole text, so read it first with get_card.",
         {
           id: z.number().int(),
+          parent_id: z.number().int().nullable().optional().describe('Move it into this project, or null to make it a project'),
           title: z.string().min(1).optional(),
           description: z.string().optional().describe('Markdown; replaces the existing description'),
           status: status.optional(),
         },
-        async ({ id, ...patch }) => {
-          const card = store.updateCard(id, patch, actor)
+        async ({ id, parent_id, ...patch }) => {
+          const card = store.updateCard(id, { ...patch, parentId: parent_id }, actor)
           if (!card) return error(`No card #${id}.`)
           markSeen(card)
           return changed(text(`Updated ${summary(card, card.id === thisCard()?.id)}`))
@@ -159,7 +177,7 @@ export function boardServer(
       ),
       tool(
         'delete_card',
-        'Delete a card. Its chats are kept. Only do this when the user asks.',
+        'Delete a card and every card inside it. Their chats are kept. Only do this when the user asks.',
         { id: z.number().int() },
         async ({ id }) => (store.deleteCard(id, actor) ? changed(text(`Deleted card #${id}.`)) : error(`No card #${id}.`)),
         { annotations: { destructiveHint: true } },
@@ -169,12 +187,32 @@ export function boardServer(
   })
 }
 
-function summary(c: Card, mine: boolean): string {
+function summary(c: Card, mine: boolean, cards: Card[] = []): string {
   const chats = c.sessionIds.length ? `, ${c.sessionIds.length} chat${c.sessionIds.length === 1 ? '' : 's'}` : ''
-  return `#${c.id} [${c.status}] ${c.title}${chats}${mine ? ' (this chat)' : ''}`
+  const inside = cards.filter((d) => d.parentId === c.id)
+  const done = inside.filter((d) => d.status === 'done').length
+  const progress = inside.length ? `, ${done}/${inside.length} cards done` : ''
+  return `#${c.id} [${c.status}] ${c.title}${chats}${progress}${mine ? ' (this chat)' : ''}`
 }
 
-async function detail(c: Card, sessionId: string, archived: Set<string>): Promise<string> {
+/** Cards inside `parent` (null for all), depth-first and indented, keeping only those in `status` and the cards above them. */
+function tree(cards: Card[], parent: number | null, status: Card['status'] | undefined, mine: number | undefined): string[] {
+  const lines: string[] = []
+  const walk = (parentId: number | null, depth: number) => {
+    for (const c of cards.filter((c) => c.parentId === parentId).sort(boardOrder)) {
+      const matches = !status || c.status === status || descendants(cards, c.id).some((d) => d.status === status)
+      if (!matches) continue
+      lines.push('  '.repeat(depth) + summary(c, c.id === mine, cards))
+      walk(c.id, depth + 1)
+    }
+  }
+  walk(parent, 0)
+  return lines
+}
+
+const boardOrder = (a: Card, b: Card) => CARD_STATUSES.indexOf(a.status) - CARD_STATUSES.indexOf(b.status) || a.position - b.position
+
+async function detail(c: Card, cards: Card[], sessionId: string, archived: Set<string>): Promise<string> {
   const chats = await Promise.all(
     c.sessionIds.map(async (id) => {
       const info = await getSessionInfo(id).catch(() => undefined)
@@ -185,13 +223,17 @@ async function detail(c: Card, sessionId: string, archived: Set<string>): Promis
     }),
   )
   const lines = chats.filter(Boolean)
+  const path = ancestors(cards, c.id)
+  const inside = tree(cards, c.id, undefined, undefined)
   return [
     `#${c.id} ${c.title}`,
     `Status: ${c.status}`,
+    ...(path.length ? [`Inside: ${path.map((p) => `#${p.id} ${p.title}`).join(' > ')}`] : []),
     '',
     c.description.trim() || '(no description)',
     '',
     lines.length ? `Chats:\n${lines.join('\n')}` : 'No chats.',
+    ...(inside.length ? ['', `Cards inside it:\n${inside.join('\n')}`] : []),
   ].join('\n')
 }
 

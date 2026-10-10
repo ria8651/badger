@@ -17,7 +17,7 @@ const get = <T>(path: string) => request<T>('GET', path)
 
 type Config = { defaultCwd: string; scratchCwd: string }
 
-type CardPatch = Partial<Pick<Card, 'title' | 'description' | 'status' | 'position'>>
+type CardPatch = Partial<Pick<Card, 'title' | 'description' | 'status' | 'position' | 'parentId'>>
 
 export const api = {
   config: () => get<Config>('/api/config'),
@@ -28,7 +28,7 @@ export const api = {
   rename: (sessionId: string, title: string) => request<void>('PUT', `/api/sessions/${sessionId}/title`, { title }),
   suggestTitle: (sessionId: string) => request<{ title: string }>('POST', `/api/sessions/${sessionId}/title/suggest`),
   cards: () => get<Card[]>('/api/cards'),
-  createCard: (card: { title: string; description?: string; status?: CardStatus }) => request<Card>('POST', '/api/cards', card),
+  createCard: (card: { title: string; description?: string; status?: CardStatus; parentId?: number | null }) => request<Card>('POST', '/api/cards', card),
   updateCard: (id: number, patch: CardPatch) => request<Card>('PATCH', `/api/cards/${id}`, patch),
   deleteCard: (id: number) => request<void>('DELETE', `/api/cards/${id}`),
   linkSession: (id: number, sessionId: string) => request<Card>('POST', `/api/cards/${id}/sessions`, { sessionId }),

@@ -38,3 +38,13 @@ export const folderItem = (cwd: string) => ({
   description: isScratch(cwd) ? 'Quick questions, not tied to a repo' : cwd,
   mono: !isScratch(cwd),
 })
+
+/** Where a new chat should start: the repo of the most recent of these chats that ran in one, and whether that was a worktree. */
+export function lastWorkedIn(sessions: { cwd?: string; gone?: boolean; lastModified: number }[]): { cwd: string; worktree: boolean } | undefined {
+  const latest = sessions
+    .filter((s) => s.cwd && !s.gone && !isScratch(s.cwd))
+    .reduce<(typeof sessions)[number] | undefined>((a, s) => (!a || s.lastModified > a.lastModified ? s : a), undefined)
+  if (!latest?.cwd) return undefined
+  const wt = worktreeOf(latest.cwd)
+  return { cwd: wt?.repo ?? latest.cwd, worktree: !!wt }
+}
