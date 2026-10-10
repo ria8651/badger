@@ -15,7 +15,7 @@ import {
   type Query,
   type SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk'
-import type { BackgroundTask, ImageAttachment, ModelOption, PendingPermission, PermissionMode, ServerEvent, WireMessage } from '../shared/protocol.ts'
+import type { AnswerDraft, BackgroundTask, ImageAttachment, ModelOption, PendingPermission, PermissionMode, ServerEvent, WireMessage } from '../shared/protocol.ts'
 import { wrapPaste } from '../shared/pastes.ts'
 import { BashStreams, streamEnv } from './bashStream.ts'
 import { MessageQueue } from './queue.ts'
@@ -257,6 +257,14 @@ export class LiveSession {
         ...(decision === 'allow_always' && p.suggestions ? { updatedPermissions: p.suggestions } : {}),
       })
     }
+  }
+
+  /** Keeps answers picked so far with the pending question. False if it's no longer pending. */
+  draftAnswers(requestId: string, answers: AnswerDraft): boolean {
+    const p = this.pending.get(requestId)
+    if (!p) return false
+    p.answers = answers
+    return true
   }
 
   /**

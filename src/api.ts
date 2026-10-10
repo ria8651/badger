@@ -109,6 +109,9 @@ class Socket {
       const queued = this.outbox.find((e) => e.type === 'draft' && e.sessionId === event.sessionId)
       this.outbox = this.outbox.filter((e) => e !== queued)
       this.outbox.push(queued?.type === 'draft' ? { ...queued, ...event } : event)
+    } else if (event.type === 'answer_draft') {
+      this.outbox = this.outbox.filter((e) => !(e.type === 'answer_draft' && e.requestId === event.requestId))
+      this.outbox.push(event)
     } else if (!['subscribe', 'unsubscribe', 'term_subscribe', 'term_unsubscribe', 'term_input'].includes(event.type)) this.outbox.push(event)
   }
 

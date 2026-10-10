@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { extname, isAbsolute, join, resolve } from 'node:path'
 import { getSessionInfo, listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { IMAGE_TYPES, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
+import { IMAGE_TYPES, type AnswerDraft, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
 import { BOARD_AUTO_ALLOWED, BOARD_SERVER, boardServer, cardContext } from './boardTools.ts'
 import { Children } from './children.ts'
 import { type Actor, BadRequest, type Draft, Store } from './db.ts'
@@ -166,6 +166,17 @@ function checkAttachments(a: Partial<DraftAttachments>): DraftAttachments {
   return { pastes, images }
 }
 
+/** Checks question answers from a client, throwing on anything malformed. */
+function checkAnswers(a: Partial<AnswerDraft> | undefined): AnswerDraft {
+  const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+  const { picked = {}, other = {} } = a ?? {}
+  if (!isRecord(picked) || Object.values(picked).some((l) => !Array.isArray(l) || l.some((s) => typeof s !== 'string'))) {
+    throw new BadRequest('picked must map questions to lists of labels')
+  }
+  if (!isRecord(other) || Object.values(other).some((s) => typeof s !== 'string')) throw new BadRequest('other must map questions to text')
+  return { picked, other } as AnswerDraft
+}
+
 async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
   switch (event.type) {
     case 'subscribe': {
@@ -217,6 +228,14 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
     case 'permission':
       manager.get(event.sessionId)?.resolvePermission(event.requestId, event.decision, event.message, event.updatedInput)
       return
+    case 'answer_draft': {
+      const answers = checkAnswers(event.answers)
+      // Shown to the chat's other viewers; the one answering already has it.
+      if (!manager.get(event.sessionId)?.draftAnswers(event.requestId, answers)) return
+      const update: ServerEvent = { type: 'answer_draft', sessionId: event.sessionId, requestId: event.requestId, answers }
+      for (const other of viewers.get(event.sessionId) ?? []) if (other !== ws) send(other, update)
+      return
+    }
     case 'term_subscribe':
       subscribeTerminal(ws, event.id)
       return

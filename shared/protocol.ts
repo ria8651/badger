@@ -25,7 +25,12 @@ export interface PendingPermission {
   blockedPath?: string
   /** Set when a subagent asked: its description. */
   agent?: string
+  /** AskUserQuestion answers picked so far but not sent. */
+  answers?: AnswerDraft
 }
+
+/** Half-finished AskUserQuestion answers, by question text. */
+export type AnswerDraft = { picked: Record<string, string[]>; other: Record<string, string> }
 
 /** Work Claude Code runs alongside the conversation: a background subagent, shell, monitor or workflow. */
 export interface BackgroundTask {
@@ -143,6 +148,8 @@ export type ClientEvent =
       /** Replacement tool input, e.g. AskUserQuestion answers. */
       updatedInput?: Record<string, unknown>
     }
+  /** Answers picked so far in a pending AskUserQuestion; replaces what's saved. */
+  | { type: 'answer_draft'; sessionId: string; requestId: string; answers: AnswerDraft }
   | { type: 'term_subscribe'; id: string }
   | { type: 'term_unsubscribe'; id: string }
   | { type: 'term_input'; id: string; data: string }
@@ -178,6 +185,8 @@ export type ServerEvent =
   /** The background tasks running now; replaces the previous set. */
   | { type: 'background'; sessionId: string; tasks: BackgroundTask[] }
   | { type: 'permission_request'; sessionId: string; permission: PendingPermission }
+  /** Another viewer changed the answers picked in a pending AskUserQuestion. */
+  | { type: 'answer_draft'; sessionId: string; requestId: string; answers: AnswerDraft }
   | { type: 'permission_resolved'; sessionId: string; requestId: string }
   /** The chat started a child chat from a tool call; it's shown inside that call. */
   | { type: 'child_started'; sessionId: string; toolUseId: string; childId: string }
