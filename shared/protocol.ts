@@ -99,6 +99,8 @@ export type ClientEvent =
       type: 'send'
       sessionId: string
       text: string
+      /** Big pastes, sent after the text as attachments. */
+      pastes?: string[]
       cwd?: string
       mode?: PermissionMode
       /** Start a new chat in a git worktree of cwd with this name (reused if it exists); empty lets Claude name it. */

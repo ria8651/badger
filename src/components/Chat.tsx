@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, mapArray, on, onCleanup, onMount } from 'solid-js'
 import { ArrowUp, Check, GitBranch, ListChevronsDownUp, ListChevronsUpDown, Square, Zap } from 'lucide-solid'
+import { isLongPaste } from '../../shared/pastes.ts'
 import type { BackgroundTask, Card, PermissionMode } from '../../shared/protocol.ts'
 import { chatActions } from '../actions.ts'
 import { api, socket } from '../api.ts'
@@ -7,6 +8,7 @@ import { cardWorktreeName, folderItem, isScratch, worktreeOf } from '../folders.
 import { taskLabel } from '../tasks.ts'
 import { workspaceOf } from '../terminals.ts'
 import { ChildChats, createChat } from '../useChat.ts'
+import { Pastes } from './Pastes.tsx'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
 import { TerminalButton, TerminalDock } from './Terminals.tsx'
 import { toolLabel } from './ToolCard.tsx'
@@ -20,6 +22,12 @@ const MODES: Option<PermissionMode>[] = [
   { value: 'plan', label: 'Plan', description: 'Read and propose only. Nothing changes until you approve.' },
   { value: 'bypassPermissions', label: 'Bypass permissions', description: 'Never asks. Anything can run.', tone: 'danger' },
 ]
+
+/**
+ * Unsent pastes by chat. Kept outside the component so they survive switching
+ * chats, though not a reload: unlike the draft, they aren't saved on the server.
+ */
+const unsentPastes = new Map<string, string[]>()
 
 export function Chat(props: {
   sessionId: string
@@ -37,6 +45,9 @@ export function Chat(props: {
 }) {
   const { state, clearError } = createChat(props.sessionId)
   const [text, setText] = createSignal('')
+  const [pastes, setPastes] = createSignal(unsentPastes.get(props.sessionId) ?? [])
+  createEffect(() => unsentPastes.set(props.sessionId, pastes()))
+  const hasInput = () => !!text().trim() || pastes().length > 0
   const [started, setStarted] = createSignal(false)
   const [mode, setMode] = createSignal<PermissionMode>('auto')
   const [inWorktree, setInWorktree] = createSignal(!!props.worktree)
@@ -142,9 +153,9 @@ export function Chat(props: {
   })
 
 
-  const send = (value: string) => {
+  const send = (value: string, attached: string[] = []) => {
     const worktree = inWorktree() && canWorktree() ? (worktreeName() ?? '') : undefined
-    socket.send({ type: 'send', sessionId: props.sessionId, text: value, cwd: cwd(), mode: mode(), worktree })
+    socket.send({ type: 'send', sessionId: props.sessionId, text: value, pastes: attached, cwd: cwd(), mode: mode(), worktree })
     if (!started()) {
       setStarted(true)
       props.onStart?.()
@@ -154,13 +165,13 @@ export function Chat(props: {
   }
 
   const submit = () => {
-    const value = text().trim()
-    if (!value) return
-    send(value)
+    if (!hasInput()) return
+    send(text().trim(), pastes())
     // The server clears the saved draft when the message arrives.
     clearTimeout(saveTimer)
     unsaved = false
     setText('')
+    setPastes([])
   }
 
   const changeMode = (next: PermissionMode) => {
@@ -241,10 +252,20 @@ export function Chat(props: {
             </div>
           </Show>
           <div class="border border-edge transition-colors rounded-2xl focus-within:border-fg-3">
+            <Show when={pastes().length}>
+              <Pastes pastes={pastes()} onRemove={(i) => setPastes(pastes().filter((_, j) => j !== i))} class="px-3 pt-3" />
+            </Show>
             <textarea
               ref={input}
               value={text()}
               onInput={(e) => edit(e.currentTarget.value)}
+              onPaste={(e) => {
+                // Big pastes become attachments, so the composer stays editable.
+                const pasted = e.clipboardData?.getData('text/plain')
+                if (!pasted || !isLongPaste(pasted)) return
+                e.preventDefault()
+                setPastes([...pastes(), pasted])
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
                   e.preventDefault()
@@ -284,9 +305,9 @@ export function Chat(props: {
               <div class="flex-1" />
               {/* One slot: stop while running with nothing typed, otherwise send. */}
               <Show
-                when={state.running && !text().trim()}
+                when={state.running && !hasInput()}
                 fallback={
-                  <IconButton onClick={submit} disabled={!text().trim()} title="Send (Enter)">
+                  <IconButton onClick={submit} disabled={!hasInput()} title="Send (Enter)">
                     <ArrowUp class="size-4" />
                   </IconButton>
                 }

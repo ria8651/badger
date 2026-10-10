@@ -163,6 +163,8 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       viewers.get(event.sessionId)?.delete(ws)
       return
     case 'send': {
+      const pastes = event.pastes ?? []
+      if (!Array.isArray(pastes) || pastes.some((p) => typeof p !== 'string')) throw new BadRequest('pastes must be strings')
       // Picking an archived chat back up brings it back to the sidebar.
       store.setArchived(event.sessionId, false, UI)
       // Sending empties the composer in every tab, not just the one that sent.
@@ -175,7 +177,7 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       }
       const session = await manager.open(event.sessionId, { cwd: event.cwd, mode: event.mode, worktree: event.worktree })
       if (isNew) session.subscribe(broadcast)
-      if (!session.send(event.text)) throw new Error('Session is closed; try again')
+      if (!session.send(event.text, pastes)) throw new Error('Session is closed; try again')
       return
     }
     case 'draft':

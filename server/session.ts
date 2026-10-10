@@ -16,6 +16,7 @@ import {
   type SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import type { BackgroundTask, PendingPermission, PermissionMode, ServerEvent, WireMessage } from '../shared/protocol.ts'
+import { wrapPaste } from '../shared/pastes.ts'
 import { BashStreams, streamEnv } from './bashStream.ts'
 import { MessageQueue } from './queue.ts'
 
@@ -192,13 +193,14 @@ export class LiveSession {
     }
   }
 
-  send(text: string): boolean {
+  send(text: string, pastes: string[] = []): boolean {
+    const blocks = [...(text ? [text] : []), ...pastes.map(wrapPaste)].map((t) => ({ type: 'text' as const, text: t }))
     const message = {
       type: 'user' as const,
       uuid: randomUUID(),
       session_id: this.id,
       parent_tool_use_id: null,
-      message: { role: 'user' as const, content: text },
+      message: { role: 'user' as const, content: pastes.length ? blocks : text },
     }
     if (!this.queue.push(message)) return false
     // Echo immediately so every tab shows the message before the SDK replays it.

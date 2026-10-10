@@ -2,6 +2,7 @@ import { For, Show, createContext, createMemo, createSignal, onCleanup, useConte
 import { unwrap } from 'solid-js/store'
 import { Columns3 } from 'lucide-solid'
 import { parseCardContext, type CardContext } from '../../shared/cardContext.ts'
+import { unwrapPaste } from '../../shared/pastes.ts'
 import type { CardStatus, WireMessage } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
 import { collectTasks, type Task } from '../tasks.ts'
@@ -9,13 +10,14 @@ import { ChildChats, type Partial } from '../useChat.ts'
 import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
 import { Disclosure, Pre, ToolCard, resultText, toolLabel, toolSummary, type ToolResult } from './ToolCard.tsx'
-import { LiveDot } from './ui.tsx'
+import { Pastes } from './Pastes.tsx'
+import { LiveDot, plural } from './ui.tsx'
 
 type Block = { type: string; text?: string; thinking?: string; id?: string; name?: string; input?: Record<string, unknown> }
 type ContentBlock = Block & { tool_use_id?: string; content?: unknown; is_error?: boolean }
 
 type Item =
-  | { kind: 'user'; text: string }
+  | { kind: 'user'; text: string; pastes?: string[] }
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; id: string; name: string; input: Record<string, unknown> }
@@ -56,8 +58,8 @@ function messageItems(m: WireMessage): Item[] {
     const sent = sentToSubagent(m)
     if (sent) return [{ kind: 'user', text: sent }]
     if (m.isMeta || m.isSynthetic) return []
-    const text = userText(m)
-    return text ? [{ kind: 'user', text }] : []
+    const { text, pastes } = userText(m)
+    return text || pastes.length ? [{ kind: 'user', text, pastes }] : []
   }
   if (m.type === 'assistant') {
     const content = ((m.message as { content?: Block[] })?.content ?? []) as Block[]
@@ -179,7 +181,6 @@ function foldWork(items: Item[]) {
   return { rows, groups, tail }
 }
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 function collectResults(m: WireMessage, results: Map<string, ToolResult>) {
   const content = (m.message as { content?: unknown })?.content
@@ -198,19 +199,23 @@ function sentToSubagent(m: WireMessage): string | undefined {
   return sent?.[1].trim() || undefined
 }
 
-function userText(m: WireMessage): string {
+/** What the user typed, and the big pastes sent with it as attachments. */
+function userText(m: WireMessage): { text: string; pastes: string[] } {
   const content = (m.message as { content?: unknown })?.content
-  const raw =
-    typeof content === 'string'
-      ? content
-      : Array.isArray(content)
-        ? (content as ContentBlock[]).filter((b) => b.type === 'text').map((b) => b.text).join('\n')
-        : ''
+  const blocks = typeof content === 'string' ? [content] : Array.isArray(content) ? (content as ContentBlock[]).filter((b) => b.type === 'text').map((b) => b.text ?? '') : []
+  const pastes: string[] = []
+  const typed: string[] = []
+  for (const b of blocks) {
+    const paste = unwrapPaste(b)
+    if (paste !== undefined) pastes.push(paste)
+    else typed.push(b)
+  }
+  const raw = typed.join('\n')
   const command = raw.match(/<command-name>(.*?)<\/command-name>/)
-  if (command) return command[1]
+  if (command) return { text: command[1], pastes }
   // Harness-injected content (system reminders, command output) is wrapped in tags.
-  if (raw.trimStart().startsWith('<')) return ''
-  return raw
+  if (raw.trimStart().startsWith('<')) return { text: '', pastes }
+  return { text: raw, pastes }
 }
 
 type TranscriptProps = {
@@ -299,7 +304,7 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
       case 'work':
         return <WorkRow work={item} />
       case 'user':
-        return <UserMessage text={item.text} />
+        return <UserMessage text={item.text} pastes={item.pastes} />
       case 'text':
         return (
           <div class="my-4">
@@ -587,32 +592,37 @@ function CardContextBadge(props: { context: CardContext }) {
 }
 
 /** A user's message; long ones (big pastes) are clamped with a fade until expanded. */
-function UserMessage(props: { text: string }) {
+function UserMessage(props: { text: string; pastes?: string[] }) {
   const [overflows, setOverflows] = createSignal(false)
   const [expanded, setExpanded] = createSignal(false)
   const clamped = () => overflows() && !expanded()
   return (
     <div class="mt-8 mb-4 flex justify-end first:mt-0">
-      <div class="max-w-[80%] bg-surface rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed">
-        <div
-          ref={(el) => {
-            // Re-measured on resize: width changes rewrap the text, and hidden chats measure as 0.
-            const observer = new ResizeObserver(() => !expanded() && setOverflows(el.scrollHeight > el.clientHeight))
-            observer.observe(el)
-            onCleanup(() => observer.disconnect())
-          }}
-          class="overflow-hidden whitespace-pre-wrap"
-          style={{
-            'max-height': expanded() ? undefined : '18rem',
-            'mask-image': clamped() ? 'linear-gradient(to bottom, black 70%, transparent)' : undefined,
-          }}
-        >
-          {props.text}
-        </div>
-        <Show when={overflows()}>
-          <button class="mt-1 text-xs text-fg-3 hover:text-fg-2" onClick={() => setExpanded(!expanded())}>
-            {expanded() ? 'Show less' : 'Show more'}
-          </button>
+      <div class="max-w-[80%] min-w-0 bg-surface rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed">
+        <Show when={props.pastes?.length}>
+          <Pastes pastes={props.pastes!} class={props.text ? 'mb-2' : ''} />
+        </Show>
+        <Show when={props.text}>
+          <div
+            ref={(el) => {
+              // Re-measured on resize: width changes rewrap the text, and hidden chats measure as 0.
+              const observer = new ResizeObserver(() => !expanded() && setOverflows(el.scrollHeight > el.clientHeight))
+              observer.observe(el)
+              onCleanup(() => observer.disconnect())
+            }}
+            class="overflow-hidden whitespace-pre-wrap"
+            style={{
+              'max-height': expanded() ? undefined : '18rem',
+              'mask-image': clamped() ? 'linear-gradient(to bottom, black 70%, transparent)' : undefined,
+            }}
+          >
+            {props.text}
+          </div>
+          <Show when={overflows()}>
+            <button class="mt-1 text-xs text-fg-3 hover:text-fg-2" onClick={() => setExpanded(!expanded())}>
+              {expanded() ? 'Show less' : 'Show more'}
+            </button>
+          </Show>
         </Show>
       </div>
     </div>

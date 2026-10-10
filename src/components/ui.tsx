@@ -39,6 +39,8 @@ export function LiveDot(props: { class?: string }) {
  */
 export const ltr = (text: string) => '\u200E' + text
 
+export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+
 export interface MenuItem {
   label: string
   description?: string
