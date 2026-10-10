@@ -1,4 +1,4 @@
-import { For, Show, createContext, createMemo, createSignal, useContext, type Accessor, type JSX } from 'solid-js'
+import { For, Show, createContext, createMemo, createSignal, onCleanup, useContext, type Accessor, type JSX } from 'solid-js'
 import { unwrap } from 'solid-js/store'
 import { Columns3 } from 'lucide-solid'
 import { parseCardContext, type CardContext } from '../../shared/cardContext.ts'
@@ -299,11 +299,7 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
       case 'work':
         return <WorkRow work={item} />
       case 'user':
-        return (
-          <div class="mt-8 mb-4 flex justify-end first:mt-0">
-            <div class="max-w-[80%] bg-surface rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap">{item.text}</div>
-          </div>
-        )
+        return <UserMessage text={item.text} />
       case 'text':
         return (
           <div class="my-4">
@@ -586,6 +582,39 @@ function CardContextBadge(props: { context: CardContext }) {
       <Show when={props.context.card} fallback={<span class={`${badge} text-fg-3`}><Columns3 class="size-3.5" />No longer on a card</span>}>
         {(card) => <CardBadge card={card()} />}
       </Show>
+    </div>
+  )
+}
+
+/** A user's message; long ones (big pastes) are clamped with a fade until expanded. */
+function UserMessage(props: { text: string }) {
+  const [overflows, setOverflows] = createSignal(false)
+  const [expanded, setExpanded] = createSignal(false)
+  const clamped = () => overflows() && !expanded()
+  return (
+    <div class="mt-8 mb-4 flex justify-end first:mt-0">
+      <div class="max-w-[80%] bg-surface rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed">
+        <div
+          ref={(el) => {
+            // Re-measured on resize: width changes rewrap the text, and hidden chats measure as 0.
+            const observer = new ResizeObserver(() => !expanded() && setOverflows(el.scrollHeight > el.clientHeight))
+            observer.observe(el)
+            onCleanup(() => observer.disconnect())
+          }}
+          class="overflow-hidden whitespace-pre-wrap"
+          style={{
+            'max-height': expanded() ? undefined : '18rem',
+            'mask-image': clamped() ? 'linear-gradient(to bottom, black 70%, transparent)' : undefined,
+          }}
+        >
+          {props.text}
+        </div>
+        <Show when={overflows()}>
+          <button class="mt-1 text-xs text-fg-3 hover:text-fg-2" onClick={() => setExpanded(!expanded())}>
+            {expanded() ? 'Show less' : 'Show more'}
+          </button>
+        </Show>
+      </div>
     </div>
   )
 }
