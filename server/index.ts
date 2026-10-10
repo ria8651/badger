@@ -5,6 +5,7 @@ import { extname, isAbsolute, join, resolve } from 'node:path'
 import { getSessionInfo, listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { IMAGE_TYPES, type AnswerDraft, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
+import { Attention } from './attention.ts'
 import { BOARD_AUTO_ALLOWED, BOARD_SERVER, boardServer, cardContext } from './boardTools.ts'
 import { Children } from './children.ts'
 import { type Actor, BadRequest, type Draft, Store } from './db.ts'
@@ -62,7 +63,11 @@ const cardsChanged = () => broadcast({ type: 'cards_changed' })
 // Merging only starts a chat in the main checkout, and that chat asks for anything risky itself.
 const MERGE_TOOL_NAME = `mcp__${BOARD_SERVER}__${MERGE_TOOL}`
 const manager: SessionManager = new SessionManager(
-  () => broadcast({ type: 'sessions_changed' }),
+  () => {
+    broadcast({ type: 'sessions_changed' })
+    // A closed session's prompts are gone with it.
+    attention.update()
+  },
   (sessionId, cwd) => ({
     mcpServers: {
       [BOARD_SERVER]: boardServer(store, sessionId, cardsChanged, [
@@ -91,7 +96,9 @@ const manager: SessionManager = new SessionManager(
     sendContext(sessionId)
     void usage.refreshAccount()
   },
+  (session) => attention.watch(session),
 )
+const attention = new Attention(store, manager, broadcast)
 const children = new Children(manager, store, broadcast)
 const usage = new Usage(manager, (u) => broadcast({ type: 'account_usage', usage: u }))
 
@@ -222,6 +229,7 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       const { pastes, images } = checkAttachments(event)
       // Picking an archived chat back up brings it back to the sidebar.
       store.setArchived(event.sessionId, false, UI)
+      attention.mark(event.sessionId, false)
       // Sending empties the composer in every tab, not just the one that sent.
       saveDraft(ws, event.sessionId, { text: '', attachments: { pastes: [], images: [] } })
       const isNew = !manager.get(event.sessionId)
@@ -265,6 +273,9 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       for (const other of viewers.get(event.sessionId) ?? []) if (other !== ws) send(other, update)
       return
     }
+    case 'seen':
+      attention.mark(event.sessionId, false)
+      return
     case 'term_subscribe':
       subscribeTerminal(ws, event.id)
       return
@@ -520,6 +531,7 @@ wss.on('connection', (ws: WebSocket) => {
   const account = usage.latestAccount()
   if (account) send(ws, { type: 'account_usage', usage: account })
   void usage.refreshAccount()
+  send(ws, { type: 'attention', chats: attention.chats() })
   // Handle each socket's events in order so a snapshot can't overtake a later status.
   let chain = Promise.resolve()
   ws.on('message', (raw) => {

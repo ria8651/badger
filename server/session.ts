@@ -62,7 +62,8 @@ export class LiveSession {
   private idleTimer: NodeJS.Timeout | null = null
   private bash: BashStreams
   private onClose: () => void
-  private onCwd: () => void
+  /** Its cwd changed or it started or finished working. */
+  private onChange: () => void
   private onTurnEnd: () => void
   /** Tool calls that have started, by tool_use_id, so a tool's handler can find out which call it is. */
   private toolUses = new Map<string, string>()
@@ -84,7 +85,7 @@ export class LiveSession {
     worktree?: string
     tools: SessionTools
     onClose: () => void
-    onCwd: () => void
+    onChange: () => void
     onTurnEnd: () => void
   }) {
     this.id = opts.id
@@ -92,7 +93,7 @@ export class LiveSession {
     this.mode = opts.mode
     this.model = opts.model
     this.onClose = opts.onClose
-    this.onCwd = opts.onCwd
+    this.onChange = opts.onChange
     this.onTurnEnd = opts.onTurnEnd
     this.bash = new BashStreams(this.id, (toolUseId, chunk) =>
       this.emit({ type: 'bash_output', sessionId: this.id, toolUseId, chunk }),
@@ -288,6 +289,11 @@ export class LiveSession {
     return fn(this.agent)
   }
 
+  /** A permission prompt or question is waiting on the user. */
+  get waiting(): boolean {
+    return this.pending.size > 0
+  }
+
   /** Run once the current turn ends, e.g. cleanup that can't happen while this chat is still working in its directory. */
   afterTurn(fn: () => void): void {
     this.afterTurnCallbacks.push(fn)
@@ -393,6 +399,7 @@ export class LiveSession {
     if (running === this.running) return
     this.running = running
     this.emitStatus()
+    this.onChange()
     if (!running) {
       // Outside this call stack: a callback may close this session.
       for (const fn of this.afterTurnCallbacks.splice(0)) setImmediate(fn)
@@ -403,7 +410,7 @@ export class LiveSession {
     if (!cwd || cwd === this.cwd) return
     this.cwd = cwd
     this.emitStatus()
-    this.onCwd()
+    this.onChange()
   }
 
   private emitStatus(): void {
@@ -611,6 +618,8 @@ export class SessionManager {
     /** `cwd` is a getter: it changes if Claude moves into a worktree. */
     private tools: (sessionId: string, cwd: () => string) => SessionTools,
     private onTurnEnd: (sessionId: string) => void,
+    /** Called with every session as it starts, before its first message. */
+    private onOpen: (session: LiveSession) => void = () => {},
   ) {}
 
   get(id: string): LiveSession | undefined {
@@ -659,10 +668,11 @@ export class SessionManager {
         if (this.sessions.get(id) === session) this.sessions.delete(id)
         this.onChange()
       },
-      onCwd: this.onChange,
+      onChange: this.onChange,
       onTurnEnd: () => this.onTurnEnd(id),
     })
     this.sessions.set(id, session)
+    this.onOpen(session)
     this.onChange()
     return session
   }
