@@ -21,7 +21,7 @@ export function IconButton(props: JSX.ButtonHTMLAttributes<HTMLButtonElement> & 
   return (
     <button
       {...rest}
-      class={`grid size-8 shrink-0 place-items-center rounded-full bg-fg text-bg transition-colors hover:bg-fg/85 disabled:bg-surface disabled:text-fg-3 ${local.class ?? ''}`}
+      class={`grid size-8 shrink-0 place-items-center rounded-full bg-fg text-bg transition-colors pointer-coarse:size-9 hover:bg-fg/85 disabled:bg-surface disabled:text-fg-3 ${local.class ?? ''}`}
     />
   )
 }
