@@ -98,7 +98,11 @@ export function Columns(props: BoardProps & { parentId: number | null; class?: s
                   <Plus class="size-3.5" />
                 </button>
               </header>
-              <div class="flex min-h-16 flex-1 flex-col gap-1.5 overflow-y-auto px-2 pb-2">
+              <div
+                class="flex min-h-16 flex-1 flex-col gap-1.5 overflow-y-auto px-2 pb-2"
+                // Double-clicking empty space below the cards adds one, like the + button.
+                onDblClick={(e) => e.target === e.currentTarget && setAdding(status)}
+              >
                 <For each={column(status)}>
                   {(card) => {
                     const chats = () => props.sessions.filter((s) => card.sessionIds.includes(s.id))
