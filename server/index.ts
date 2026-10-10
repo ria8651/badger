@@ -28,6 +28,7 @@ const DATA_DIR = resolve(process.env.DATA_DIR ?? 'data')
 const SCRATCH_DIR = resolve(process.env.SCRATCH_DIR || join(homedir(), '.badger', 'scratch'))
 
 mkdirSync(SCRATCH_DIR, { recursive: true })
+mkdirSync(WORKSPACE_DIR, { recursive: true })
 if (!existsSync(join(SCRATCH_DIR, 'CLAUDE.md'))) {
   writeFileSync(
     join(SCRATCH_DIR, 'CLAUDE.md'),
@@ -410,15 +411,19 @@ const MIME: Record<string, string> = {
 /**
  * Only the page this server serves may use it. Without auth, any website the
  * user visits could otherwise POST a command into a terminal or open the
- * WebSocket and type into one. The Host check stops DNS rebinding (a hostile
- * name resolving to 127.0.0.1); the Origin check stops cross-site requests.
+ * WebSocket and type into one. The Origin check stops cross-site requests.
  * Requests with no Origin (curl, same-origin GETs) are allowed.
+ *
+ * Bound to loopback, the Host check also stops DNS rebinding (a hostile name
+ * resolving to 127.0.0.1). Bound wider, whatever fronts the port (an auth
+ * proxy) is the guard: a rebound name reaches the proxy without a session.
  */
-const LOCAL_NAMES = new Set(['localhost', '127.0.0.1', '[::1]', HOST])
+const LOCAL_NAMES = new Set(['localhost', '127.0.0.1', '[::1]'])
+const CHECK_HOST = LOCAL_NAMES.has(HOST) || HOST === '::1'
 
 function sameOrigin(req: IncomingMessage): boolean {
   const host = req.headers.host
-  if (!host || !LOCAL_NAMES.has(new URL(`http://${host}`).hostname)) return false
+  if (!host || (CHECK_HOST && !LOCAL_NAMES.has(new URL(`http://${host}`).hostname))) return false
   const origin = req.headers.origin
   if (!origin) return true
   try {

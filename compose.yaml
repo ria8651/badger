@@ -1,0 +1,13 @@
+services:
+  badger:
+    build: .
+    container_name: badger
+    restart: unless-stopped
+    # No auth of its own: only expose this to the auth proxy in front of it.
+    ports:
+      - 3001:3001
+    # Transcripts, database, Claude/git/gh logins, repos.
+    volumes:
+      - ${BADGER_DIR:-./badger}:/badger
+    # Whoever owns BADGER_DIR.
+    # user: 1000:1000

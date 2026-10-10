@@ -14,6 +14,19 @@ Production: `pnpm build && pnpm start` (the server serves `dist/` itself).
 
 Claude auth comes from `ANTHROPIC_API_KEY` if set, otherwise from the server user's existing `claude` login.
 
+### Docker / Podman
+
+```bash
+mkdir badger && docker compose up -d --build   # on :3001
+```
+
+Everything that persists is in one folder, `BADGER_DIR` (default `./badger`), mounted at `/badger` and used as the container's `HOME`: Claude Code's transcripts and login, Badger's database, git and gh config, and repos, which go in `~/code` (the default folder). Log in once from a Badger terminal with `claude`, `gh auth login` and `git config --global …`; it survives the container being recreated. Any `user:` works as long as it can write the folder.
+
+- It has no auth of its own: put it behind a proxy that does. Proxies must pass WebSocket upgrades on `/ws` and keep the `Host` header.
+- Use git over HTTPS (`gh auth login` sets it up). `ssh` refuses to run as a uid with no passwd entry, which a custom `user:` is.
+- The container user can't `apt-get`; install extra tools with `docker exec -u root badger apt-get install …`, or add them to the `Dockerfile`.
+- Terminals don't outlive the container: restarting it restarts the server and the PTY host together.
+
 ## How it works
 
 - **One live Claude Code process per chat** (`server/session.ts`). `query()` is fed by an async queue (`server/queue.ts`), so the process persists between turns and messages sent mid-turn are delivered at the next break. Idle processes close after 15 minutes; the next message resumes the session from disk.

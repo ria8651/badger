@@ -1,4 +1,4 @@
-import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync } from 'node:fs'
+import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -19,7 +19,8 @@ const READ_LIMIT = 256 * 1024
 const KEEP = 64 * 1024
 
 mkdirSync(STREAM_DIR, { recursive: true })
-chmodSync(PREFIX, 0o755)
+// Only when needed: deployed, the app's files belong to root, not the server's user.
+if (!(statSync(PREFIX).mode & 0o111)) chmodSync(PREFIX, 0o755)
 
 /** Env for query(); leaves a user-configured shell prefix alone (no streaming then). */
 export function streamEnv(): Record<string, string | undefined> {
