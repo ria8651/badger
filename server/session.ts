@@ -10,6 +10,7 @@ import {
   query,
   type CanUseTool,
   type McpServerConfig,
+  type Options,
   type PermissionResult,
   type PermissionUpdate,
   type Query,
@@ -62,6 +63,7 @@ export class LiveSession {
   private bash: BashStreams
   private onClose: () => void
   private onCwd: () => void
+  private onTurnEnd: () => void
   /** Tool calls that have started, by tool_use_id, so a tool's handler can find out which call it is. */
   private toolUses = new Map<string, string>()
   private afterTurnCallbacks: (() => void)[] = []
@@ -83,6 +85,7 @@ export class LiveSession {
     tools: SessionTools
     onClose: () => void
     onCwd: () => void
+    onTurnEnd: () => void
   }) {
     this.id = opts.id
     this.cwd = opts.cwd
@@ -90,6 +93,7 @@ export class LiveSession {
     this.model = opts.model
     this.onClose = opts.onClose
     this.onCwd = opts.onCwd
+    this.onTurnEnd = opts.onTurnEnd
     this.bash = new BashStreams(this.id, (toolUseId, chunk) =>
       this.emit({ type: 'bash_output', sessionId: this.id, toolUseId, chunk }),
     )
@@ -279,6 +283,11 @@ export class LiveSession {
     return ids.at(-1)
   }
 
+  /** Asks this chat's Claude Code process something directly, e.g. how full its context is. */
+  ask<T>(fn: (q: Query) => Promise<T>): Promise<T> {
+    return fn(this.agent)
+  }
+
   /** Run once the current turn ends, e.g. cleanup that can't happen while this chat is still working in its directory. */
   afterTurn(fn: () => void): void {
     this.afterTurnCallbacks.push(fn)
@@ -367,8 +376,10 @@ export class LiveSession {
     // The SDK may replay the user message we already echoed; skip the duplicate.
     if (msg.type === 'user' && wire.uuid && this.live.some((m) => m.uuid === wire.uuid)) return
     this.record(wire)
-    if (msg.type === 'result') this.setRunning(false)
-    else if (msg.type === 'assistant') this.setRunning(true)
+    if (msg.type === 'result') {
+      this.setRunning(false)
+      this.onTurnEnd()
+    } else if (msg.type === 'assistant') this.setRunning(true)
   }
 
   private record(message: WireMessage): void {
@@ -559,23 +570,29 @@ export function transcriptModel(messages: WireMessage[]): string | undefined {
   return undefined
 }
 
+/**
+ * Starts a Claude Code process just to ask it something, then closes it.
+ * Nothing is sent to the model and nothing is saved. Settings aren't loaded
+ * unless asked for, so the user's hooks don't run.
+ */
+export async function oneOff<T>(options: Options, fn: (q: Query) => Promise<T>): Promise<T> {
+  const idle: AsyncIterable<never> = { [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }) }
+  const q = query({ prompt: idle, options: { settingSources: [], ...options, persistSession: false } })
+  try {
+    return await fn(q)
+  } finally {
+    q.close()
+  }
+}
+
 let models: Promise<ModelOption[]> | undefined
 
-/**
- * The models Claude Code offers this account, asked once of a process that's
- * started for it and closed again; nothing is sent to the API.
- */
+/** The models Claude Code offers this account, asked once. */
 export function listModels(): Promise<ModelOption[]> {
-  models ??= (async () => {
-    const idle: AsyncIterable<never> = { [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }) }
-    const q = query({ prompt: idle, options: { cwd: homedir(), settingSources: ['user'], persistSession: false } })
-    try {
-      const { models } = await q.initializationResult()
-      return models.map(({ value, resolvedModel, displayName, description }) => ({ value, resolvedModel, displayName, description }))
-    } finally {
-      q.close()
-    }
-  })()
+  models ??= oneOff({ cwd: homedir(), settingSources: ['user'] }, async (q) => {
+    const { models } = await q.initializationResult()
+    return models.map(({ value, resolvedModel, displayName, description }) => ({ value, resolvedModel, displayName, description }))
+  })
   // Ask again next time rather than keep a failure.
   models.catch(() => (models = undefined))
   return models
@@ -593,6 +610,7 @@ export class SessionManager {
     private onChange: () => void,
     /** `cwd` is a getter: it changes if Claude moves into a worktree. */
     private tools: (sessionId: string, cwd: () => string) => SessionTools,
+    private onTurnEnd: (sessionId: string) => void,
   ) {}
 
   get(id: string): LiveSession | undefined {
@@ -605,6 +623,11 @@ export class SessionManager {
 
   liveIds(): string[] {
     return [...this.sessions.keys()]
+  }
+
+  /** Some live session, for asking Claude Code about the account rather than a chat. */
+  any(): LiveSession | undefined {
+    return this.sessions.values().next().value
   }
 
   /** Return the live session, resuming it from disk or creating it as needed. */
@@ -637,6 +660,7 @@ export class SessionManager {
         this.onChange()
       },
       onCwd: this.onChange,
+      onTurnEnd: () => this.onTurnEnd(id),
     })
     this.sessions.set(id, session)
     this.onChange()

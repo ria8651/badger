@@ -8,9 +8,11 @@ import { Board } from './components/Board.tsx'
 import { CardView } from './components/CardView.tsx'
 import { Chat } from './components/Chat.tsx'
 import { RenameChat } from './components/RenameChat.tsx'
+import { AccountLimits } from './components/Usage.tsx'
 import { StatusDot, TerminalPage } from './components/Terminals.tsx'
 import { LiveDot } from './components/ui.tsx'
 import { terminalLabel, terminals } from './terminals.ts'
+import { accountUsage } from './usage.ts'
 
 /** crypto.randomUUID needs a secure context; fall back for plain-http hosts. */
 function uuid(): string {
@@ -317,6 +319,7 @@ export function App() {
             </Show>
           </Show>
         </nav>
+        <Show when={accountUsage()}>{(u) => <AccountLimits usage={u()} />}</Show>
       </aside>
 
       <Switch>

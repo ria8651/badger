@@ -53,6 +53,28 @@ export interface SessionSummary {
   gone?: boolean
 }
 
+/** How full a chat's context window is, as Claude Code's /context counts it. */
+export interface ContextUsage {
+  /** Tokens in the window now. */
+  tokens: number
+  /** The window it's measured against: where autocompact kicks in, which may be below the model's limit. */
+  max: number
+  /** tokens / max, rounded, 0-100+. */
+  percent: number
+  /** 'used' rows fill the window, 'free' is what's left, 'buffer' is kept back for compacting, 'deferred' tools aren't loaded. */
+  categories: { name: string; tokens: number; kind: 'used' | 'free' | 'buffer' | 'deferred' }[]
+}
+
+/** The account's plan limits, as Claude Code's /usage shows them. */
+export interface AccountUsage {
+  /** e.g. pro, max, team, enterprise; null for an API key. */
+  plan: string | null
+  /** In the order the server gives them. Empty when plan limits don't apply, e.g. with an API key. */
+  limits: { label: string; percent: number; severity: string; resetsAt: string | null }[]
+  /** When this was read, ms since epoch. */
+  at: number
+}
+
 /** A git worktree Claude Code made under `<repo>/.claude/worktrees/`. */
 export interface WorktreeStatus {
   path: string
@@ -186,6 +208,10 @@ export type ServerEvent =
   | { type: 'status'; sessionId: string; running: boolean; mode: PermissionMode; model?: string; cwd: string }
   /** The background tasks running now; replaces the previous set. */
   | { type: 'background'; sessionId: string; tasks: BackgroundTask[] }
+  /** The chat's context window after its latest turn; sent after each one and on subscribe. */
+  | { type: 'context'; sessionId: string; usage: ContextUsage }
+  /** Plan limits; sent on connect and whenever they're read again. */
+  | { type: 'account_usage'; usage: AccountUsage }
   | { type: 'permission_request'; sessionId: string; permission: PendingPermission }
   /** Another viewer changed the answers picked in a pending AskUserQuestion. */
   | { type: 'answer_draft'; sessionId: string; requestId: string; answers: AnswerDraft }

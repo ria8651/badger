@@ -15,6 +15,7 @@ import { PermissionPrompt } from './PermissionPrompt.tsx'
 import { TerminalButton, TerminalDock } from './Terminals.tsx'
 import { toolLabel } from './ToolCard.tsx'
 import { Transcript, detail, setDetail } from './Transcript.tsx'
+import { ContextMeter } from './Usage.tsx'
 import { IconButton, LiveDot, Menu, Select, ltr, type Option } from './ui.tsx'
 
 const MODES: Option<PermissionMode>[] = [
@@ -393,6 +394,7 @@ export function Chat(props: {
                 </Show>
               </button>
               <div class="flex-1" />
+              <Show when={state.context}>{(u) => <ContextMeter usage={u()} />}</Show>
               {/* One slot: stop while running with nothing typed, otherwise send. */}
               <Show
                 when={state.running && !hasInput()}
