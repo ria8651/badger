@@ -5,6 +5,16 @@
 
 export type PermissionMode = 'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypassPermissions'
 
+/** A model Claude Code offers, as its model picker lists it. */
+export interface ModelOption {
+  /** What to pass to Claude Code: an alias like `opus`, a model id, or `default`. */
+  value: string
+  /** The model id it stands for, which is what transcripts record. */
+  resolvedModel?: string
+  displayName: string
+  description: string
+}
+
 export interface PendingPermission {
   requestId: string
   toolName: string
@@ -112,6 +122,8 @@ export type ClientEvent =
       images?: ImageAttachment[]
       cwd?: string
       mode?: PermissionMode
+      /** Used when this starts or resumes the chat's process; a running one keeps its model. */
+      model?: string
       /** Start a new chat in a git worktree of cwd with this name (reused if it exists); empty lets Claude name it. */
       worktree?: string
     }
@@ -121,6 +133,7 @@ export type ClientEvent =
   /** The composer's unsent text and attachments; each one given replaces what's saved. */
   | { type: 'draft'; sessionId: string; text?: string; attachments?: DraftAttachments }
   | { type: 'set_mode'; sessionId: string; mode: PermissionMode }
+  | { type: 'set_model'; sessionId: string; model: string }
   | {
       type: 'permission'
       sessionId: string
@@ -142,6 +155,8 @@ export type ServerEvent =
       messages: WireMessage[]
       running: boolean
       mode: PermissionMode
+      /** A ModelOption value, or a model id from the transcript. Absent until the chat has run. */
+      model?: string
       cwd?: string
       permissions: PendingPermission[]
       /** Output so far of Bash commands still running, by tool_use_id. */
@@ -159,7 +174,7 @@ export type ServerEvent =
   /** Live output from a running Bash command; the tool_result still carries the final output. */
   | { type: 'bash_output'; sessionId: string; toolUseId: string; chunk: string }
   /** cwd changes when the chat moves into a worktree. */
-  | { type: 'status'; sessionId: string; running: boolean; mode: PermissionMode; cwd: string }
+  | { type: 'status'; sessionId: string; running: boolean; mode: PermissionMode; model?: string; cwd: string }
   /** The background tasks running now; replaces the previous set. */
   | { type: 'background'; sessionId: string; tasks: BackgroundTask[] }
   | { type: 'permission_request'; sessionId: string; permission: PendingPermission }

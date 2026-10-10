@@ -9,7 +9,7 @@ import { BOARD_AUTO_ALLOWED, BOARD_SERVER, boardServer, cardContext } from './bo
 import { Children } from './children.ts'
 import { type Actor, BadRequest, type Draft, Store } from './db.ts'
 import { MERGE_TOOL, mergeTool } from './merge.ts'
-import { SessionManager, diskTranscript } from './session.ts'
+import { SessionManager, diskTranscript, listModels, transcriptModel } from './session.ts'
 import { TERMINAL_AUTO_ALLOWED, TERMINAL_SERVER, terminalServer } from './terminalTools.ts'
 import { Terminals, shellEnv } from './terminals.ts'
 import { suggestTitle } from './titles.ts'
@@ -134,6 +134,7 @@ async function snapshotFor(sessionId: string): Promise<ServerEvent> {
     messages,
     running: false,
     mode: 'auto',
+    model: transcriptModel(messages),
     cwd: info?.cwd,
     permissions: [],
     bashOutput: {},
@@ -189,7 +190,8 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
           throw new Error(`${event.cwd} isn't a git repository, so it can't have worktrees`)
         })
       }
-      const session = await manager.open(event.sessionId, { cwd: event.cwd, mode: event.mode, worktree: event.worktree })
+      if (event.model !== undefined && typeof event.model !== 'string') throw new BadRequest('model must be a string')
+      const session = await manager.open(event.sessionId, { cwd: event.cwd, mode: event.mode, model: event.model, worktree: event.worktree })
       if (isNew) session.subscribe(broadcast)
       if (!session.send(event.text, pastes, images)) throw new Error('Session is closed; try again')
       return
@@ -206,6 +208,11 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       return
     case 'set_mode':
       await manager.get(event.sessionId)?.setMode(event.mode)
+      return
+    case 'set_model':
+      if (typeof event.model !== 'string') throw new BadRequest('model must be a string')
+      // A chat that isn't running takes the model with its next message.
+      await manager.get(event.sessionId)?.setModel(event.model)
       return
     case 'permission':
       manager.get(event.sessionId)?.resolvePermission(event.requestId, event.decision, event.message, event.updatedInput)
@@ -413,6 +420,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/config') return json(200, { defaultCwd: WORKSPACE_DIR, scratchCwd: SCRATCH_DIR })
     if (url.pathname.startsWith('/api/')) {
       if (url.pathname === '/api/sessions') return json(200, await sessionList())
+      if (url.pathname === '/api/models') return json(200, await listModels())
       if (url.pathname === '/api/workspace') {
         const cwd = url.searchParams.get('cwd')
         if (!cwd) throw new BadRequest('cwd is required')

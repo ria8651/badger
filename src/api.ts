@@ -1,4 +1,4 @@
-import type { Card, CardStatus, ClientEvent, ServerEvent, SessionSummary, TerminalInfo, WorktreeStatus } from '../shared/protocol.ts'
+import type { Card, CardStatus, ClientEvent, ModelOption, ServerEvent, SessionSummary, TerminalInfo, WorktreeStatus } from '../shared/protocol.ts'
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -22,6 +22,7 @@ type CardPatch = Partial<Pick<Card, 'title' | 'description' | 'status' | 'positi
 export const api = {
   config: () => get<Config>('/api/config'),
   sessions: () => get<SessionSummary[]>('/api/sessions'),
+  models: () => get<ModelOption[]>('/api/models'),
   archive: (sessionId: string) => request<void>('POST', `/api/sessions/${sessionId}/archive`),
   unarchive: (sessionId: string) => request<void>('DELETE', `/api/sessions/${sessionId}/archive`),
   rename: (sessionId: string, title: string) => request<void>('PUT', `/api/sessions/${sessionId}/title`, { title }),

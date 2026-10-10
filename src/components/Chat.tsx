@@ -5,6 +5,7 @@ import type { BackgroundTask, Card, DraftAttachments, PermissionMode } from '../
 import { chatActions } from '../actions.ts'
 import { api, socket } from '../api.ts'
 import { readImage } from '../images.ts'
+import { lastModel, modelValue, models, setLastModel } from '../models.ts'
 import { cardWorktreeName, folderItem, isScratch, worktreeOf } from '../folders.ts'
 import { taskLabel } from '../tasks.ts'
 import { workspaceOf } from '../terminals.ts'
@@ -62,6 +63,13 @@ export function Chat(props: {
   let picker!: HTMLInputElement
   const [started, setStarted] = createSignal(false)
   const [mode, setMode] = createSignal<PermissionMode>('auto')
+  const [model, setModel] = createSignal(lastModel())
+  const modelOptions = createMemo((): Option<string>[] => {
+    const options = (models() ?? []).map((m) => ({ value: m.value, label: m.displayName.replace(/ \(.*\)$/, ''), description: m.description }))
+    // One Claude Code no longer offers, e.g. an older model a transcript was written with.
+    const current = modelValue(model(), models() ?? [])
+    return options.some((o) => o.value === current) ? options : [...options, { value: current, label: current }]
+  })
   const [inWorktree, setInWorktree] = createSignal(!!props.worktree)
   const worktreeName = () => props.card && cardWorktreeName(props.card)
   // Offered before the first message, for a repo checkout that isn't already a worktree.
@@ -80,6 +88,7 @@ export function Chat(props: {
   const where = () => (isScratch(cwd()) ? 'No folder' : (cwd() ?? ''))
 
   createEffect(on(() => state.mode, setMode))
+  createEffect(on(() => state.model, (m) => m && setModel(m)))
 
   // Chats this one started and waits on, subscribed once here for their tool calls and their prompts.
   // Mapped over tool_use_ids, which are strings, so adding a child never resubscribes the others.
@@ -173,7 +182,7 @@ export function Chat(props: {
 
   const send = (value: string, attachments: DraftAttachments = NO_ATTACHMENTS) => {
     const worktree = inWorktree() && canWorktree() ? (worktreeName() ?? '') : undefined
-    socket.send({ type: 'send', sessionId: props.sessionId, text: value, ...attachments, cwd: cwd(), mode: mode(), worktree })
+    socket.send({ type: 'send', sessionId: props.sessionId, text: value, ...attachments, cwd: cwd(), mode: mode(), model: model(), worktree })
     if (!started()) {
       setStarted(true)
       props.onStart?.()
@@ -195,6 +204,12 @@ export function Chat(props: {
   const changeMode = (next: PermissionMode) => {
     setMode(next)
     socket.send({ type: 'set_mode', sessionId: props.sessionId, mode: next })
+  }
+
+  const changeModel = (next: string) => {
+    setModel(next)
+    setLastModel(next)
+    socket.send({ type: 'set_model', sessionId: props.sessionId, model: next })
   }
 
   // A card's new chat sends the card with its first message, so it's shown as attached until then.
@@ -321,6 +336,9 @@ export function Chat(props: {
             />
             <div class="flex items-center gap-2 px-2 pb-2">
               <Select value={mode()} options={MODES} onChange={changeMode} title="Permission mode" />
+              <Show when={models()?.length}>
+                <Select value={modelValue(model(), models()!)} options={modelOptions()} onChange={changeModel} title="Model" />
+              </Show>
               <button
                 type="button"
                 onClick={() => picker.click()}

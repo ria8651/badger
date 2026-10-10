@@ -32,7 +32,7 @@ export class Children {
     // Recorded before the session exists, so the sidebar never lists it.
     this.store.addChild({ sessionId, parentId: parent.id, toolUseId: opts.toolUseId, kind: opts.kind })
     // A child can't propose a plan back to its parent, so plan mode falls back to asking.
-    const child = await this.manager.open(sessionId, { cwd: opts.cwd, mode: parent.mode === 'plan' ? 'default' : parent.mode })
+    const child = await this.manager.open(sessionId, { cwd: opts.cwd, mode: parent.mode === 'plan' ? 'default' : parent.mode, model: parent.model })
     child.subscribe(this.broadcast)
     this.broadcast({ type: 'child_started', sessionId: parent.id, toolUseId: opts.toolUseId, childId: sessionId })
 
