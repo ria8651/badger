@@ -1,22 +1,22 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, mapArray, on, onCleanup, onMount } from 'solid-js'
 import { ArrowUp, Check, FolderX, GitBranch, ImagePlus, ListChevronsDownUp, ListChevronsUpDown, Square, Zap } from 'lucide-solid'
 import { isLongPaste } from '../../shared/pastes.ts'
-import type { BackgroundTask, Card, DraftAttachments, PermissionMode } from '../../shared/protocol.ts'
+import type { Card, DraftAttachments, PermissionMode } from '../../shared/protocol.ts'
 import { chatActions } from '../actions.ts'
 import { api, socket } from '../api.ts'
 import { readImage } from '../images.ts'
 import { lastModel, modelValue, models, setLastModel } from '../models.ts'
 import { cardWorktreeName, folderItem, isScratch, worktreeOf } from '../folders.ts'
-import { taskLabel } from '../tasks.ts'
 import { workspaceOf } from '../terminals.ts'
 import { ChildChats, createChat } from '../useChat.ts'
 import { Attachments } from './Attachments.tsx'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
 import { TerminalButton, TerminalDock } from './Terminals.tsx'
-import { toolLabel } from './ToolCard.tsx'
-import { Transcript, detail, setDetail } from './Transcript.tsx'
+import { TaskTray, trayItems, waitingOnTask } from './TaskTray.tsx'
+import { reveal, revealed, toolLabel } from './ToolCard.tsx'
+import { Transcript, createIndex, detail, runInBackground, setDetail } from './Transcript.tsx'
 import { ContextMeter } from './Usage.tsx'
-import { IconButton, LiveDot, Menu, Select, ltr, type Option } from './ui.tsx'
+import { IconButton, Menu, Select, ltr, type Option } from './ui.tsx'
 
 const MODES: Option<PermissionMode>[] = [
   { value: 'default', label: 'Ask before edits', description: 'Claude asks before changing files or running commands.' },
@@ -87,6 +87,22 @@ export function Chat(props: {
     return dir && !isScratch(dir) ? workspaceOf(dir)() : undefined
   }
   const where = () => (isScratch(cwd()) ? 'No folder' : (cwd() ?? ''))
+
+  // Shared by the transcript and the task tray, so both read the chat's messages once.
+  const index = createIndex(() => state.messages, () => props.sessionId)
+  const tasks = createMemo(() => trayItems(index(), state.running, state.background, cwd()))
+  const waiting = () => state.running && waitingOnTask(index())
+  const toBackground = () => runInBackground(props.sessionId)
+
+  /** Scroll to a tool call, opening it and whatever it's folded into. */
+  const jump = (toolUseId: string) => {
+    reveal(toolUseId)
+    pinned = false
+    requestAnimationFrame(() => {
+      content.querySelector(`[data-id="${CSS.escape(toolUseId)}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      revealed()
+    })
+  }
 
   createEffect(on(() => state.mode, setMode))
   createEffect(on(() => state.model, (m) => m && setModel(m)))
@@ -249,6 +265,7 @@ export function Chat(props: {
               <ChildChats.Provider value={childState}>
                 <Transcript
                   sessionId={props.sessionId}
+                  index={index}
                   messages={state.messages}
                   partial={state.partial}
                   bashOutput={state.bashOutput}
@@ -277,8 +294,8 @@ export function Chat(props: {
               />
             )}
           </For>
-          <Show when={state.background.length}>
-            <Background sessionId={props.sessionId} tasks={state.background} />
+          <Show when={tasks().length}>
+            <TaskTray sessionId={props.sessionId} items={tasks} onJump={jump} />
           </Show>
           <Show when={state.error}>
             <div class="flex items-start gap-3 bg-danger/10 rounded-lg px-3 py-2 text-[13px] text-danger">
@@ -340,6 +357,10 @@ export function Chat(props: {
                   submit()
                 }
                 if (e.key === 'Escape' && state.running) interrupt()
+                if (e.key === 'b' && e.ctrlKey && !e.metaKey && waiting()) {
+                  e.preventDefault()
+                  toBackground()
+                }
               }}
               rows={Math.min(10, Math.max(2, text().split('\n').length))}
               placeholder={state.running ? 'Queue a message' : 'Message Claude'}
@@ -395,6 +416,16 @@ export function Chat(props: {
               </button>
               <div class="flex-1" />
               <Show when={state.context}>{(u) => <ContextMeter usage={u()} />}</Show>
+              <Show when={waiting()}>
+                <button
+                  type="button"
+                  onClick={toBackground}
+                  title="Stop waiting and let them carry on (Ctrl+B)"
+                  class="flex h-7 items-center rounded-md px-2 text-xs text-fg-3 transition-colors hover:bg-surface hover:text-fg-2"
+                >
+                  Run in background
+                </button>
+              </Show>
               {/* One slot: stop while running with nothing typed, otherwise send. */}
               <Show
                 when={state.running && !hasInput()}
@@ -415,29 +446,6 @@ export function Chat(props: {
       <Show when={root()} keyed>
         {(r) => <TerminalDock root={r} cwd={cwd()!} onOpenPage={props.onOpenTerminal} onHide={() => input.focus()} />}
       </Show>
-    </div>
-  )
-}
-
-/** What's still running after the call that started it returned, by the composer since it outlives turns. */
-function Background(props: { sessionId: string; tasks: BackgroundTask[] }) {
-  return (
-    <div class="rounded-xl border border-line px-3 py-1 text-[13px]">
-      <For each={props.tasks}>
-        {(t) => (
-          <div class="flex h-7 items-center gap-2">
-            <LiveDot />
-            <span class="shrink-0 text-fg-2">{taskLabel(t.type)}</span>
-            <span class="min-w-0 flex-1 truncate font-mono text-xs text-fg-3">{t.description}</span>
-            <button
-              onClick={() => socket.send({ type: 'stop_task', sessionId: props.sessionId, taskId: t.id })}
-              class="shrink-0 text-xs text-fg-3 transition-colors hover:text-fg-2"
-            >
-              Stop
-            </button>
-          </div>
-        )}
-      </For>
     </div>
   )
 }

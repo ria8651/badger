@@ -5,6 +5,9 @@ export interface Task {
   id: string
   /** The tool call that started it. */
   toolUseId: string
+  /** e.g. local_agent, local_bash; unknown for one read back from disk. */
+  type?: string
+  description?: string
   status: 'running' | 'completed' | 'failed' | 'stopped'
   /** The call returned straight away and the work carried on without it. */
   background: boolean
@@ -65,6 +68,8 @@ export function collectTasks(messages: WireMessage[]): Map<string, Task> {
         if (!toolUseId || m.skip_transcript) break
         // A resumed subagent keeps its id and starts again.
         const task = byId.get(id) ?? start(id, toolUseId, !!m.is_backgrounded)
+        task.type = m.task_type as string | undefined
+        task.description = String(m.description ?? '') || undefined
         task.status = 'running'
         task.activity = undefined
         break

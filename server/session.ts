@@ -110,6 +110,8 @@ export class LiveSession {
         includePartialMessages: true,
         // A one-line "what it's doing" for each running subagent, every ~30s.
         agentProgressSummaries: true,
+        // Each task has its own Stop, so stopping the turn leaves background work running.
+        perTaskStopAffordance: true,
         systemPrompt: { type: 'preset', preset: 'claude_code' },
         settingSources: ['user', 'project', 'local'],
         canUseTool: this.canUseTool,
@@ -232,6 +234,11 @@ export class LiveSession {
 
   async stopTask(taskId: string): Promise<void> {
     await this.agent.stopTask(taskId)
+  }
+
+  /** Moves a running subagent or command to the background so the turn carries on; without an id, every one. */
+  async backgroundTask(toolUseId?: string): Promise<void> {
+    await this.agent.backgroundTasks(toolUseId)
   }
 
   async setMode(mode: PermissionMode): Promise<void> {

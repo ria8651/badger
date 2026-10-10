@@ -254,6 +254,10 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
     case 'stop_task':
       await manager.get(event.sessionId)?.stopTask(event.taskId)
       return
+    case 'background_task':
+      if (event.toolUseId !== undefined && typeof event.toolUseId !== 'string') throw new BadRequest('toolUseId must be a string')
+      await manager.get(event.sessionId)?.backgroundTask(event.toolUseId)
+      return
     case 'set_mode':
       await manager.get(event.sessionId)?.setMode(event.mode)
       return

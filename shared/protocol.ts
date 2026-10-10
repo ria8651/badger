@@ -170,6 +170,8 @@ export type ClientEvent =
   | { type: 'interrupt'; sessionId: string }
   /** Stop one subagent or background task, leaving the rest of the chat running. */
   | { type: 'stop_task'; sessionId: string; taskId: string }
+  /** Stop waiting on a running subagent or command and let it carry on in the background; without toolUseId, every one. */
+  | { type: 'background_task'; sessionId: string; toolUseId?: string }
   /** The composer's unsent text and attachments; each one given replaces what's saved. */
   | { type: 'draft'; sessionId: string; text?: string; attachments?: DraftAttachments }
   | { type: 'set_mode'; sessionId: string; mode: PermissionMode }

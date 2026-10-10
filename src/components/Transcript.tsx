@@ -11,7 +11,7 @@ import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
 import { Disclosure, Pre, ToolCard, resultText, toolLabel, toolSummary, type ToolResult } from './ToolCard.tsx'
 import { Attachments } from './Attachments.tsx'
-import { LiveDot, plural } from './ui.tsx'
+import { LiveDot, compact, plural } from './ui.tsx'
 
 type Block = { type: string; text?: string; thinking?: string; id?: string; name?: string; input?: Record<string, unknown> }
 type ContentBlock = Block & { tool_use_id?: string; content?: unknown; is_error?: boolean; source?: { type: string; media_type: string; data: string } }
@@ -97,8 +97,8 @@ function messageItems(m: WireMessage): Item[] {
   return []
 }
 
-/** What a whole chat's messages say, shared by its transcript and the subagent transcripts nested in it. */
-interface Index {
+/** What a whole chat's messages say, shared by its transcript, the subagent transcripts nested in it and its task tray. */
+export interface Index {
   sessionId?: string
   /** Messages by the tool call of the subagent they belong to; the chat's own are under ''. */
   groups: Map<string, WireMessage[]>
@@ -106,19 +106,29 @@ interface Index {
   results: Map<string, ToolResult>
   /** Subagents and other tasks by the tool_use_id that started them. */
   tasks: Map<string, Task>
+  /** Each tool call's parent: the subagent call it was made in, or '' for the chat's own. */
+  parents: Map<string, string>
 }
 
-function buildIndex(messages: WireMessage[], sessionId?: string): Index {
+/** Whether a tool call was made inside the subagent started by `ancestor`, at any depth. */
+export function within(index: Index, id: string, ancestor: string): boolean {
+  for (let p = index.parents.get(id); p; p = index.parents.get(p)) if (p === ancestor) return true
+  return false
+}
+
+export function buildIndex(messages: WireMessage[], sessionId?: string): Index {
   const groups = new Map<string, WireMessage[]>()
   const results = new Map<string, ToolResult>()
+  const parents = new Map<string, string>()
   for (const m of messages) {
     const parent = (m.parent_tool_use_id as string | null | undefined) ?? ''
     let group = groups.get(parent)
     if (!group) groups.set(parent, (group = []))
     group.push(m)
     if (m.type === 'user') collectResults(m, results)
+    if (m.type === 'assistant') for (const b of ((m.message as { content?: Block[] })?.content ?? []) as Block[]) if (b.type === 'tool_use' && b.id) parents.set(b.id, parent)
   }
-  return { sessionId, groups, results, tasks: collectTasks(messages) }
+  return { sessionId, groups, results, tasks: collectTasks(messages), parents }
 }
 
 const TranscriptIndex = createContext<Accessor<Index>>()
@@ -247,12 +257,16 @@ type TranscriptProps = {
   children?: Record<string, string>
 }
 
-export function Transcript(props: TranscriptProps & { sessionId?: string }) {
-  // Track the array and its length, then walk the raw objects so the cache keys are stable.
-  const index = createMemo(() => {
-    void props.messages.length
-    return buildIndex(unwrap(props.messages), props.sessionId)
+/** Index a chat's messages. Tracks the array and its length, then walks the raw objects so the cache keys are stable. */
+export function createIndex(messages: () => WireMessage[], sessionId?: () => string | undefined): Accessor<Index> {
+  return createMemo(() => {
+    void messages().length
+    return buildIndex(unwrap(messages()), sessionId?.())
   })
+}
+
+export function Transcript(props: TranscriptProps & { sessionId?: string; index?: Accessor<Index> }) {
+  const index = props.index ?? createIndex(() => props.messages, () => props.sessionId)
   return (
     <TranscriptIndex.Provider value={index}>
       <Messages {...props} messages={index().groups.get('') ?? NONE} />
@@ -296,6 +310,7 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
     const steps = () => items().filter((i) => i.kind === 'tool').length
     return (
       <Disclosure
+        holds={(id) => items().some((i) => i.kind === 'tool' && (i.id === id || within(index(), id, i.id)))}
         label={live() ? 'Working' : steps() ? 'Worked' : 'Thought'}
         detail={live() ? activity(items()) : steps() ? plural(steps(), 'step') : ''}
         trailing={
@@ -346,6 +361,7 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
             running={props.running}
             cwd={props.cwd}
             task={index().tasks.get(item.id)}
+            onBackground={!props.nested && item.name === 'Bash' && index().sessionId ? () => runInBackground(index().sessionId!, item.id) : undefined}
           />
         )
       }
@@ -477,7 +493,6 @@ function AgentRun(props: { id: string; input: Record<string, unknown>; bashOutpu
   }
   const status = () => task()?.status ?? (result()?.isError ? 'failed' : undefined)
   const steps = () => Math.max(items().filter((i) => i.kind === 'tool').length, task()?.toolUses ?? 0)
-  const type = () => (typeof props.input.subagent_type === 'string' ? props.input.subagent_type : '')
   const prompt = () => (typeof props.input.prompt === 'string' ? props.input.prompt : '')
 
   /** The report, when its own transcript doesn't already end with it (live, a foreground agent's last message isn't sent). */
@@ -498,7 +513,8 @@ function AgentRun(props: { id: string; input: Record<string, unknown>; bashOutpu
   return (
     <Disclosure
       id={props.id}
-      label={type() && type() !== 'general-purpose' ? type() : 'Agent'}
+      label={agentLabel(props.input)}
+      holds={(id) => within(index(), id, props.id)}
       detail={String(props.input.description ?? '')}
       trailing={
         <>
@@ -540,12 +556,30 @@ function AgentRun(props: { id: string; input: Record<string, unknown>; bashOutpu
         </div>
       </Show>
       <Show when={running() && task() && index().sessionId}>
-        <button onClick={stop} class="text-xs text-fg-3 transition-colors hover:text-fg-2">
-          Stop agent
-        </button>
+        <div class="flex gap-4">
+          <Show when={!background()}>
+            <button onClick={() => runInBackground(index().sessionId!, props.id)} class="text-xs text-fg-3 transition-colors hover:text-fg-2">
+              Run in background
+            </button>
+          </Show>
+          <button onClick={stop} class="text-xs text-fg-3 transition-colors hover:text-fg-2">
+            Stop agent
+          </button>
+        </div>
       </Show>
     </Disclosure>
   )
+}
+
+/** What to call a subagent: its type, unless it's the general one. */
+export function agentLabel(input: Record<string, unknown>): string {
+  const type = typeof input.subagent_type === 'string' ? input.subagent_type : ''
+  return type && type !== 'general-purpose' ? type : 'Agent'
+}
+
+/** Stop waiting on a running subagent or command, leaving it to finish in the background; without an id, every one. */
+export function runInBackground(sessionId: string, toolUseId?: string): void {
+  socket.send({ type: 'background_task', sessionId, toolUseId })
 }
 
 /** A foreground agent's report as Claude received it, without the framing around it. */
@@ -664,7 +698,6 @@ function turnTokens(usage: unknown): { input: number; output: number } | undefin
   }
 }
 
-const compact = (n: number) => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
 
 /** 42s, 5m 3s, 1h 12m. */
 function duration(seconds: number): string {

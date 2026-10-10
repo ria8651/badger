@@ -1,4 +1,4 @@
-import { For, Match, Show, Switch, createEffect, createSignal, type JSX } from 'solid-js'
+import { For, Match, Show, Switch, createEffect, createSignal, on, type JSX } from 'solid-js'
 import { Check, ChevronRight, Loader2 } from 'lucide-solid'
 import type { Task } from '../tasks.ts'
 import { Markdown } from './Markdown.tsx'
@@ -156,6 +156,22 @@ export function ToolInput(props: { name: string; input: Input }) {
  */
 const picks = new Map<string, boolean>()
 
+/** The row being shown; a fresh object each time so asking again opens it again. */
+const [revealing, setRevealing] = createSignal<{ id: string }>()
+
+/**
+ * Opens the row with this id, and every folded row holding it, so it can be
+ * scrolled to: `[data-id="…"]`. Rows inside a subagent only exist once it
+ * opens, so the request stands until `revealed()` says the row has been found.
+ */
+export function reveal(id: string): void {
+  setRevealing({ id })
+}
+
+export function revealed(): void {
+  setRevealing(undefined)
+}
+
 /**
  * A quiet, expandable row: label, detail, trailing status. Shared by tool calls
  * and thinking so everything Claude does between replies reads the same way.
@@ -170,19 +186,34 @@ export function Disclosure(props: {
   peek?: JSX.Element
   /** Open while true, folding up once it turns false, until the user opens or closes it. */
   live?: boolean
+  /** Whether a row with this id is folded inside, so revealing it opens this too. */
+  holds?: (id: string) => boolean
   children: JSX.Element
 }) {
   // Derived rather than synced by an effect: once the user picks, nothing else
   // (other tools finishing, messages arriving) can change it.
-  const [picked, setPicked] = createSignal(props.id === undefined ? undefined : picks.get(props.id))
+  const shows = (r: { id: string } | undefined) => !!r && (r.id === props.id || !!props.holds?.(r.id))
+  if (shows(revealing()) && props.id !== undefined) picks.set(props.id, true)
+  const [picked, setPicked] = createSignal(props.id === undefined ? (shows(revealing()) || undefined) : picks.get(props.id))
   const open = () => picked() ?? !!props.live
   const toggle = () => {
     const next = !open()
     setPicked(next)
     if (props.id !== undefined) picks.set(props.id, next)
   }
+  createEffect(
+    on(
+      revealing,
+      (r) => {
+        if (!shows(r)) return
+        setPicked(true)
+        if (props.id !== undefined) picks.set(props.id, true)
+      },
+      { defer: true },
+    ),
+  )
   return (
-    <div class="text-[13px]">
+    <div data-id={props.id} class="text-[13px]">
       <button
         onClick={toggle}
         class="group -mx-2 flex w-[calc(100%+1rem)] items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-surface"
@@ -210,6 +241,8 @@ export function ToolCard(props: {
   cwd?: string
   /** Set when Claude Code tracks the call as a task, e.g. a command left running in the background. */
   task?: Task
+  /** Offered while the call runs and the turn waits on it. */
+  onBackground?: () => void
 }) {
   const live = () => (!props.result && props.running ? props.liveOutput : undefined)
   const status = () =>
@@ -254,6 +287,11 @@ export function ToolCard(props: {
         >
           <ToolInput name={props.name} input={props.input} />
           <Show when={live()}>{(text) => <LiveOutput text={text()} class="max-h-96" />}</Show>
+          <Show when={props.onBackground && !props.result && props.running && !props.task?.background}>
+            <button onClick={() => props.onBackground!()} class="text-xs text-fg-3 transition-colors hover:text-fg-2">
+              Run in background
+            </button>
+          </Show>
           <Show when={props.result}>
             {(r) => <Pre text={resultText(r().content) || '(no output)'} class={r().isError ? 'text-danger' : ''} />}
           </Show>
