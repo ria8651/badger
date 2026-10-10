@@ -15,7 +15,7 @@ import {
   type Query,
   type SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk'
-import type { BackgroundTask, PendingPermission, PermissionMode, ServerEvent, WireMessage } from '../shared/protocol.ts'
+import type { BackgroundTask, ImageAttachment, PendingPermission, PermissionMode, ServerEvent, WireMessage } from '../shared/protocol.ts'
 import { wrapPaste } from '../shared/pastes.ts'
 import { BashStreams, streamEnv } from './bashStream.ts'
 import { MessageQueue } from './queue.ts'
@@ -193,14 +193,18 @@ export class LiveSession {
     }
   }
 
-  send(text: string, pastes: string[] = []): boolean {
-    const blocks = [...(text ? [text] : []), ...pastes.map(wrapPaste)].map((t) => ({ type: 'text' as const, text: t }))
+  send(text: string, pastes: string[] = [], images: ImageAttachment[] = []): boolean {
+    // Images go first: Claude does best with images before the text about them.
+    const blocks = [
+      ...images.map((i) => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: i.mediaType, data: i.data } })),
+      ...[...(text ? [text] : []), ...pastes.map(wrapPaste)].map((t) => ({ type: 'text' as const, text: t })),
+    ]
     const message = {
       type: 'user' as const,
       uuid: randomUUID(),
       session_id: this.id,
       parent_tool_use_id: null,
-      message: { role: 'user' as const, content: pastes.length ? blocks : text },
+      message: { role: 'user' as const, content: pastes.length || images.length ? blocks : text },
     }
     if (!this.queue.push(message)) return false
     // Echo immediately so every tab shows the message before the SDK replays it.

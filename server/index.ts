@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { extname, isAbsolute, join, resolve } from 'node:path'
 import { getSessionInfo, listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk'
 import { WebSocketServer, type WebSocket } from 'ws'
-import type { ClientEvent, ServerEvent, SessionSummary } from '../shared/protocol.ts'
+import { IMAGE_TYPES, type ClientEvent, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
 import { BOARD_AUTO_ALLOWED, BOARD_SERVER, boardServer, cardContext } from './boardTools.ts'
 import { Children } from './children.ts'
 import { type Actor, BadRequest, Store } from './db.ts'
@@ -165,6 +165,10 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
     case 'send': {
       const pastes = event.pastes ?? []
       if (!Array.isArray(pastes) || pastes.some((p) => typeof p !== 'string')) throw new BadRequest('pastes must be strings')
+      const images = event.images ?? []
+      if (!Array.isArray(images) || images.some((i) => !IMAGE_TYPES.includes(i?.mediaType) || typeof i.data !== 'string')) {
+        throw new BadRequest(`images must be ${IMAGE_TYPES.join(', ')}`)
+      }
       // Picking an archived chat back up brings it back to the sidebar.
       store.setArchived(event.sessionId, false, UI)
       // Sending empties the composer in every tab, not just the one that sent.
@@ -177,7 +181,7 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       }
       const session = await manager.open(event.sessionId, { cwd: event.cwd, mode: event.mode, worktree: event.worktree })
       if (isNew) session.subscribe(broadcast)
-      if (!session.send(event.text, pastes)) throw new Error('Session is closed; try again')
+      if (!session.send(event.text, pastes, images)) throw new Error('Session is closed; try again')
       return
     }
     case 'draft':

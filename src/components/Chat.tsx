@@ -1,14 +1,15 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, mapArray, on, onCleanup, onMount } from 'solid-js'
-import { ArrowUp, Check, GitBranch, ListChevronsDownUp, ListChevronsUpDown, Square, Zap } from 'lucide-solid'
+import { ArrowUp, Check, GitBranch, ImagePlus, ListChevronsDownUp, ListChevronsUpDown, Square, Zap } from 'lucide-solid'
 import { isLongPaste } from '../../shared/pastes.ts'
-import type { BackgroundTask, Card, PermissionMode } from '../../shared/protocol.ts'
+import type { BackgroundTask, Card, ImageAttachment, PermissionMode } from '../../shared/protocol.ts'
 import { chatActions } from '../actions.ts'
 import { api, socket } from '../api.ts'
+import { readImage } from '../images.ts'
 import { cardWorktreeName, folderItem, isScratch, worktreeOf } from '../folders.ts'
 import { taskLabel } from '../tasks.ts'
 import { workspaceOf } from '../terminals.ts'
 import { ChildChats, createChat } from '../useChat.ts'
-import { Pastes } from './Pastes.tsx'
+import { Attachments } from './Attachments.tsx'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
 import { TerminalButton, TerminalDock } from './Terminals.tsx'
 import { toolLabel } from './ToolCard.tsx'
@@ -24,10 +25,10 @@ const MODES: Option<PermissionMode>[] = [
 ]
 
 /**
- * Unsent pastes by chat. Kept outside the component so they survive switching
- * chats, though not a reload: unlike the draft, they aren't saved on the server.
+ * Unsent pastes and images by chat. Kept outside the component so they survive
+ * switching chats, though not a reload: unlike the draft, they aren't saved on the server.
  */
-const unsentPastes = new Map<string, string[]>()
+const unsent = new Map<string, { pastes: string[]; images: ImageAttachment[] }>()
 
 export function Chat(props: {
   sessionId: string
@@ -45,9 +46,18 @@ export function Chat(props: {
 }) {
   const { state, clearError } = createChat(props.sessionId)
   const [text, setText] = createSignal('')
-  const [pastes, setPastes] = createSignal(unsentPastes.get(props.sessionId) ?? [])
-  createEffect(() => unsentPastes.set(props.sessionId, pastes()))
-  const hasInput = () => !!text().trim() || pastes().length > 0
+  const [pastes, setPastes] = createSignal(unsent.get(props.sessionId)?.pastes ?? [])
+  const [images, setImages] = createSignal(unsent.get(props.sessionId)?.images ?? [])
+  createEffect(() => unsent.set(props.sessionId, { pastes: pastes(), images: images() }))
+  const hasInput = () => !!text().trim() || pastes().length > 0 || images().length > 0
+  /** Adds the images among these files, and says whether there were any. */
+  const addImages = (files: Iterable<File>) => {
+    const found = [...files].filter((f) => f.type.startsWith('image/'))
+    for (const f of found) void readImage(f).then((image) => image && setImages((list) => [...list, image]))
+    return found.length > 0
+  }
+  const [dragging, setDragging] = createSignal(false)
+  let picker!: HTMLInputElement
   const [started, setStarted] = createSignal(false)
   const [mode, setMode] = createSignal<PermissionMode>('auto')
   const [inWorktree, setInWorktree] = createSignal(!!props.worktree)
@@ -153,9 +163,9 @@ export function Chat(props: {
   })
 
 
-  const send = (value: string, attached: string[] = []) => {
+  const send = (value: string, attached: { pastes: string[]; images: ImageAttachment[] } = { pastes: [], images: [] }) => {
     const worktree = inWorktree() && canWorktree() ? (worktreeName() ?? '') : undefined
-    socket.send({ type: 'send', sessionId: props.sessionId, text: value, pastes: attached, cwd: cwd(), mode: mode(), worktree })
+    socket.send({ type: 'send', sessionId: props.sessionId, text: value, ...attached, cwd: cwd(), mode: mode(), worktree })
     if (!started()) {
       setStarted(true)
       props.onStart?.()
@@ -166,12 +176,13 @@ export function Chat(props: {
 
   const submit = () => {
     if (!hasInput()) return
-    send(text().trim(), pastes())
+    send(text().trim(), { pastes: pastes(), images: images() })
     // The server clears the saved draft when the message arrives.
     clearTimeout(saveTimer)
     unsaved = false
     setText('')
     setPastes([])
+    setImages([])
   }
 
   const changeMode = (next: PermissionMode) => {
@@ -251,17 +262,40 @@ export function Chat(props: {
               <button onClick={clearError} class="opacity-70 hover:opacity-100">Dismiss</button>
             </div>
           </Show>
-          <div class="border border-edge transition-colors rounded-2xl focus-within:border-fg-3">
-            <Show when={pastes().length}>
-              <Pastes pastes={pastes()} onRemove={(i) => setPastes(pastes().filter((_, j) => j !== i))} class="px-3 pt-3" />
+          <div
+            class={`border transition-colors rounded-2xl focus-within:border-fg-3 ${dragging() ? 'border-fg-3' : 'border-edge'}`}
+            onDragOver={(e) => {
+              if (!e.dataTransfer?.types.includes('Files')) return
+              e.preventDefault()
+              setDragging(true)
+            }}
+            onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && setDragging(false)}
+            onDrop={(e) => {
+              setDragging(false)
+              if (!e.dataTransfer?.files.length) return
+              e.preventDefault()
+              addImages(e.dataTransfer.files)
+              input.focus()
+            }}
+          >
+            <Show when={pastes().length || images().length}>
+              <Attachments
+                pastes={pastes()}
+                images={images()}
+                onRemovePaste={(i) => setPastes(pastes().filter((_, j) => j !== i))}
+                onRemoveImage={(i) => setImages(images().filter((_, j) => j !== i))}
+                class="px-3 pt-3"
+              />
             </Show>
             <textarea
               ref={input}
               value={text()}
               onInput={(e) => edit(e.currentTarget.value)}
               onPaste={(e) => {
-                // Big pastes become attachments, so the composer stays editable.
+                // Images and big pastes become attachments, so the composer stays editable.
+                // Office apps copy text with a picture of it too; the text is what's wanted then.
                 const pasted = e.clipboardData?.getData('text/plain')
+                if (!pasted && e.clipboardData && addImages(e.clipboardData.files)) return e.preventDefault()
                 if (!pasted || !isLongPaste(pasted)) return
                 e.preventDefault()
                 setPastes([...pastes(), pasted])
@@ -279,6 +313,26 @@ export function Chat(props: {
             />
             <div class="flex items-center gap-2 px-2 pb-2">
               <Select value={mode()} options={MODES} onChange={changeMode} title="Permission mode" />
+              <button
+                type="button"
+                onClick={() => picker.click()}
+                title="Attach images"
+                class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2"
+              >
+                <ImagePlus class="size-3.5" />
+              </button>
+              <input
+                ref={picker}
+                type="file"
+                accept="image/*"
+                multiple
+                class="hidden"
+                onChange={(e) => {
+                  addImages(e.currentTarget.files ?? [])
+                  e.currentTarget.value = ''
+                  input.focus()
+                }}
+              />
               <Show when={root()}>{(r) => <TerminalButton root={r()} cwd={cwd()!} />}</Show>
               <Show when={actions().length}>
                 <Menu

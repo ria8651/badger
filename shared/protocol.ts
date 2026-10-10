@@ -89,6 +89,11 @@ export interface TerminalInfo {
   createdAt: number
 }
 
+export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const
+
+/** A pasted or dropped image, base64 encoded, sent to Claude as an image block. */
+export type ImageAttachment = { mediaType: (typeof IMAGE_TYPES)[number]; data: string }
+
 /** Anything the SDK emits, or a transcript entry read back from disk. */
 export type WireMessage = { type: string; uuid?: string; [key: string]: unknown }
 
@@ -101,6 +106,7 @@ export type ClientEvent =
       text: string
       /** Big pastes, sent after the text as attachments. */
       pastes?: string[]
+      images?: ImageAttachment[]
       cwd?: string
       mode?: PermissionMode
       /** Start a new chat in a git worktree of cwd with this name (reused if it exists); empty lets Claude name it. */

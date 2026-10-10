@@ -3,21 +3,21 @@ import { unwrap } from 'solid-js/store'
 import { Columns3 } from 'lucide-solid'
 import { parseCardContext, type CardContext } from '../../shared/cardContext.ts'
 import { unwrapPaste } from '../../shared/pastes.ts'
-import type { CardStatus, WireMessage } from '../../shared/protocol.ts'
+import type { CardStatus, ImageAttachment, WireMessage } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
 import { collectTasks, type Task } from '../tasks.ts'
 import { ChildChats, type Partial } from '../useChat.ts'
 import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
 import { Disclosure, Pre, ToolCard, resultText, toolLabel, toolSummary, type ToolResult } from './ToolCard.tsx'
-import { Pastes } from './Pastes.tsx'
+import { Attachments } from './Attachments.tsx'
 import { LiveDot, plural } from './ui.tsx'
 
 type Block = { type: string; text?: string; thinking?: string; id?: string; name?: string; input?: Record<string, unknown> }
-type ContentBlock = Block & { tool_use_id?: string; content?: unknown; is_error?: boolean }
+type ContentBlock = Block & { tool_use_id?: string; content?: unknown; is_error?: boolean; source?: { type: string; media_type: string; data: string } }
 
 type Item =
-  | { kind: 'user'; text: string; pastes?: string[] }
+  | { kind: 'user'; text: string; pastes?: string[]; images?: ImageAttachment[] }
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; id: string; name: string; input: Record<string, unknown> }
@@ -58,8 +58,8 @@ function messageItems(m: WireMessage): Item[] {
     const sent = sentToSubagent(m)
     if (sent) return [{ kind: 'user', text: sent }]
     if (m.isMeta || m.isSynthetic) return []
-    const { text, pastes } = userText(m)
-    return text || pastes.length ? [{ kind: 'user', text, pastes }] : []
+    const { text, pastes, images } = userText(m)
+    return text || pastes.length || images.length ? [{ kind: 'user', text, pastes, images }] : []
   }
   if (m.type === 'assistant') {
     const content = ((m.message as { content?: Block[] })?.content ?? []) as Block[]
@@ -199,10 +199,14 @@ function sentToSubagent(m: WireMessage): string | undefined {
   return sent?.[1].trim() || undefined
 }
 
-/** What the user typed, and the big pastes sent with it as attachments. */
-function userText(m: WireMessage): { text: string; pastes: string[] } {
+/** What the user typed, and the big pastes and images sent with it as attachments. */
+function userText(m: WireMessage): { text: string; pastes: string[]; images: ImageAttachment[] } {
   const content = (m.message as { content?: unknown })?.content
-  const blocks = typeof content === 'string' ? [content] : Array.isArray(content) ? (content as ContentBlock[]).filter((b) => b.type === 'text').map((b) => b.text ?? '') : []
+  const all = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? (content as ContentBlock[]) : []
+  const blocks = all.filter((b) => b.type === 'text').map((b) => b.text ?? '')
+  const images = all.flatMap((b) =>
+    b.type === 'image' && b.source?.type === 'base64' ? [{ mediaType: b.source.media_type, data: b.source.data } as ImageAttachment] : [],
+  )
   const pastes: string[] = []
   const typed: string[] = []
   for (const b of blocks) {
@@ -212,10 +216,10 @@ function userText(m: WireMessage): { text: string; pastes: string[] } {
   }
   const raw = typed.join('\n')
   const command = raw.match(/<command-name>(.*?)<\/command-name>/)
-  if (command) return { text: command[1], pastes }
+  if (command) return { text: command[1], pastes, images }
   // Harness-injected content (system reminders, command output) is wrapped in tags.
-  if (raw.trimStart().startsWith('<')) return { text: '', pastes }
-  return { text: raw, pastes }
+  if (raw.trimStart().startsWith('<')) return { text: '', pastes, images }
+  return { text: raw, pastes, images }
 }
 
 type TranscriptProps = {
@@ -304,7 +308,7 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
       case 'work':
         return <WorkRow work={item} />
       case 'user':
-        return <UserMessage text={item.text} pastes={item.pastes} />
+        return <UserMessage text={item.text} pastes={item.pastes} images={item.images} />
       case 'text':
         return (
           <div class="my-4">
@@ -592,15 +596,15 @@ function CardContextBadge(props: { context: CardContext }) {
 }
 
 /** A user's message; long ones (big pastes) are clamped with a fade until expanded. */
-function UserMessage(props: { text: string; pastes?: string[] }) {
+function UserMessage(props: { text: string; pastes?: string[]; images?: ImageAttachment[] }) {
   const [overflows, setOverflows] = createSignal(false)
   const [expanded, setExpanded] = createSignal(false)
   const clamped = () => overflows() && !expanded()
   return (
     <div class="mt-8 mb-4 flex justify-end first:mt-0">
       <div class="max-w-[80%] min-w-0 bg-surface rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed">
-        <Show when={props.pastes?.length}>
-          <Pastes pastes={props.pastes!} class={props.text ? 'mb-2' : ''} />
+        <Show when={props.pastes?.length || props.images?.length}>
+          <Attachments pastes={props.pastes ?? []} images={props.images ?? []} class={props.text ? 'mb-2' : ''} />
         </Show>
         <Show when={props.text}>
           <div
