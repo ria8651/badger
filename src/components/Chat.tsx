@@ -342,7 +342,7 @@ export function Chat(props: {
               }}
               rows={Math.min(10, Math.max(2, text().split('\n').length))}
               placeholder={state.running ? 'Queue a message' : 'Message Claude'}
-              class="block w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed outline-none placeholder:text-fg-3"
+              class="block max-h-[calc(10lh+0.875rem)] min-h-[calc(2lh+0.875rem)] w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed outline-none [field-sizing:content] placeholder:text-fg-3"
             />
             <div class="flex items-center gap-2 px-2 pb-2">
               <Select value={mode()} options={MODES} onChange={changeMode} title="Permission mode" />
