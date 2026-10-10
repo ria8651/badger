@@ -320,6 +320,7 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
         }
         return (
           <ToolCard
+            id={item.id}
             name={item.name}
             input={item.input}
             result={index().results.get(item.id)}
@@ -390,6 +391,7 @@ function ChildRun(props: { sessionId: string; name: string; result?: ToolResult 
   const steps = () => state()?.messages.filter((m) => m.type === 'assistant' && !m.parent_tool_use_id && hasToolUse(m)).length ?? 0
   return (
     <Disclosure
+      id={props.sessionId}
       label={toolLabel(props.name)}
       detail={state()?.permissions.length ? 'Waiting for you' : live() ? 'Working' : ''}
       trailing={
@@ -477,6 +479,7 @@ function AgentRun(props: { id: string; input: Record<string, unknown>; bashOutpu
 
   return (
     <Disclosure
+      id={props.id}
       label={type() && type() !== 'general-purpose' ? type() : 'Agent'}
       detail={String(props.input.description ?? '')}
       trailing={

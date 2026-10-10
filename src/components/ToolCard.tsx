@@ -106,10 +106,19 @@ export function ToolInput(props: { name: string; input: Input }) {
 }
 
 /**
+ * Rows the user opened or closed, by id. Kept outside the rows so the choice
+ * survives them being rebuilt: a subagent's steps when its row is folded and
+ * reopened, or every row when switching how much detail chats show.
+ */
+const picks = new Map<string, boolean>()
+
+/**
  * A quiet, expandable row: label, detail, trailing status. Shared by tool calls
  * and thinking so everything Claude does between replies reads the same way.
  */
 export function Disclosure(props: {
+  /** Stable across rebuilds, e.g. a tool_use_id, so the user's choice is remembered. */
+  id?: string
   label: string
   detail?: string
   trailing?: JSX.Element
@@ -121,12 +130,17 @@ export function Disclosure(props: {
 }) {
   // Derived rather than synced by an effect: once the user picks, nothing else
   // (other tools finishing, messages arriving) can change it.
-  const [picked, setPicked] = createSignal<boolean>()
+  const [picked, setPicked] = createSignal(props.id === undefined ? undefined : picks.get(props.id))
   const open = () => picked() ?? !!props.live
+  const toggle = () => {
+    const next = !open()
+    setPicked(next)
+    if (props.id !== undefined) picks.set(props.id, next)
+  }
   return (
     <div class="text-[13px]">
       <button
-        onClick={() => setPicked(!open())}
+        onClick={toggle}
         class="group -mx-2 flex w-[calc(100%+1rem)] items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-surface"
       >
         <span class="shrink-0 text-fg-2 group-hover:text-fg">{props.label}</span>
@@ -142,6 +156,7 @@ export function Disclosure(props: {
 }
 
 export function ToolCard(props: {
+  id?: string
   name: string
   input: Input
   result?: ToolResult
@@ -167,6 +182,7 @@ export function ToolCard(props: {
   return (
     <Show when={props.name !== 'TodoWrite'} fallback={<Todos todos={(props.input.todos as TodoItem[]) ?? []} />}>
       <Disclosure
+        id={props.id}
         label={toolLabel(props.name)}
         detail={toolSummary(props.name, props.input, props.cwd)}
         trailing={
