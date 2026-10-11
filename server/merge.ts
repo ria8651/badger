@@ -3,7 +3,6 @@ import { tool, type SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import type { Card } from '../shared/protocol.ts'
 import type { Children } from './children.ts'
-import type { Actor } from './db.ts'
 import type { Remote } from './peer.ts'
 import type { Board } from './runnerProtocol.ts'
 import type { SessionManager } from './session.ts'
@@ -137,7 +136,6 @@ async function cardFinished(deps: MergeDeps, card: Card | undefined, dir: string
 
 /** After the merging chat's turn: the worktree goes, and the chat (or its whole card) is put away. */
 async function cleanUp(deps: MergeDeps, p: { sessionId: string; dir: string; card?: Card }): Promise<void> {
-  const actor: Actor = { source: 'claude', sessionId: p.sessionId }
   try {
     if (deps.manager.in(p.dir).some((s) => s.running)) throw new Error('a chat is still working in it')
     for (const s of deps.manager.in(p.dir)) s.close()
@@ -147,8 +145,8 @@ async function cleanUp(deps: MergeDeps, p: { sessionId: string; dir: string; car
     console.error(`Merged, but couldn't remove worktree ${p.dir}: ${err instanceof Error ? err.message : err}`)
   }
   try {
-    if (p.card) await deps.board.updateCard(p.card.id, { status: 'done' }, actor)
-    else await deps.board.setArchived(p.sessionId, true, actor)
+    if (p.card) await deps.board.updateCard(p.sessionId, p.card.id, { status: 'done' })
+    else await deps.board.setArchived(p.sessionId, p.sessionId, true)
   } catch (err) {
     console.error(`Merged, but couldn't put the chat away: ${err instanceof Error ? err.message : err}`)
   }

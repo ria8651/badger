@@ -1,9 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto'
-import type { DatabaseSync } from 'node:sqlite'
+import type { DatabaseSync, StatementSync } from 'node:sqlite'
 import type { Machine, TerminalInfo } from '../shared/protocol.ts'
 import { BadRequest } from './db.ts'
 import { Peer, type Link } from './peer.ts'
-import { HUB_METHODS, RUNNER_PROTOCOL, isUuid, type HubApi, type LiveInfo, type RunnerApi, type RunnerEvent, type RunnerHello } from './runnerProtocol.ts'
+import { HUB_ARGS, RUNNER_EVENT, RUNNER_PROTOCOL, isUuid, type HubApi, type LiveInfo, type RunnerApi, type RunnerEvent, type RunnerHello } from './runnerProtocol.ts'
 
 /** The hub's own machine. */
 export const LOCAL = 'local'
@@ -48,6 +48,7 @@ export interface MachineEvents {
  */
 export class Machines {
   private connections = new Map<string, Connection>()
+  private machineOfQuery?: StatementSync
 
   constructor(
     private db: DatabaseSync,
@@ -136,7 +137,7 @@ export class Machines {
     if (!this.db.prepare('UPDATE machines SET token_hash = ? WHERE id = ? AND removed_at IS NULL').run(hash(token), id).changes) {
       throw new BadRequest('No such machine')
     }
-    this.connections.get(id)?.peer.close()
+    this.drop(id)
     return { machine: this.list().find((m) => m.id === id)!, token }
   }
 
@@ -148,8 +149,18 @@ export class Machines {
     if (id === LOCAL) throw new BadRequest("The hub's own machine can't be removed")
     const removed =
       this.db.prepare('UPDATE machines SET removed_at = ?, token_hash = NULL WHERE id = ? AND removed_at IS NULL').run(Date.now(), id).changes > 0
-    this.connections.get(id)?.peer.close()
+    this.drop(id)
     return removed
+  }
+
+  /** Cuts a machine's runner off now: nothing more it sends is taken, even before its connection has finished closing. */
+  private drop(id: string): void {
+    const c = this.connections.get(id)
+    if (!c) return
+    this.connections.delete(id)
+    c.peer.close(true)
+    this.db.prepare('UPDATE machines SET last_seen = ? WHERE id = ?').run(Date.now(), id)
+    this.events.onChange(undefined, id)
   }
 
   /** Which machine a runner's token is for, if any. */
@@ -159,46 +170,64 @@ export class Machines {
   }
 
   /**
-   * Serves a runner over a link. It isn't online until it has said hello. A
-   * second connection for the same machine replaces the first, e.g. after a
-   * network change left the old one half-open.
+   * Serves a runner over a link. It can't do anything until it has said
+   * hello, and its token is checked again then, in case the machine was
+   * removed or given a new token while it was connecting. A second connection
+   * for the same machine replaces the first, e.g. after a network change left
+   * the old one half-open. Only the current connection is listened to.
+   * `token` is what a remote runner connected with; the hub's own has none.
    */
-  attach(id: string, link: Link, api: (machine: string) => Omit<HubApi, 'hello'>): void {
+  attach(id: string, link: Link, api: (machine: string) => Omit<HubApi, 'hello'>, token?: string): void {
     let connection: Connection | undefined
-    const methods: HubApi = {
-      ...api(id),
-      hello: (hello: RunnerHello) => {
-        if (hello.protocol !== RUNNER_PROTOCOL) {
-          setImmediate(() => peer.close())
-          throw new BadRequest(`This hub speaks runner protocol v${RUNNER_PROTOCOL}, the runner v${hello.protocol}. Update whichever is older.`)
-        }
-        this.connections.get(id)?.peer.close()
-        connection = { id, name: this.name(id), peer, hello, live: new Map(), terminals: [], terminalsKnown: false }
-        this.connections.set(id, connection)
-        this.db.prepare('UPDATE machines SET last_seen = ?, info = ? WHERE id = ?').run(Date.now(), JSON.stringify(hello), id)
-        this.events.onChange(connection, id)
-        return { id, name: connection.name, chats: this.chatsOn(id) }
-      },
+    const current = () => !!connection && this.connections.get(id) === connection
+    const hello = (hello: RunnerHello) => {
+      if (hello.protocol !== RUNNER_PROTOCOL) {
+        setImmediate(() => peer.close())
+        throw new BadRequest(`This hub speaks runner protocol v${RUNNER_PROTOCOL}, the runner v${hello.protocol}. Update whichever is older.`)
+      }
+      const allowed = token === undefined ? id === LOCAL : this.byToken(token) === id
+      if (!allowed) {
+        setImmediate(() => peer.close(true))
+        throw new Error('This machine was removed or given a new token')
+      }
+      this.connections.get(id)?.peer.close(true)
+      connection = { id, name: this.name(id), peer, hello, live: new Map(), terminals: [], terminalsKnown: false }
+      this.connections.set(id, connection)
+      this.db.prepare('UPDATE machines SET last_seen = ?, info = ? WHERE id = ?').run(Date.now(), JSON.stringify(hello), id)
+      this.events.onChange(connection, id)
+      return { id, name: connection.name, chats: this.chatsOn(id) }
     }
+    const methods = Object.fromEntries(
+      Object.entries(api(id)).map(([name, fn]) => [
+        name,
+        (...args: unknown[]) => {
+          if (!current()) throw new BadRequest('Not connected: say hello first')
+          return (fn as (...a: unknown[]) => unknown)(...args)
+        },
+      ]),
+    )
     const peer: Peer<RunnerApi> = new Peer<RunnerApi>(
       link,
-      methods,
-      HUB_METHODS,
-      (event: RunnerEvent) => {
-        if (!connection || !RUNNER_EVENTS.has(event?.type)) return
+      { ...methods, hello },
+      HUB_ARGS,
+      (raw: unknown) => {
+        const parsed = RUNNER_EVENT.safeParse(raw)
+        if (!connection || !current() || !parsed.success) return
+        const event = parsed.data as RunnerEvent
         if (event.type === 'live') {
-          if (!Array.isArray(event.sessions)) return
-          connection.live = new Map(event.sessions.filter((s) => this.isLive(s) && this.owns(id, s.id)).map((s) => [s.id, s]))
+          const live = new Map(event.sessions.filter((s) => this.owns(id, s.id)).map((s) => [s.id, s]))
+          // Unchanged: nothing to tell anyone.
+          if (JSON.stringify([...live]) === JSON.stringify([...connection.live])) return
+          connection.live = live
         }
         if (event.type === 'terminals') {
-          if (!Array.isArray(event.terminals) || event.terminals.some((t) => typeof t?.id !== 'string')) return
           connection.terminals = event.terminals
           connection.terminalsKnown = true
         }
         this.events.onEvent(connection, event)
       },
       () => {
-        if (!connection || this.connections.get(id) !== connection) return
+        if (!current()) return
         this.connections.delete(id)
         this.db.prepare('UPDATE machines SET last_seen = ? WHERE id = ?').run(Date.now(), id)
         this.events.onChange(undefined, id)
@@ -209,7 +238,9 @@ export class Machines {
   // ── Which machine each chat is on ──
 
   machineOf(sessionId: string): string | undefined {
-    const row = this.db.prepare('SELECT machine FROM chat_machines WHERE session_id = ?').get(sessionId) as { machine: string } | undefined
+    // Asked on every event a runner sends, so prepared once.
+    this.machineOfQuery ??= this.db.prepare('SELECT machine FROM chat_machines WHERE session_id = ?')
+    const row = this.machineOfQuery.get(sessionId) as { machine: string } | undefined
     return row?.machine
   }
 
@@ -241,9 +272,6 @@ export class Machines {
     return new Map(rows.map((r) => [r.session_id, r.machine]))
   }
 
-  private isLive(s: LiveInfo): boolean {
-    return typeof s === 'object' && s !== null && typeof s.cwd === 'string' && typeof s.running === 'boolean' && typeof s.waiting === 'boolean'
-  }
 
   // ── Across every connected runner ──
 
@@ -288,9 +316,6 @@ export class Machines {
     return { ...info, id: `${machine.id}.${info.id}`, machine: machine.id }
   }
 }
-
-/** The events a runner may send; anything else is dropped. */
-const RUNNER_EVENTS = new Set<unknown>(['live', 'session', 'turn_end', 'terminals', 'term_output'] satisfies RunnerEvent['type'][])
 
 /** What a runner connects with. Only its hash is kept. */
 const newToken = () => `badger_${randomBytes(24).toString('base64url')}`

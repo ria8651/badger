@@ -1,4 +1,5 @@
 import type { WebSocket } from 'ws'
+import type { ZodType } from 'zod'
 import { BadRequest } from './db.ts'
 
 /**
@@ -10,7 +11,8 @@ export interface Link {
   send(frame: Frame): void
   onFrame(fn: (frame: Frame) => void): void
   onClose(fn: () => void): void
-  close(): void
+  /** `now` drops the connection without the closing handshake, so nothing more comes in on it. */
+  close(now?: boolean): void
 }
 
 export type Frame =
@@ -56,18 +58,18 @@ export function wsLink(ws: WebSocket): Link {
         fn(frame)
       }),
     onClose: (fn) => void ws.on('close', fn),
-    close: () => ws.close(),
+    close: (now) => (now ? ws.terminate() : ws.close()),
   }
 }
 
 type Handler = (...args: any[]) => unknown
 
 /**
- * How long a call waits for its reply. A half-open connection (a laptop gone
- * to sleep) answers nothing until the ping drops it, and whoever's waiting,
- * e.g. a browser tab's queue of events, shouldn't wait that long.
+ * The methods one side serves: just their names, or for a side that doesn't
+ * trust its caller, a schema of each one's arguments. Calls whose arguments
+ * don't match are refused, and so are methods that aren't listed.
  */
-const CALL_TIMEOUT_MS = 20 * 1000
+export type Served = readonly string[] | Readonly<Record<string, ZodType<unknown[]>>>
 
 /** Every method of T, called remotely: same arguments, always a promise. */
 export type Remote<T> = {
@@ -85,11 +87,11 @@ export class Peer<Theirs> {
   private waiting = new Map<number, (reply: Extract<Frame, { t: 'reply' }>) => void>()
   private closed = false
 
-  /** `methods` are served by name, but only those listed in `names`. */
+  /** `methods` are served by name, but only those listed in `served`. */
   constructor(
     private link: Link,
     private methods: object,
-    private names: readonly string[],
+    private served: Served,
     onEvent: (event: any) => void,
     onClose: () => void = () => {},
   ) {
@@ -113,8 +115,20 @@ export class Peer<Theirs> {
     })
   }
 
-  call(method: string, args: unknown[]): Promise<any> {
-    return new Promise((resolve, reject) => this.request(method, args, (err, result) => (err ? reject(err) : resolve(result))))
+  call(method: string, args: unknown[], timeoutMs?: number): Promise<any> {
+    return new Promise((resolve, reject) => this.request(method, args, (err, result) => (err ? reject(err) : resolve(result)), timeoutMs))
+  }
+
+  /**
+   * The other side's methods, giving up on any reply that takes longer than
+   * this. Only for quick questions someone is waiting on: a half-open
+   * connection (a laptop gone to sleep) answers nothing until the ping drops
+   * it. Calls that send a lot, or take a while to do, go through `remote`.
+   */
+  within(ms: number): Remote<Theirs> {
+    return new Proxy({} as Remote<Theirs>, {
+      get: (_, method) => (typeof method === 'string' ? (...args: unknown[]) => this.call(method, args, ms) : undefined),
+    })
   }
 
   /**
@@ -123,15 +137,17 @@ export class Peer<Theirs> {
    * that arrived just behind the reply, e.g. terminal output that the reply's
    * snapshot doesn't include.
    */
-  request(method: string, args: unknown[], done: (err: Error | null, result?: any) => void): void {
+  request(method: string, args: unknown[], done: (err: Error | null, result?: any) => void, timeoutMs?: number): void {
     if (this.closed) return done(new Error('Disconnected'))
     const id = this.next++
     // A reply after this is dropped: it's no longer waited for.
-    const timer = setTimeout(() => {
-      this.waiting.delete(id)
-      done(new Error(`No answer to ${method} in ${CALL_TIMEOUT_MS / 1000}s`))
-    }, CALL_TIMEOUT_MS)
-    timer.unref?.()
+    const timer =
+      timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            this.waiting.delete(id)
+            done(new Error(`No answer to ${method} in ${timeoutMs / 1000}s`))
+          }, timeoutMs)
     this.waiting.set(id, (r) => {
       clearTimeout(timer)
       done(r.error === undefined ? null : r.bad ? new BadRequest(r.error) : new Error(r.error), r.result)
@@ -143,17 +159,31 @@ export class Peer<Theirs> {
     if (!this.closed) this.link.send({ t: 'event', event })
   }
 
-  close(): void {
-    this.link.close()
+  close(now = false): void {
+    this.link.close(now)
+  }
+
+  /** The call's arguments, if the method is served and they're what it takes. */
+  private argsFor(method: string, args: unknown): unknown[] {
+    if (Array.isArray(this.served)) {
+      if (!this.served.includes(method)) throw new BadRequest(`Unknown method: ${method}`)
+      return Array.isArray(args) ? args : []
+    }
+    const schema = Object.hasOwn(this.served, method) ? (this.served as Record<string, ZodType<unknown[]>>)[method] : undefined
+    if (!schema) throw new BadRequest(`Unknown method: ${method}`)
+    const parsed = schema.safeParse(args)
+    if (!parsed.success) throw new BadRequest(`Bad arguments to ${method}: ${parsed.error.issues[0]?.message ?? 'invalid'}`)
+    return parsed.data
   }
 
   private async serve(frame: Extract<Frame, { t: 'call' }>): Promise<void> {
-    const fn = this.names.includes(frame.method) ? (this.methods as Record<string, Handler>)[frame.method] : undefined
     const fail = (err: unknown) =>
       this.link.send({ t: 'reply', id: frame.id, error: err instanceof Error ? err.message : String(err), bad: err instanceof BadRequest })
     try {
+      const args = this.argsFor(String(frame.method), frame.args)
+      const fn = (this.methods as Record<string, Handler>)[frame.method]
       if (typeof fn !== 'function') throw new BadRequest(`Unknown method: ${frame.method}`)
-      const result = fn.apply(this.methods, frame.args)
+      const result = fn.apply(this.methods, args)
       if (result instanceof Later) return result.settle((err, value) => (err ? fail(err) : this.link.send({ t: 'reply', id: frame.id, result: value })))
       this.link.send({ t: 'reply', id: frame.id, result: await result })
     } catch (err) {

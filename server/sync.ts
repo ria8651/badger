@@ -110,6 +110,8 @@ export class TranscriptSync {
       try {
         for (const file of await this.filesOf(id)) await this.push(file)
       } catch (err) {
+        // The hub may have taken lines whose answer never came back, so ask it again where it's up to before sending more.
+        for (const k of this.known.keys()) if (k.startsWith(`${id}\0`)) this.known.delete(k)
         // Gone again with the connection; otherwise it's tried again next time the chat changes or a scan comes round.
         if (this.connected) console.error(`Copying chat ${id} to the hub failed:`, err instanceof Error ? err.message : err)
       }
@@ -167,19 +169,20 @@ export class TranscriptSync {
   }
 
   /** The main transcripts of this machine's chats, with their sizes. */
-  private async mainFiles(): Promise<(LocalFile & { size: number })[]> {
+  private async mainFiles(): Promise<(LocalFile & { size: number; mtime: number })[]> {
     const chats = this.chats()
-    const out: (LocalFile & { size: number })[] = []
+    const out: (LocalFile & { size: number; mtime: number })[] = []
     for (const project of await readdir(this.projects).catch(() => [])) {
       for (const name of await readdir(join(this.projects, project)).catch(() => [])) {
         const sessionId = name.slice(0, -'.jsonl'.length)
         if (!name.endsWith('.jsonl') || !isUuid(sessionId) || !chats.has(sessionId)) continue
         const path = join(this.projects, project, name)
         const info = await stat(path).catch(() => undefined)
-        if (info?.isFile()) out.push({ sessionId, subpath: '', project, path, size: info.size })
+        if (info?.isFile()) out.push({ sessionId, subpath: '', project, path, size: info.size, mtime: info.mtimeMs })
       }
     }
-    return out
+    // Newest first, so the chats someone is likely to open are copied first when there's a lot to send.
+    return out.sort((a, b) => b.mtime - a.mtime)
   }
 
   /** A chat's transcript and its subagents', wherever Claude Code put it. */

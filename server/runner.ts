@@ -138,7 +138,8 @@ export class Runner implements RunnerApi {
       scratchDir: this.opts.scratchDir,
     })
     this.machine = me.id
-    this.chats = new Set(me.chats)
+    // Added to, not replaced: a chat the hub sent here while hello's answer was on its way is already in it. Chats never move off.
+    for (const id of me.chats) this.chats.add(id)
     this.sendLive()
     // Before the PTY host has said hello the list is unknown, not empty; it's sent once it arrives.
     if (this.terminals.known) this.emit({ type: 'terminals', terminals: this.terminals.terminals })

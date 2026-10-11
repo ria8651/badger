@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { CARD_STATUSES, type Card } from '../shared/protocol.ts'
 import { NO_CARD_CONTEXT, renderCardContext } from '../shared/cardContext.ts'
 import { ancestors, descendants, projectOf } from '../shared/cardTree.ts'
-import type { Actor, Store } from './db.ts'
+import type { Store } from './db.ts'
 import type { Remote } from './peer.ts'
 import type { Board, ChatInfo } from './runnerProtocol.ts'
 
@@ -61,7 +61,6 @@ export function boardServer(
   machine: () => string,
   more: SdkMcpToolDefinition<any>[] = [],
 ): McpSdkServerConfigWithInstance {
-  const actor: Actor = { source: 'claude', sessionId }
   const thisCard = async () => (await board.cards()).find((c) => c.sessionIds.includes(sessionId))
   const markSeen = (card: Card) => board.markSeen(sessionId, card.id)
 
@@ -124,8 +123,8 @@ export function boardServer(
           const cards = await board.cards()
           const mine = cards.find((c) => c.sessionIds.includes(sessionId))
           const parentId = args.parent_id !== undefined ? args.parent_id : ((mine && projectOf(cards, mine.id)?.id) ?? null)
-          const card = await board.createCard({ ...args, parentId }, actor)
-          if (args.link_this_chat) await board.linkSession(card.id, sessionId, actor)
+          const card = await board.createCard(sessionId, { title: args.title, description: args.description, status: args.status, parentId })
+          if (args.link_this_chat) await board.linkChat(sessionId, card.id)
           const created = (await board.card(card.id))!
           await markSeen(created)
           const where = parentId === null ? ' as a new project' : ` in project #${parentId}`
@@ -143,7 +142,7 @@ export function boardServer(
           status: status.optional(),
         },
         async ({ id, parent_id, ...patch }) => {
-          const card = await board.updateCard(id, { ...patch, parentId: parent_id }, actor)
+          const card = await board.updateCard(sessionId, id, { ...patch, parentId: parent_id })
           if (!card) return error(`No card #${id}.`)
           await markSeen(card)
           return text(`Updated ${summary(card, card.sessionIds.includes(sessionId))}`)
@@ -156,7 +155,7 @@ export function boardServer(
         { id: z.number().int() },
         async ({ id }) => {
           if (!(await board.card(id))) return error(`No card #${id}.`)
-          await board.linkSession(id, sessionId, actor)
+          await board.linkChat(sessionId, id)
           return text(`This chat is now on card #${id}.`)
         },
         { annotations: { idempotentHint: true } },
@@ -175,7 +174,7 @@ export function boardServer(
         async (args) => {
           const id = args.session_id ?? sessionId
           const archived = args.archived ?? true
-          await board.setArchived(id, archived, actor)
+          await board.setArchived(sessionId, id, archived)
           const which = id === sessionId ? 'This chat' : `Chat ${id}`
           return text(`${which} is ${archived ? 'archived' : 'not archived'}.`)
         },
@@ -185,7 +184,7 @@ export function boardServer(
         'delete_card',
         'Delete a card and every card inside it. Their chats are kept. Only do this when the user asks.',
         { id: z.number().int() },
-        async ({ id }) => ((await board.deleteCard(id, actor)) ? text(`Deleted card #${id}.`) : error(`No card #${id}.`)),
+        async ({ id }) => ((await board.deleteCard(sessionId, id)) ? text(`Deleted card #${id}.`) : error(`No card #${id}.`)),
         { annotations: { destructiveHint: true } },
       ),
       ...more,

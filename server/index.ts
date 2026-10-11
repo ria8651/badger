@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { createReadStream, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage } from 'node:http'
 import { homedir, hostname } from 'node:os'
 import { extname, isAbsolute, join, resolve } from 'node:path'
@@ -15,12 +15,12 @@ import {
   PROTOCOL_HEADER,
   RUNNER_MAX_FRAME,
   RUNNER_PROTOCOL,
+  SESSION_EVENTS,
   isUuid,
   type ChatInfo,
   type HubApi,
   type LiveSnapshot,
   type RunnerEvent,
-  type TranscriptFile,
   type TranscriptLines,
 } from './runnerProtocol.ts'
 import { shellEnv } from './terminals.ts'
@@ -37,6 +37,14 @@ loadDotEnv()
 const ACCOUNT_POLL_MS = 5 * 60 * 1000
 /** How long the chat list waits on a machine to say which folders are gone. */
 const GONE_TIMEOUT_MS = 3000
+/**
+ * How long opening a chat or terminal waits on its machine before showing what
+ * the hub has. A laptop gone to sleep can leave its connection half-open,
+ * answering nothing until the ping drops it.
+ */
+const QUICK_TIMEOUT_MS = 10 * 1000
+/** Changes to the chat list or terminals within this long go out to tabs as one, however often runners send them. */
+const LIST_DEBOUNCE_MS = 200
 /** How often connected runners are pinged; one that hasn't answered the last ping by the next is dropped. */
 const RUNNER_PING_MS = 30 * 1000
 
@@ -65,7 +73,17 @@ function broadcast(event: ServerEvent): void {
   for (const ws of targets ?? []) send(ws, event)
 }
 
-const store = new Store(DATA_DIR, () => broadcast({ type: 'sessions_changed' }))
+let sessionsTimer: ReturnType<typeof setTimeout> | undefined
+
+/** Tells every tab to fetch the chat list again, shortly; each fetch asks every machine about its folders. */
+function sessionsChanged(): void {
+  sessionsTimer ??= setTimeout(() => {
+    sessionsTimer = undefined
+    broadcast({ type: 'sessions_changed' })
+  }, LIST_DEBOUNCE_MS)
+}
+
+const store = new Store(DATA_DIR, sessionsChanged)
 const transcripts = new Transcripts(store.db)
 /** Changes made through the REST API and WebSocket, i.e. by someone in the browser. */
 const UI: Actor = { source: 'ui' }
@@ -114,21 +132,9 @@ setInterval(() => sockets.size && void account.refresh(), ACCOUNT_POLL_MS).unref
 
 // ── What runners tell the hub ──
 
-/** What a live chat emits, as its runner passes it on. The rest of ServerEvent is the hub's to send. */
-const SESSION_EVENTS = new Set<unknown>([
-  'message',
-  'bash_output',
-  'status',
-  'background',
-  'permission_request',
-  'permission_resolved',
-  'error',
-  'child_started',
-] satisfies ServerEvent['type'][])
-
-/** A chat's event from a runner, if it's one a chat emits and the chat is on that runner's machine. */
+/** A chat's event from a runner (already checked to be a kind a chat emits), if the chat is on that runner's machine. */
 function sessionEvent(machine: string, event: ServerEvent): ServerEvent | undefined {
-  if (!SESSION_EVENTS.has(event?.type) || !('sessionId' in event) || !machines.owns(machine, event.sessionId)) return undefined
+  if (!('sessionId' in event) || !SESSION_EVENTS.includes(event.type as never) || !machines.owns(machine, event.sessionId)) return undefined
   if (event.type === 'child_started' && store.parentOf(event.childId) !== event.sessionId) return undefined
   return event
 }
@@ -144,7 +150,7 @@ function runnerEvent(machine: Connection, event: RunnerEvent): void {
     }
     case 'live':
       // A chat started, closed, or started or finished working.
-      broadcast({ type: 'sessions_changed' })
+      sessionsChanged()
       attention.update()
       return
     case 'turn_end':
@@ -167,7 +173,7 @@ function runnerEvent(machine: Connection, event: RunnerEvent): void {
 /** A runner connected or went away. Its chats' viewers get a fresh snapshot: running, read-only, or back again. */
 function machineChanged(connection: Connection | undefined, id: string): void {
   broadcast({ type: 'machines', machines: machines.list() })
-  broadcast({ type: 'sessions_changed' })
+  sessionsChanged()
   attention.update()
   broadcastTerminals()
   for (const [sessionId, set] of viewers) {
@@ -193,38 +199,26 @@ function machineChanged(connection: Connection | undefined, id: string): void {
  * made a change.
  */
 function hubApi(machine: string): Omit<HubApi, 'hello'> {
-  const own = (sessionId: unknown): string => {
-    if (!machines.owns(machine, sessionId)) throw new BadRequest(`Chat ${String(sessionId).slice(0, 40)} isn't on this machine`)
+  const own = (sessionId: string): string => {
+    if (!machines.owns(machine, sessionId)) throw new BadRequest(`Chat ${sessionId} isn't on this machine`)
     return sessionId
   }
-  // Claude in one of this machine's chats; runners never act for the UI.
-  const claude = (actor: Actor): Actor => {
-    if (actor?.source !== 'claude') throw new BadRequest('Runners act for a chat')
-    return { source: 'claude', sessionId: own(actor.sessionId) }
-  }
-  const file = (f: TranscriptFile): TranscriptFile => {
-    if (typeof f?.subpath !== 'string' || !SUBPATH.test(f.subpath)) throw new BadRequest('Bad transcript subpath')
-    return { sessionId: own(f.sessionId), subpath: f.subpath }
-  }
+  // Claude in one of this machine's chats is who made the change; runners never act for the UI.
+  const as = (chat: string): Actor => ({ source: 'claude', sessionId: own(chat) })
   return {
     cards: () => store.cards(),
     card: (id) => store.card(id),
-    createCard: (input, actor) => cardsChanged(store.createCard(input, claude(actor))),
-    updateCard: (id, patch, actor) => cardsChanged(store.updateCard(id, patch, claude(actor))),
-    deleteCard: (id, actor) => cardsChanged(store.deleteCard(id, claude(actor))),
-    linkSession: (cardId, sessionId, actor) => cardsChanged(store.linkSession(cardId, own(sessionId), claude(actor))),
-    // Any chat on a card can be put away, wherever it runs; the change is this machine's chat's doing.
-    setArchived: (sessionId, archived, actor) => {
-      if (!isUuid(sessionId) || typeof archived !== 'boolean') throw new BadRequest('Bad chat id')
-      return store.setArchived(sessionId, archived, claude(actor))
-    },
+    createCard: (chat, input) => cardsChanged(store.createCard(input, as(chat))),
+    updateCard: (chat, id, patch) => cardsChanged(store.updateCard(id, patch, as(chat))),
+    deleteCard: (chat, id) => cardsChanged(store.deleteCard(id, as(chat))),
+    linkChat: (chat, cardId) => cardsChanged(store.linkSession(cardId, chat, as(chat))),
+    setArchived: (chat, sessionId, archived) => store.setArchived(sessionId, archived, as(chat)),
     archivedIds: () => [...store.archivedIds()],
-    cardContext: (sessionId) => cardContext(store, own(sessionId)),
-    markSeen: (sessionId, cardId) => markSeen(store, own(sessionId), cardId),
-    chatInfo: (ids) => chatInfo(Array.isArray(ids) ? ids.filter(isUuid) : []),
+    cardContext: (chat) => cardContext(store, own(chat)),
+    markSeen: (chat, cardId) => markSeen(store, own(chat), cardId),
+    chatInfo,
     startChild: ({ parentId, toolUseId, kind }) => {
       own(parentId)
-      if (typeof toolUseId !== 'string' || typeof kind !== 'string') throw new BadRequest('toolUseId and kind must be strings')
       // Children run on their parent's machine. Recorded before the chat exists, so the sidebar never lists it.
       const sessionId = randomUUID()
       store.transaction(() => {
@@ -233,33 +227,9 @@ function hubApi(machine: string): Omit<HubApi, 'hello'> {
       })
       return sessionId
     },
-    transcriptState: (files) => transcripts.state((Array.isArray(files) ? files : []).map(file)),
-    transcriptLines: (batch) => {
-      file(batch)
-      checkLines(batch)
-      return takeLines(batch)
-    },
+    transcriptState: (files) => transcripts.state(files.filter((f) => own(f.sessionId))),
+    transcriptLines: (batch) => (own(batch.sessionId), takeLines(batch)),
   }
-}
-
-/** '' or e.g. `subagents/agent-<id>`; only ever a key here, never a path. */
-const SUBPATH = /^[\w.\/-]{0,200}$/
-
-/** Throws on a batch of transcript lines that isn't shaped like one. */
-function checkLines(b: TranscriptLines): void {
-  const count = (n: unknown) => Number.isSafeInteger(n) && (n as number) >= 0
-  const ok =
-    typeof b.project === 'string' &&
-    b.project.length <= 1000 &&
-    count(b.fromLine) &&
-    count(b.fromBytes) &&
-    count(b.bytes) &&
-    Number.isFinite(b.mtime) &&
-    Array.isArray(b.lines) &&
-    b.lines.every((l) => typeof l === 'string') &&
-    (b.meta === undefined || (typeof b.meta === 'object' && b.meta !== null && !Array.isArray(b.meta))) &&
-    (b.reset === undefined || typeof b.reset === 'boolean')
-  if (!ok) throw new BadRequest('Malformed transcript lines')
 }
 
 async function chatInfo(ids: string[]): Promise<ChatInfo[]> {
@@ -299,7 +269,7 @@ let staleTimer: ReturnType<typeof setTimeout> | undefined
 function transcriptChanged(sessionId: string): void {
   listTimer ??= setTimeout(() => {
     listTimer = undefined
-    broadcast({ type: 'sessions_changed' })
+    sessionsChanged()
   }, 1000)
   if (machines.live(sessionId) || !viewers.get(sessionId)?.size) return
   stale.add(sessionId)
@@ -319,11 +289,16 @@ function transcriptChanged(sessionId: string): void {
  */
 const termViewers = new Map<string, Map<WebSocket, { views: number; live: boolean }>>()
 
+let terminalsTimer: ReturnType<typeof setTimeout> | undefined
+
 function broadcastTerminals(): void {
-  if (!machines.terminalsKnown()) return
-  const list = machines.terminals()
-  broadcast({ type: 'terminals', terminals: list })
-  for (const id of termViewers.keys()) if (!list.some((t) => t.id === id)) termViewers.delete(id)
+  terminalsTimer ??= setTimeout(() => {
+    terminalsTimer = undefined
+    if (!machines.terminalsKnown()) return
+    const list = machines.terminals()
+    broadcast({ type: 'terminals', terminals: list })
+    for (const id of termViewers.keys()) if (!list.some((t) => t.id === id)) termViewers.delete(id)
+  }, LIST_DEBOUNCE_MS)
 }
 
 /** Every subscribe gets a fresh snapshot, which also resets any view of it the socket already has. */
@@ -345,7 +320,7 @@ function snapshotTerminal(ws: WebSocket, id: string): void {
   }
   const t = machines.terminal(id)
   if (!t) return done(undefined)
-  t.machine.peer.request('termSnapshot', [t.id], (err, data) => done(err ? undefined : data))
+  t.machine.peer.request('termSnapshot', [t.id], (err, data) => done(err ? undefined : data), QUICK_TIMEOUT_MS)
 }
 
 function unsubscribeTerminal(ws: WebSocket, id: string): void {
@@ -399,8 +374,8 @@ async function sendSnapshot(ws: WebSocket, sessionId: string): Promise<void> {
     send(ws, { ...base, ...live, messages })
   }
   if (!runner) return done(null, false)
-  const gone = info?.cwd ? (await runner.peer.remote.inaccessible([info.cwd]).catch(() => [])).length > 0 : false
-  runner.peer.request('liveSnapshot', [sessionId], (err, live) => done(err ? null : live, gone))
+  const gone = info?.cwd ? (await runner.peer.within(QUICK_TIMEOUT_MS).inaccessible([info.cwd]).catch(() => [])).length > 0 : false
+  runner.peer.request('liveSnapshot', [sessionId], (err, live) => done(err ? null : live, gone), QUICK_TIMEOUT_MS)
 }
 
 /** Stores parts of a chat's draft and shows them to the chat's other viewers; the one editing it already has them. */
@@ -576,8 +551,7 @@ async function goneFolders(folders: { machine?: string; cwd: string }[]): Promis
     [...byMachine].map(async ([machine, dirs]) => {
       const runner = machines.get(machine)
       if (!runner) return
-      const timeout = new Promise<string[]>((r) => setTimeout(() => r([]), GONE_TIMEOUT_MS).unref())
-      out.set(machine, new Set(await Promise.race([runner.peer.remote.inaccessible([...dirs]).catch(() => []), timeout])))
+      out.set(machine, new Set(await runner.peer.within(GONE_TIMEOUT_MS).inaccessible([...dirs]).catch(() => [])))
     }),
   )
   return out
@@ -665,7 +639,7 @@ async function machinesApi(method: string, path: string, req: IncomingMessage): 
     const machine = machines.rename(m[1], name)
     broadcast({ type: 'machines', machines: machines.list() })
     // Chats and terminals show it.
-    broadcast({ type: 'sessions_changed' })
+    sessionsChanged()
     return [200, machine]
   }
   if (m && method === 'DELETE') {
@@ -691,7 +665,7 @@ async function worktreesApi(method: string, path: string, url: URL): Promise<[nu
   if (method === 'GET') return [200, await runner.peer.remote.worktreeStatus(dir)]
   if (method === 'DELETE') {
     await runner.peer.remote.removeWorktree(dir)
-    broadcast({ type: 'sessions_changed' })
+    sessionsChanged()
     return [204, null]
   }
   return undefined
@@ -836,7 +810,7 @@ server.on('upgrade', (req, socket, head) => {
     if (req.headers[PROTOCOL_HEADER] !== String(RUNNER_PROTOCOL)) {
       return refuse('426 Upgrade Required', `This hub speaks runner protocol v${RUNNER_PROTOCOL}, the runner v${req.headers[PROTOCOL_HEADER] ?? '?'}. Update whichever is older.`)
     }
-    return runnerWss.handleUpgrade(req, socket, head, (ws) => connectRunner(machine, ws))
+    return runnerWss.handleUpgrade(req, socket, head, (ws) => connectRunner(machine, token, ws))
   }
   if (url.pathname !== '/ws') return refuse('404 Not Found')
   if (!sameOrigin(req)) return refuse('403 Forbidden')
@@ -844,7 +818,7 @@ server.on('upgrade', (req, socket, head) => {
 })
 
 /** A remote runner's connection, dropped if it stops answering pings (a laptop that went to sleep mid-connection). */
-function connectRunner(machine: string, ws: WebSocket): void {
+function connectRunner(machine: string, token: string, ws: WebSocket): void {
   let alive = true
   ws.on('pong', () => (alive = true))
   const ping = setInterval(() => {
@@ -853,7 +827,7 @@ function connectRunner(machine: string, ws: WebSocket): void {
     ws.ping()
   }, RUNNER_PING_MS)
   ws.on('close', () => clearInterval(ping))
-  machines.attach(machine, wsLink(ws), hubApi)
+  machines.attach(machine, wsLink(ws), hubApi, token)
 }
 
 wss.on('connection', (ws: WebSocket) => {
@@ -865,8 +839,9 @@ wss.on('connection', (ws: WebSocket) => {
   if (latest) send(ws, { type: 'account_usage', usage: latest })
   void account.refresh()
   send(ws, { type: 'attention', chats: attention.chats() })
-  // Handle each socket's events in order so a snapshot can't overtake a later status.
-  let chain = Promise.resolve()
+  // Each chat's events are handled in order, so a snapshot can't overtake a later status. Chats don't wait on
+  // each other: one whose machine has stopped answering doesn't hold up the rest of the tab.
+  const chains = new Map<string, Promise<void>>()
   ws.on('message', (raw) => {
     let event: ClientEvent
     try {
@@ -874,7 +849,8 @@ wss.on('connection', (ws: WebSocket) => {
     } catch {
       return
     }
-    chain = chain.then(() =>
+    const key = 'sessionId' in event && typeof event.sessionId === 'string' ? event.sessionId : ''
+    const next = (chains.get(key) ?? Promise.resolve()).then(() =>
       handleClient(ws, event).catch((err) =>
         send(ws, {
           type: 'error',
@@ -883,6 +859,8 @@ wss.on('connection', (ws: WebSocket) => {
         }),
       ),
     )
+    chains.set(key, next)
+    void next.then(() => chains.get(key) === next && chains.delete(key))
   })
   ws.on('close', () => {
     sockets.delete(ws)
@@ -894,6 +872,7 @@ wss.on('connection', (ws: WebSocket) => {
 // The hub's own machine: a runner in this process, over an in-memory link.
 const runner = new Runner({ workspaceDir: WORKSPACE_DIR, scratchDir: SCRATCH_DIR, dataDir: DATA_DIR, env: startEnv })
 const [hubEnd, runnerEnd] = memoryLinks()
+importOlderChats()
 machines.attach(LOCAL, hubEnd, hubApi)
 runner.connect(runnerEnd).catch((err) => console.error('The hub’s own runner failed to start:', err))
 
@@ -906,6 +885,36 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
     runner.closeAll()
     process.exit(0)
   })
+}
+
+/**
+ * Once, on the first start with machines: puts every chat Claude Code has on this machine on the hub's machine, since
+ * Badger didn't use to record which were its. Done before the hub's runner connects, so its first chat list has them.
+ * After this, only chats started in Badger are added.
+ */
+function importOlderChats(): void {
+  if (!store.db.prepare('SELECT 1 FROM pending_import').get()) return
+  const projects = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects')
+  const insert = store.db.prepare('INSERT OR IGNORE INTO chat_machines (session_id, machine, created_at) VALUES (?, ?, ?)')
+  store.transaction(() => {
+    for (const project of readdirSafe(projects)) {
+      for (const name of readdirSafe(join(projects, project))) {
+        const sessionId = name.slice(0, -'.jsonl'.length)
+        if (!name.endsWith('.jsonl') || !isUuid(sessionId)) continue
+        const info = statSync(join(projects, project, name), { throwIfNoEntry: false })
+        if (info?.isFile()) insert.run(sessionId, LOCAL, Math.floor(info.mtimeMs))
+      }
+    }
+    store.db.exec('DELETE FROM pending_import')
+  })
+}
+
+function readdirSafe(dir: string): string[] {
+  try {
+    return readdirSync(dir)
+  } catch {
+    return []
+  }
 }
 
 function loadDotEnv(): void {

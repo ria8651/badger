@@ -118,12 +118,25 @@ const MIGRATIONS = [
      data TEXT NOT NULL
    );`,
   // A removed machine is only marked, so its id is never given to another machine and its chats can't come back to life there.
-  // Badger only shows chats it started, as the hub's machine's chats. Before machines, it didn't record which those were;
-  // the ones on cards, and their children, were certainly its.
+  // Before machines, Badger didn't record which chats were its. The ones on cards, and their children, were certainly
+  // the hub's machine's; migration 15 brings in the rest of that machine's older chats.
   `ALTER TABLE machines ADD COLUMN removed_at INTEGER;
    INSERT OR IGNORE INTO chat_machines (session_id, machine, created_at)
      SELECT session_id, 'local', created_at FROM card_sessions
      UNION ALL SELECT c.session_id, 'local', c.created_at FROM child_sessions c JOIN card_sessions p ON p.session_id = c.parent_session;`,
+  // Children of children were missed above: every child goes on its parent's machine, however deep.
+  // Chats that aren't listed any more shouldn't keep an unread mark. Chats are looked up by machine when a runner connects.
+  `WITH RECURSIVE tree(session_id, machine) AS (
+     SELECT session_id, machine FROM chat_machines
+     UNION SELECT c.session_id, tree.machine FROM child_sessions c JOIN tree ON c.parent_session = tree.session_id
+   )
+   INSERT OR IGNORE INTO chat_machines (session_id, machine, created_at) SELECT session_id, machine, 0 FROM tree;
+   DELETE FROM unread_sessions WHERE session_id NOT IN (SELECT session_id FROM chat_machines);
+   CREATE INDEX chat_machines_machine ON chat_machines(machine);`,
+  // Older chats on the hub's machine were never recorded, so they're brought in once at startup, from Claude Code's
+  // transcripts (see importOlderChats in index.ts). This row says that's still to do.
+  `CREATE TABLE pending_import (id INTEGER PRIMARY KEY CHECK (id = 1));
+   INSERT INTO pending_import (id) VALUES (1);`,
 ]
 
 /**

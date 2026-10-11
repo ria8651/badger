@@ -1,20 +1,22 @@
-import type {
-  AccountUsage,
-  AnswerDraft,
-  BackgroundTask,
-  Card,
-  CardStatus,
-  ContextUsage,
-  ImageAttachment,
-  ModelOption,
-  PendingPermission,
-  PermissionMode,
-  ServerEvent,
-  TerminalInfo,
-  WireMessage,
-  WorktreeStatus,
+import { z, type ZodType } from 'zod'
+import {
+  CARD_STATUSES,
+  type AccountUsage,
+  type AnswerDraft,
+  type BackgroundTask,
+  type Card,
+  type CardStatus,
+  type ContextUsage,
+  type ImageAttachment,
+  type ModelOption,
+  type PendingPermission,
+  type PermissionMode,
+  type ServerEvent,
+  type TerminalInfo,
+  type WireMessage,
+  type WorktreeStatus,
 } from '../shared/protocol.ts'
-import type { Actor, CardPatch } from './db.ts'
+import type { CardPatch } from './db.ts'
 import type { Later } from './peer.ts'
 import type { CreateSpec } from './ptyProtocol.ts'
 
@@ -164,20 +166,26 @@ export interface ChatInfo {
   machineName?: string
 }
 
-/** The board, as Claude's tools use it. The hub has it; runners reach it over their link. */
+/**
+ * The board, as Claude's tools use it. The hub has it; runners reach it over
+ * their link. Changes name the chat whose Claude is making them (`chat`); the
+ * hub checks it's on the runner's machine and records it as who did it.
+ */
 export interface Board {
   cards(): Card[]
   card(id: number): Card | undefined
-  createCard(input: { title: string; description?: string; status?: CardStatus; parentId?: number | null }, actor: Actor): Card
-  updateCard(id: number, patch: CardPatch, actor: Actor): Card | undefined
-  deleteCard(id: number, actor: Actor): boolean
-  linkSession(cardId: number, sessionId: string, actor: Actor): void
-  setArchived(sessionId: string, archived: boolean, actor: Actor): boolean
+  createCard(chat: string, input: { title: string; description?: string; status?: CardStatus; parentId?: number | null }): Card
+  updateCard(chat: string, id: number, patch: CardPatch): Card | undefined
+  deleteCard(chat: string, id: number): boolean
+  /** Puts the chat on a card, moving it off any other. */
+  linkChat(chat: string, cardId: number): void
+  /** Any chat can be archived, wherever it runs: e.g. the other chats on a card. */
+  setArchived(chat: string, sessionId: string, archived: boolean): boolean
   archivedIds(): string[]
   /** The chat's card for its next turn, or undefined if Claude has already seen this state. */
-  cardContext(sessionId: string): string | undefined
+  cardContext(chat: string): string | undefined
   /** Claude has just read or written this card, so it needn't be told about it next turn. */
-  markSeen(sessionId: string, cardId: number): void
+  markSeen(chat: string, cardId: number): void
   chatInfo(ids: string[]): Promise<ChatInfo[]>
 }
 
@@ -223,7 +231,7 @@ export interface RunnerWelcome {
 /**
  * Methods the hub serves to a runner. The hub decides which machine every chat
  * is on, and refuses anything a runner sends about a chat that isn't on its
- * own machine, board calls and their actor included.
+ * own machine, board changes included.
  */
 export interface HubApi extends Board {
   hello(hello: RunnerHello): RunnerWelcome
@@ -235,24 +243,92 @@ export interface HubApi extends Board {
   transcriptLines(batch: TranscriptLines): TranscriptState
 }
 
-export const HUB_METHODS = [
-  'cards',
-  'card',
-  'createCard',
-  'updateCard',
-  'deleteCard',
-  'linkSession',
-  'setArchived',
-  'archivedIds',
-  'cardContext',
-  'markSeen',
-  'chatInfo',
-  'hello',
-  'startChild',
-  'transcriptState',
-  'transcriptLines',
-] as const satisfies readonly (keyof HubApi)[]
+// ── What the hub takes from runners, checked before anything else sees it ──
+// A runner may be on a laptop that's been lost, so the hub doesn't trust it:
+// every call's arguments and every event must match these. Which chats it may
+// act for is checked after, against the hub's own records.
 
-// Every method listed, so none is unreachable by accident.
+const chatId = z.string().regex(UUID)
+const text = (max: number) => z.string().max(max)
+const count = z.number().int().nonnegative()
+const cardId = z.number().int()
+const status = z.enum(CARD_STATUSES)
+const transcriptFile = z.object({ sessionId: chatId, subpath: z.string().regex(/^[\w./-]{0,200}$/) })
+
+/** Each hub method's arguments. A method that isn't here can't be called. */
+export const HUB_ARGS = {
+  cards: z.tuple([]),
+  card: z.tuple([cardId]),
+  createCard: z.tuple([
+    chatId,
+    z.object({ title: text(1000), description: text(1_000_000).optional(), status: status.optional(), parentId: cardId.nullable().optional() }),
+  ]),
+  updateCard: z.tuple([
+    chatId,
+    cardId,
+    z.object({ title: text(1000), description: text(1_000_000), status, position: z.number(), parentId: cardId.nullable() }).partial(),
+  ]),
+  deleteCard: z.tuple([chatId, cardId]),
+  linkChat: z.tuple([chatId, cardId]),
+  setArchived: z.tuple([chatId, chatId, z.boolean()]),
+  archivedIds: z.tuple([]),
+  cardContext: z.tuple([chatId]),
+  markSeen: z.tuple([chatId, cardId]),
+  chatInfo: z.tuple([z.array(chatId).max(1000)]),
+  hello: z.tuple([z.object({ protocol: z.number(), hostname: text(255), workspaceDir: text(4096), scratchDir: text(4096) })]),
+  startChild: z.tuple([z.object({ parentId: chatId, toolUseId: text(200), kind: text(50) })]),
+  transcriptState: z.tuple([z.array(transcriptFile).max(1000)]),
+  transcriptLines: z.tuple([
+    transcriptFile.extend({
+      project: text(1000),
+      fromLine: count,
+      fromBytes: count,
+      lines: z.array(z.string()),
+      bytes: count,
+      mtime: z.number(),
+      meta: z.record(z.string(), z.unknown()).optional(),
+      reset: z.boolean().optional(),
+    }),
+  ]),
+} satisfies { [K in keyof HubApi]: ZodType<Parameters<HubApi[K]>> }
+
+/** What a live chat emits, as its runner passes it on. The rest of ServerEvent is the hub's own to send. */
+export const SESSION_EVENTS = [
+  'message',
+  'bash_output',
+  'status',
+  'background',
+  'permission_request',
+  'permission_resolved',
+  'error',
+  'child_started',
+] as const satisfies readonly ServerEvent['type'][]
+
+const terminalInfo = z.object({
+  id: z.string().regex(/^[0-9a-f]{1,32}$/),
+  title: text(1000),
+  cwd: text(4096),
+  root: text(4096),
+  command: text(100_000).optional(),
+  sessionId: chatId.optional(),
+  running: z.boolean(),
+  exitCode: z.number().optional(),
+  signal: z.number().optional(),
+  createdAt: z.number(),
+}) satisfies ZodType<TerminalInfo>
+
+/** Every event a runner may send. Anything else is dropped. */
+export const RUNNER_EVENT = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('live'),
+    sessions: z.array(z.object({ id: chatId, cwd: text(4096), running: z.boolean(), waiting: z.boolean() })).max(10_000),
+  }),
+  // The rest of the event is the chat's own content (messages, prompts), passed on to its viewers as it is.
+  z.object({ type: z.literal('session'), event: z.looseObject({ type: z.enum(SESSION_EVENTS), sessionId: chatId }) }),
+  z.object({ type: z.literal('turn_end'), sessionId: chatId }),
+  z.object({ type: z.literal('terminals'), terminals: z.array(terminalInfo).max(1000) }),
+  z.object({ type: z.literal('term_output'), id: z.string().max(32), data: z.string() }),
+])
+
+// Every runner method listed, so none is unreachable by accident.
 true satisfies Exclude<keyof RunnerApi, (typeof RUNNER_METHODS)[number]> extends never ? true : false
-true satisfies Exclude<keyof HubApi, (typeof HUB_METHODS)[number]> extends never ? true : false
