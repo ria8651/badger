@@ -1,6 +1,7 @@
 import { For, Show, createSignal, createUniqueId, onCleanup, splitProps, type JSX } from 'solid-js'
 import { Check, ChevronDown } from 'lucide-solid'
 import type { AttentionState } from '../../shared/protocol.ts'
+import { connected } from '../api.ts'
 
 /** Ink-filled when primary; otherwise a hairline outline. */
 export function Button(props: JSX.ButtonHTMLAttributes<HTMLButtonElement> & { primary?: boolean }) {
@@ -31,6 +32,20 @@ export const touch = matchMedia('(pointer: coarse)')
 
 export const inputClass =
   'h-8 w-full border border-edge bg-transparent px-3 text-[13px] outline-none transition-colors rounded-lg placeholder:text-fg-3 focus:border-fg-3 pointer-coarse:text-base'
+
+/**
+ * Stands in for a page or chat until its data arrives. Says so when the server can't be reached, since then it
+ * won't arrive until it's back. Fades in late so a quick load doesn't flash it.
+ */
+export function Loading(props: { class?: string }) {
+  return (
+    <div class={`flex flex-1 animate-[fade-in_200ms_ease-out_300ms_both] items-center justify-center gap-2 text-[13px] text-fg-3 ${props.class ?? ''}`}>
+      <Show when={connected()} fallback="Can’t reach the server. Retrying…">
+        <LiveDot /> Loading…
+      </Show>
+    </div>
+  )
+}
 
 /** A pulsing dot in the accent colour: something is live. */
 export function LiveDot(props: { class?: string }) {

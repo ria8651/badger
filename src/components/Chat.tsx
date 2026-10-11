@@ -1,9 +1,9 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, mapArray, on, onCleanup, onMount, type JSX } from 'solid-js'
-import { ArrowUp, Check, FolderX, GitBranch, ImagePlus, ListChevronsDownUp, ListChevronsUpDown, SlidersHorizontal, Square, SquareTerminal, Zap } from 'lucide-solid'
+import { ArrowUp, Check, FolderX, GitBranch, ImagePlus, ListChevronsDownUp, ListChevronsUpDown, SlidersHorizontal, Square, SquareTerminal, WifiOff, Zap } from 'lucide-solid'
 import { isLongPaste } from '../../shared/pastes.ts'
 import type { Card, DraftAttachments, PermissionMode } from '../../shared/protocol.ts'
 import { chatActions, type ChatAction } from '../actions.ts'
-import { api, socket } from '../api.ts'
+import { api, connected, socket } from '../api.ts'
 import { readImage } from '../images.ts'
 import { lastModel, modelValue, models, setLastModel } from '../models.ts'
 import { cardWorktreeName, folderItem, isScratch, worktreeOf } from '../folders.ts'
@@ -16,7 +16,7 @@ import { TaskTray, trayItems, waitingOnTask } from './TaskTray.tsx'
 import { reveal, revealed, toolLabel } from './ToolCard.tsx'
 import { Transcript, createIndex, detail, runInBackground, setDetail } from './Transcript.tsx'
 import { ContextMeter } from './Usage.tsx'
-import { IconButton, Menu, Select, ltr, touch, type Option } from './ui.tsx'
+import { IconButton, Loading, Menu, Select, ltr, touch, type Option } from './ui.tsx'
 
 const MODES: Option<PermissionMode>[] = [
   { value: 'default', label: 'Ask before edits', description: 'Claude asks before changing files or running commands.' },
@@ -266,36 +266,38 @@ export function Chat(props: {
             composer to hang out by their own padding, so the text in them lines up with Claude's. */}
         <div class="mx-auto flex min-h-full max-w-[50rem] flex-col px-6 md:px-9">
           <div ref={content} class="flex-1 py-8">
-            <Show
-              when={!(state.loaded && state.messages.length === 0)}
-              fallback={
-                <div class="pt-[22vh] text-center">
-                  <p class="text-base text-fg-2">What are we working on?</p>
-                  <Show
-                    when={props.projects?.length && props.onPickCwd && !state.cwd && !started()}
-                    fallback={<p class="mt-1.5 font-mono text-xs text-fg-3">{where()}</p>}
-                  >
-                    <FolderPicker folders={props.projects!} selected={cwd()} onPick={props.onPickCwd!} />
-                  </Show>
-                  <Show when={canWorktree()}>
-                    <WorktreeOption checked={inWorktree()} onChange={setInWorktree} name={worktreeName()} />
-                  </Show>
-                </div>
-              }
-            >
-              <ChildChats.Provider value={childState}>
-                <Transcript
-                  sessionId={props.sessionId}
-                  index={index}
-                  messages={state.messages}
-                  partial={state.partial}
-                  bashOutput={state.bashOutput}
-                  running={state.running}
-                  working={state.running && state.permissions.length === 0 && childPrompts().length === 0}
-                  cwd={cwd()}
-                  children={state.children}
-                />
-              </ChildChats.Provider>
+            <Show when={state.loaded} fallback={<Loading class="pt-[22vh]" />}>
+              <Show
+                when={state.messages.length}
+                fallback={
+                  <div class="pt-[22vh] text-center">
+                    <p class="text-base text-fg-2">What are we working on?</p>
+                    <Show
+                      when={props.projects?.length && props.onPickCwd && !state.cwd && !started()}
+                      fallback={<p class="mt-1.5 font-mono text-xs text-fg-3">{where()}</p>}
+                    >
+                      <FolderPicker folders={props.projects!} selected={cwd()} onPick={props.onPickCwd!} />
+                    </Show>
+                    <Show when={canWorktree()}>
+                      <WorktreeOption checked={inWorktree()} onChange={setInWorktree} name={worktreeName()} />
+                    </Show>
+                  </div>
+                }
+              >
+                <ChildChats.Provider value={childState}>
+                  <Transcript
+                    sessionId={props.sessionId}
+                    index={index}
+                    messages={state.messages}
+                    partial={state.partial}
+                    bashOutput={state.bashOutput}
+                    running={state.running}
+                    working={state.running && state.permissions.length === 0 && childPrompts().length === 0}
+                    cwd={cwd()}
+                    children={state.children}
+                  />
+                </ChildChats.Provider>
+              </Show>
             </Show>
           </div>
 
@@ -327,6 +329,12 @@ export function Chat(props: {
                 <div class="flex items-start gap-3 bg-danger/10 rounded-lg px-3 py-2 text-[13px] text-danger">
                   <span class="flex-1">{state.error}</span>
                   <button onClick={clearError} class="opacity-70 hover:opacity-100">Dismiss</button>
+                </div>
+              </Show>
+              <Show when={state.loaded && !connected()}>
+                <div class="flex items-start gap-3 bg-surface rounded-lg px-3 py-2 text-[13px] text-fg-2">
+                  <WifiOff class="size-4 shrink-0 mt-0.5" />
+                  <span class="flex-1">Can’t reach the server. Retrying… What you send goes out once it’s back.</span>
                 </div>
               </Show>
               <Show when={state.gone}>

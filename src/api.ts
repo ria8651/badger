@@ -1,3 +1,4 @@
+import { createSignal } from 'solid-js'
 import type { Card, CardStatus, ClientEvent, ModelOption, ServerEvent, SessionSummary, TerminalInfo, WorktreeStatus } from '../shared/protocol.ts'
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -126,3 +127,8 @@ class Socket {
 }
 
 export const socket = new Socket()
+
+const [connected, setConnected] = createSignal(false)
+socket.onConnection(setConnected)
+/** Whether the socket to the server is up, as a signal. */
+export { connected }

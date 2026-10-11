@@ -6,9 +6,14 @@ import { api, socket } from './api.ts'
 /** Every terminal on the server, kept current over the socket. */
 const [list, setList] = createStore<TerminalInfo[]>([])
 export const terminals = () => list
+/** False until the server has sent the list, so a terminal that isn't in it yet isn't taken for closed. */
+const [loaded, setLoaded] = createSignal(false)
+export const terminalsLoaded = loaded
 
 socket.on((e) => {
-  if (e.type === 'terminals') setList(reconcile(e.terminals, { key: 'id' }))
+  if (e.type !== 'terminals') return
+  setList(reconcile(e.terminals, { key: 'id' }))
+  setLoaded(true)
 })
 
 const roots = new Map<string, Accessor<string | undefined>>()

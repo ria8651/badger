@@ -1,11 +1,15 @@
 import { createRoot, createResource, createSignal } from 'solid-js'
 import type { ModelOption } from '../shared/protocol.ts'
-import { api } from './api.ts'
+import { api, socket } from './api.ts'
 
 const LAST_KEY = 'badger.model'
 
-/** What Claude Code offers, fetched once. */
-export const models = createRoot(() => createResource(() => api.models().catch(() => [] as ModelOption[]))[0])
+/** What Claude Code offers, fetched once, or again on reconnecting if that failed. */
+export const models = createRoot(() => {
+  const [list, { refetch }] = createResource(() => api.models().catch(() => [] as ModelOption[]))
+  socket.onConnection((c) => c && !list.loading && !list()?.length && refetch())
+  return list
+})
 
 /** The model last picked, which new chats start on. */
 const [last, setLast] = createSignal(localStorage.getItem(LAST_KEY) ?? 'default')

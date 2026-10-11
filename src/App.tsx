@@ -3,7 +3,7 @@ import { createStore, reconcile } from 'solid-js/store'
 import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, PanelLeft, Pencil, Plus, Radar as RadarIcon } from 'lucide-solid'
 import { descendants, projectOf } from '../shared/cardTree.ts'
 import type { Card, SessionSummary } from '../shared/protocol.ts'
-import { api, socket } from './api.ts'
+import { api, connected, socket } from './api.ts'
 import { attention, looking, notifications, notify, onAttention, toggleNotifications } from './attention.ts'
 import { basename, folderLabel, isScratch, lastWorkedIn, setScratch } from './folders.ts'
 import { Board } from './components/Board.tsx'
@@ -13,8 +13,8 @@ import { Chat } from './components/Chat.tsx'
 import { RenameChat } from './components/RenameChat.tsx'
 import { AccountLimits } from './components/Usage.tsx'
 import { StatusDot, TerminalPage } from './components/Terminals.tsx'
-import { ChatDot, Menu } from './components/ui.tsx'
-import { terminalLabel, terminals } from './terminals.ts'
+import { ChatDot, Loading, Menu } from './components/ui.tsx'
+import { terminalLabel, terminals, terminalsLoaded } from './terminals.ts'
 import { accountUsage } from './usage.ts'
 
 /** crypto.randomUUID needs a secure context; fall back for plain-http hosts. */
@@ -73,7 +73,6 @@ export function App() {
   const [drafts, setDrafts] = createSignal<Record<string, string>>({})
   /** Blank chats that should start with "In a worktree" ticked, e.g. a card whose work is already in one. */
   const [worktreeDrafts, setWorktreeDrafts] = createSignal<Record<string, boolean>>({})
-  const [connected, setConnected] = createSignal(false)
   // Home is a blank chat; it gets a real URL once its first message is sent.
   // Its id is kept until then so a draft typed there survives reloads.
   const [homeId, setHomeId] = createSignal(localStorage.getItem(HOME_KEY) ?? uuid())
@@ -86,19 +85,27 @@ export function App() {
       setLoaded(true)
     })
   }
+  const [cardsLoaded, setCardsLoaded] = createSignal(false)
   const refreshCards = () => {
-    api.cards().then(setCards)
+    api.cards().then((list) => {
+      setCards(list)
+      setCardsLoaded(true)
+    })
   }
+  /** Config first, since the folder defaults need it, then the lists, which may have changed while the server was away. */
+  const load = () =>
+    (config() ? Promise.resolve() : api.config().then((c) => (setScratch(c.scratchCwd), setConfig(c))))
+      .then(() => {
+        refresh()
+        refreshCards()
+      })
+      // The next reconnect tries again.
+      .catch(() => {})
 
   onMount(() => {
-    api.config().then((c) => {
-      setConfig(c)
-      setScratch(c.scratchCwd)
-      socket.connect()
-      refresh()
-      refreshCards()
-    })
-    const offConn = socket.onConnection(setConnected)
+    // Every connect loads, the first included, so a server that was down when the page opened is picked up once it's back.
+    const offConn = socket.onConnection((c) => c && load())
+    socket.connect()
     // Refresh the list when sessions appear, finish a turn, or change state.
     let timer: ReturnType<typeof setTimeout>
     const off = socket.on((e) => {
@@ -488,6 +495,9 @@ export function App() {
             </Show>
           </button>
           <span class="min-w-0 flex-1 truncate text-[13px] font-medium">{pageTitle()}</span>
+          <Show when={!connected()}>
+            <span class="shrink-0 text-xs text-fg-3">Reconnecting…</span>
+          </Show>
           <button
             onClick={newHomeChat}
             title={focus() ? `New chat on ${focus()!.title}` : 'New chat'}
@@ -517,7 +527,14 @@ export function App() {
               }}
             </Match>
             <Match when={currentTerminal()} keyed>
-              {(id) => <TerminalPage id={id} onClosed={newHomeChat} />}
+              {(id) => (
+                <Show when={terminalsLoaded()} fallback={<Loading />}>
+                  <TerminalPage id={id} onClosed={newHomeChat} />
+                </Show>
+              )}
+            </Match>
+            <Match when={!(cardsLoaded() && loaded())}>
+              <Loading />
             </Match>
             <Match when={route().kind === 'radar'}>
               <Radar cards={cards()} sessions={sessions()} onOpenCard={(id) => go({ kind: 'card', id })} onOpenChat={(id) => go({ kind: 'chat', id })} />
