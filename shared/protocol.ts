@@ -47,10 +47,30 @@ export interface BackgroundTask {
  */
 export type AttentionState = 'waiting' | 'unread'
 
+/**
+ * A computer chats and terminals run on: the hub's own, or one connected to
+ * it with `badger remote`. A chat stays on the machine it started on.
+ */
+export interface Machine {
+  id: string
+  name: string
+  /** The hub's own machine. It can't be removed. */
+  local: boolean
+  online: boolean
+  /** Where new chats start on it by default. Known once it has connected. */
+  workspaceDir?: string
+  /** Where its folderless chats run. */
+  scratchDir?: string
+  /** When it was last connected, ms since epoch; absent if it never has been. */
+  lastSeen?: number
+}
+
 export interface SessionSummary {
   id: string
   title: string
   cwd?: string
+  /** The machine it runs on. */
+  machine?: string
   lastModified: number
   running: boolean
   /** Hidden from the sidebar's main list. Archiving never deletes the transcript. */
@@ -121,8 +141,10 @@ export interface Card {
  * it keeps running across chats, reloads and Badger server restarts.
  */
 export interface TerminalInfo {
-  /** Short hex id. */
+  /** Short hex id on its machine; the hub gives the browser `<machine>.<id>`. */
   id: string
+  /** The machine it runs on. Filled in by the hub. */
+  machine?: string
   /** What the program last set as its title (shells usually show the running command), else the command or shell. */
   title: string
   cwd: string
@@ -161,6 +183,8 @@ export type ClientEvent =
       pastes?: string[]
       images?: ImageAttachment[]
       cwd?: string
+      /** Where a new chat runs; an existing one stays on its own machine. Defaults to the hub's. */
+      machine?: string
       mode?: PermissionMode
       /** Used when this starts or resumes the chat's process; a running one keeps its model. */
       model?: string
@@ -204,6 +228,8 @@ export type ServerEvent =
       /** A ModelOption value, or a model id from the transcript. Absent until the chat has run. */
       model?: string
       cwd?: string
+      /** The machine it runs on; absent for a chat that hasn't started. While it's offline the chat is read-only. */
+      machine?: string
       /** Its folder is gone or can't be opened, e.g. a worktree removed after merging, so it can't run. */
       gone?: boolean
       permissions: PendingPermission[]
@@ -239,6 +265,8 @@ export type ServerEvent =
   /** Every chat that needs the user, by id; sent on connect and whenever it changes. Children count as their parent. */
   | { type: 'attention'; chats: Record<string, AttentionState> }
   | { type: 'cards_changed' }
+  /** Every machine; sent on connect and whenever one connects, disconnects or changes. */
+  | { type: 'machines'; machines: Machine[] }
   /** Every terminal; sent on connect and whenever any of them changes. */
   | { type: 'terminals'; terminals: TerminalInfo[] }
   /** The terminal's screen and scrollback as escape sequences; replaces whatever the viewer had. */

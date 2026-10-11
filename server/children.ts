@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import type { ServerEvent } from '../shared/protocol.ts'
-import type { Store } from './db.ts'
+import type { Remote } from './peer.ts'
+import type { HubApi } from './runnerProtocol.ts'
 import type { LiveSession, SessionManager } from './session.ts'
 
 export interface ChildResult {
@@ -16,12 +16,12 @@ export interface ChildResult {
  * Claude Code session with its own directory. Started from a tool call, which
  * blocks until the child's first turn ends and returns its reply. Children
  * stay out of the sidebar; the client shows each inside its parent's tool call.
+ * A child runs on its parent's machine; the hub records it.
  */
 export class Children {
   constructor(
     private manager: SessionManager,
-    private store: Store,
-    private broadcast: (event: ServerEvent) => void,
+    private hub: Remote<HubApi>,
   ) {}
 
   async run(
@@ -30,11 +30,10 @@ export class Children {
   ): Promise<ChildResult> {
     const sessionId = randomUUID()
     // Recorded before the session exists, so the sidebar never lists it.
-    this.store.addChild({ sessionId, parentId: parent.id, toolUseId: opts.toolUseId, kind: opts.kind })
+    await this.hub.addChild({ sessionId, parentId: parent.id, toolUseId: opts.toolUseId, kind: opts.kind })
     // A child can't propose a plan back to its parent, so plan mode falls back to asking.
     const child = await this.manager.open(sessionId, { cwd: opts.cwd, mode: parent.mode === 'plan' ? 'default' : parent.mode, model: parent.model })
-    child.subscribe(this.broadcast)
-    this.broadcast({ type: 'child_started', sessionId: parent.id, toolUseId: opts.toolUseId, childId: sessionId })
+    parent.emitEvent({ type: 'child_started', sessionId: parent.id, toolUseId: opts.toolUseId, childId: sessionId })
 
     return new Promise((resolve) => {
       const onAbort = () => void child.interrupt()
@@ -53,10 +52,5 @@ export class Children {
       opts.signal?.addEventListener('abort', onAbort, { once: true })
       if (!child.send(opts.prompt)) finish(false, 'The chat closed before it could start.')
     })
-  }
-
-  /** Stopping a chat stops whatever it's waiting on too. */
-  async interrupt(parentId: string): Promise<void> {
-    await Promise.all(Object.values(this.store.children(parentId)).map((id) => this.manager.get(id)?.interrupt()))
   }
 }

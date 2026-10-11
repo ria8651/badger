@@ -1,22 +1,25 @@
 import { existsSync } from 'node:fs'
-import { getSessionInfo, tool, type SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk'
+import { tool, type SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import type { Card } from '../shared/protocol.ts'
 import type { Children } from './children.ts'
-import type { Actor, Store } from './db.ts'
+import type { Actor } from './db.ts'
+import type { Remote } from './peer.ts'
+import type { Board } from './runnerProtocol.ts'
 import type { SessionManager } from './session.ts'
 import type { Terminals } from './terminals.ts'
 import { WORKTREE_PATH, mainCheckout, mergeBlocker, removeWorktree, worktreeStatus } from './workspace.ts'
 
 export const MERGE_TOOL = 'merge_worktree'
 
+/** The worktree, its chats and its terminals are all on the machine this runs on; the board is the hub's. */
 export interface MergeDeps {
-  store: Store
+  board: Remote<Board>
+  /** This machine's id. */
+  machine: () => string
   manager: SessionManager
   terminals: Terminals
   children: Children
-  /** Board data or the chat list changed. */
-  onChange: () => void
 }
 
 /** One merge into a checkout at a time; later ones wait their turn. */
@@ -70,7 +73,7 @@ export function mergeTool(deps: MergeDeps, sessionId: string, cwd: () => string,
         const busy = deps.manager.in(main).filter((s) => s.running)
         if (busy.length) return error(`Another chat is working in the main checkout (${main}). Wait for it to finish, then merge again.`)
 
-        const card = deps.store.cards().find((c) => c.sessionIds.includes(sessionId))
+        const card = (await deps.board.cards()).find((c) => c.sessionIds.includes(sessionId))
         const before = await worktreeStatus(dir)
         const result = await deps.children.run(parent, {
           toolUseId,
@@ -118,17 +121,18 @@ function mergePrompt(p: { dir: string; branch: string; base: string; unmerged: n
 /**
  * Whether merging this worktree finishes the card: every other chat on it is
  * archived or ran somewhere that's gone. Cards often hold more than one piece
- * of work, so anything else still around keeps the card open.
+ * of work, so anything else still around keeps the card open, including
+ * chats on other machines, whose folders can't be checked from here.
  */
 async function cardFinished(deps: MergeDeps, card: Card | undefined, dir: string): Promise<boolean> {
   if (!card) return false
-  const archived = deps.store.archivedIds()
-  const others = await Promise.all(
-    card.sessionIds
-      .filter((id) => !archived.has(id))
-      .map(async (id) => deps.manager.get(id)?.cwd ?? (await getSessionInfo(id).catch(() => undefined))?.cwd),
-  )
-  return others.every((cwd) => !cwd || cwd === dir || !existsSync(cwd))
+  const archived = new Set(await deps.board.archivedIds())
+  const others = await deps.board.chatInfo(card.sessionIds.filter((id) => !archived.has(id)))
+  return others.every((c) => {
+    const cwd = deps.manager.get(c.id)?.cwd ?? c.cwd
+    if (c.machine && c.machine !== deps.machine()) return !cwd
+    return !cwd || cwd === dir || !existsSync(cwd)
+  })
 }
 
 /** After the merging chat's turn: the worktree goes, and the chat (or its whole card) is put away. */
@@ -142,9 +146,12 @@ async function cleanUp(deps: MergeDeps, p: { sessionId: string; dir: string; car
   } catch (err) {
     console.error(`Merged, but couldn't remove worktree ${p.dir}: ${err instanceof Error ? err.message : err}`)
   }
-  if (p.card) deps.store.updateCard(p.card.id, { status: 'done' }, actor)
-  else deps.store.setArchived(p.sessionId, true, actor)
-  deps.onChange()
+  try {
+    if (p.card) await deps.board.updateCard(p.card.id, { status: 'done' }, actor)
+    else await deps.board.setArchived(p.sessionId, true, actor)
+  } catch (err) {
+    console.error(`Merged, but couldn't put the chat away: ${err instanceof Error ? err.message : err}`)
+  }
 }
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`

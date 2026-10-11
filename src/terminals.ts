@@ -2,6 +2,7 @@ import { createSignal, type Accessor } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
 import type { TerminalInfo } from '../shared/protocol.ts'
 import { api, socket } from './api.ts'
+import { place, type Place } from './folders.ts'
 
 /** Every terminal on the server, kept current over the socket. */
 const [list, setList] = createStore<TerminalInfo[]>([])
@@ -16,18 +17,25 @@ socket.on((e) => {
   setLoaded(true)
 })
 
-const roots = new Map<string, Accessor<string | undefined>>()
+const roots = new Map<Place, Accessor<Place | undefined>>()
 
-/** The workspace (git root) a directory belongs to, as the server sees it. Terminals are grouped by this. */
-export function workspaceOf(cwd: string): Accessor<string | undefined> {
-  let root = roots.get(cwd)
+/**
+ * The workspace (git root) a directory belongs to, as its machine sees it,
+ * with the machine. Terminals are grouped by this.
+ */
+export function workspaceOf(machine: string | undefined, cwd: string): Accessor<Place | undefined> {
+  const key = place(machine, cwd)
+  let root = roots.get(key)
   if (!root) {
-    const [get, set] = createSignal<string>()
-    api.workspace(cwd).then((r) => set(r.root), () => set(cwd))
-    roots.set(cwd, (root = get))
+    const [get, set] = createSignal<Place>()
+    api.workspace(cwd, machine).then((r) => set(place(machine, r.root)), () => set(key))
+    roots.set(key, (root = get))
   }
   return root
 }
+
+/** The workspace a terminal is in, as `workspaceOf` gives it. */
+export const terminalWorkspace = (t: TerminalInfo): Place => place(t.machine, t.root)
 
 /** What a terminal is: the command it runs, else whatever the shell last titled it. */
 export const terminalLabel = (t: TerminalInfo) => t.command ?? t.title
@@ -39,7 +47,7 @@ export function terminalState(t: TerminalInfo): string {
   return t.exitCode ? `exited ${t.exitCode}` : 'exited'
 }
 
-// ── Dock state, per workspace, kept across chats and reloads ──
+// ── Dock state, per workspace (a place), kept across chats and reloads ──
 
 interface DockState {
   open: boolean

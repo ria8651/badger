@@ -1,6 +1,5 @@
 import type { AttentionState, ServerEvent } from '../shared/protocol.ts'
 import type { Store } from './db.ts'
-import type { LiveSession, SessionManager } from './session.ts'
 
 /**
  * Which chats need the user. Waiting comes from live sessions' pending
@@ -13,17 +12,16 @@ export class Attention {
 
   constructor(
     private store: Store,
-    private manager: SessionManager,
+    /** Live chats with a prompt or question waiting, on every machine. */
+    private waiting: () => string[],
     private broadcast: (event: ServerEvent) => void,
   ) {}
 
-  /** Call for every session as it opens. */
-  watch(session: LiveSession): void {
-    session.subscribe((e) => {
-      if (e.type === 'permission_request' || e.type === 'permission_resolved') this.update()
-      else if (e.type === 'message' && e.message.type === 'result' && !this.store.parentOf(session.id)) this.mark(session.id, true)
-      else if (e.type === 'error' && !this.store.parentOf(session.id)) this.mark(session.id, true)
-    })
+  /** Call with every event a live chat emits. */
+  see(e: ServerEvent): void {
+    if (e.type === 'permission_request' || e.type === 'permission_resolved') this.update()
+    else if (e.type === 'message' && e.message.type === 'result' && !this.store.parentOf(e.sessionId)) this.mark(e.sessionId, true)
+    else if (e.type === 'error' && e.sessionId && !this.store.parentOf(e.sessionId)) this.mark(e.sessionId, true)
   }
 
   mark(sessionId: string, unread: boolean): void {
@@ -33,11 +31,11 @@ export class Attention {
   chats(): Record<string, AttentionState> {
     const chats: Record<string, AttentionState> = {}
     for (const id of this.store.unreadIds()) chats[id] = 'unread'
-    for (const id of this.manager.liveIds()) if (this.manager.get(id)?.waiting) chats[this.root(id)] = 'waiting'
+    for (const id of this.waiting()) chats[this.root(id)] = 'waiting'
     return chats
   }
 
-  /** Tells every tab if anything changed. Also call when a session closes, taking its prompts with it. */
+  /** Tells every tab if anything changed. Also call when a session closes or its machine goes, taking its prompts with it. */
   update(): void {
     const chats = this.chats()
     const json = JSON.stringify(chats)

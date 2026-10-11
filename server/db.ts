@@ -76,6 +76,47 @@ const MIGRATIONS = [
   // Deleting a card only marks it, so it stays in the table and is migrated like any other row, ready for a restore feature later.
   // The cards inside it aren't marked; they're hidden because it is (see VISIBLE).
   `ALTER TABLE cards ADD COLUMN deleted_at INTEGER;`,
+  // Machines chats and terminals run on. The hub's own is 'local'; others connect with a token, kept hashed.
+  // info is what the machine said about itself when it last connected, as JSON.
+  `CREATE TABLE machines (
+     id TEXT PRIMARY KEY,
+     name TEXT NOT NULL,
+     token_hash TEXT UNIQUE,
+     created_at INTEGER NOT NULL,
+     last_seen INTEGER,
+     info TEXT
+   );
+   -- The machine each chat runs on. A chat stays on the machine it started on.
+   CREATE TABLE chat_machines (
+     session_id TEXT PRIMARY KEY,
+     machine TEXT NOT NULL,
+     created_at INTEGER NOT NULL
+   );
+   -- Claude Code's transcripts, copied line by line from the machine each chat runs on, so chats can be read while it's away.
+   -- subpath is '' for a chat's own transcript, or e.g. 'subagents/agent-<id>'.
+   CREATE TABLE transcript_files (
+     session_id TEXT NOT NULL,
+     subpath TEXT NOT NULL,
+     project TEXT NOT NULL,
+     lines INTEGER NOT NULL,
+     bytes INTEGER NOT NULL,
+     mtime INTEGER NOT NULL,
+     meta TEXT,
+     PRIMARY KEY (session_id, subpath)
+   );
+   CREATE TABLE transcript_lines (
+     session_id TEXT NOT NULL,
+     subpath TEXT NOT NULL,
+     n INTEGER NOT NULL,
+     entry TEXT NOT NULL,
+     PRIMARY KEY (session_id, subpath, n)
+   ) WITHOUT ROWID;
+   -- The SDK's running summary of each chat's transcript (foldSessionSummary), so chats can be listed without reading them.
+   CREATE TABLE transcript_summaries (
+     session_id TEXT PRIMARY KEY,
+     mtime INTEGER NOT NULL,
+     data TEXT NOT NULL
+   );`,
 ]
 
 /**
@@ -113,7 +154,8 @@ type AuditAction = 'create' | 'update' | 'delete' | 'link' | 'unlink' | 'archive
 
 /** Project data that spans repos and users: cards and which chats belong to them. */
 export class Store {
-  private db: DatabaseSync
+  /** Shared with the other tables' owners, e.g. transcripts. */
+  readonly db: DatabaseSync
   private inTransaction = false
 
   /** @param onArchived called whenever a chat is archived or unarchived, including by a card's status changing. */
@@ -138,7 +180,7 @@ export class Store {
   }
 
   /** Joins the enclosing transaction if there is one, so writes that call each other stay atomic. */
-  private transaction<T>(fn: () => T): T {
+  transaction<T>(fn: () => T): T {
     if (this.inTransaction) return fn()
     this.db.exec('BEGIN')
     this.inTransaction = true

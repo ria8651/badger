@@ -1,13 +1,14 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, mapArray, on, onCleanup, onMount, type JSX } from 'solid-js'
-import { ArrowUp, Check, FolderX, GitBranch, ImagePlus, ListChevronsDownUp, ListChevronsUpDown, SlidersHorizontal, Square, SquareTerminal, WifiOff, Zap } from 'lucide-solid'
+import { ArrowUp, Check, FolderX, GitBranch, ImagePlus, ListChevronsDownUp, ListChevronsUpDown, MonitorOff, SlidersHorizontal, Square, SquareTerminal, WifiOff, Zap } from 'lucide-solid'
 import { isLongPaste } from '../../shared/pastes.ts'
 import type { Card, DraftAttachments, PermissionMode } from '../../shared/protocol.ts'
 import { chatActions, type ChatAction } from '../actions.ts'
 import { api, connected, socket } from '../api.ts'
 import { readImage } from '../images.ts'
 import { lastModel, modelValue, models, setLastModel } from '../models.ts'
-import { cardWorktreeName, folderItem, isScratch, worktreeOf } from '../folders.ts'
-import { dockState, terminals, workspaceOf } from '../terminals.ts'
+import { cardWorktreeName, folderItem, isScratch, onMachine, unplace, worktreeOf, type Place } from '../folders.ts'
+import { isOnline, machineName } from '../machines.ts'
+import { dockState, terminalWorkspace, terminals, workspaceOf } from '../terminals.ts'
 import { ChildChats, createChat } from '../useChat.ts'
 import { Attachments } from './Attachments.tsx'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
@@ -30,10 +31,11 @@ const NO_ATTACHMENTS: DraftAttachments = { pastes: [], images: [] }
 
 export function Chat(props: {
   sessionId: string
-  draftCwd?: string
+  /** Where a chat that hasn't started will run: a folder on a machine. */
+  draftPlace?: Place
   /** Offered as a directory picker until the first message goes out; existing chats never show it. */
-  projects?: string[]
-  onPickCwd?: (cwd: string) => void
+  projects?: Place[]
+  onPickPlace?: (p: Place) => void
   /** The card this chat is on. A worktree it starts in is named after the card; otherwise Claude names it. */
   card?: Card
   /** Start with "In a worktree" ticked. */
@@ -81,13 +83,18 @@ export function Chat(props: {
   let input!: HTMLTextAreaElement
   let pinned = true
   let lastTop = 0
-  const cwd = () => state.cwd ?? props.draftCwd
+  const draft = () => (props.draftPlace ? unplace(props.draftPlace) : undefined)
+  const cwd = () => state.cwd ?? draft()?.cwd
+  /** A chat stays on the machine it started on; one that hasn't started goes where its folder is. */
+  const machine = () => state.machine ?? draft()?.machine
   // Folderless chats get no terminals: there's no project to run anything in.
   const root = () => {
     const dir = cwd()
-    return dir && !isScratch(dir) ? workspaceOf(dir)() : undefined
+    return dir && !isScratch(dir) ? workspaceOf(machine(), dir)() : undefined
   }
-  const where = () => (isScratch(cwd()) ? 'No folder' : (cwd() ?? ''))
+  const where = () => [isScratch(cwd()) ? 'No folder' : (cwd() ?? ''), onMachine(machine())].filter(Boolean).join(' · ')
+  /** Its machine isn't connected, so it can be read but not run. */
+  const offline = () => state.loaded && !!machine() && !isOnline(machine())
 
   // Shared by the transcript and the task tray, so both read the chat's messages once.
   const index = createIndex(() => state.messages, () => props.sessionId)
@@ -131,8 +138,8 @@ export function Chat(props: {
 
   // Fetched on opening and again each time a turn ends, since that's when commits happen.
   const [worktree, { refetch: refetchWorktree }] = createResource(
-    () => state.loaded && worktreeOf(cwd()) && cwd(),
-    (dir) => api.worktree(dir).catch(() => undefined),
+    () => state.loaded && !offline() && worktreeOf(cwd()) && cwd(),
+    (dir) => api.worktree(dir, machine()).catch(() => undefined),
   )
   createEffect(on(() => state.running, (running) => !running && refetchWorktree(), { defer: true }))
   const actions = () => chatActions({ worktree: worktree() })
@@ -201,9 +208,9 @@ export function Chat(props: {
 
 
   const send = (value: string, attachments: DraftAttachments = NO_ATTACHMENTS) => {
-    if (state.gone) return
+    if (state.gone || offline()) return
     const worktree = inWorktree() && canWorktree() ? (worktreeName() ?? '') : undefined
-    socket.send({ type: 'send', sessionId: props.sessionId, text: value, ...attachments, cwd: cwd(), mode: mode(), model: model(), worktree })
+    socket.send({ type: 'send', sessionId: props.sessionId, text: value, ...attachments, cwd: cwd(), machine: machine(), mode: mode(), model: model(), worktree })
     if (!started()) {
       setStarted(true)
       props.onStart?.()
@@ -273,10 +280,10 @@ export function Chat(props: {
                   <div class="pt-[22vh] text-center">
                     <p class="text-base text-fg-2">What are we working on?</p>
                     <Show
-                      when={props.projects?.length && props.onPickCwd && !state.cwd && !started()}
+                      when={props.projects?.length && props.onPickPlace && !state.cwd && !started()}
                       fallback={<p class="mt-1.5 font-mono text-xs text-fg-3">{where()}</p>}
                     >
-                      <FolderPicker folders={props.projects!} selected={cwd()} onPick={props.onPickCwd!} />
+                      <FolderPicker folders={props.projects!} selected={props.draftPlace} onPick={props.onPickPlace!} />
                     </Show>
                     <Show when={canWorktree()}>
                       <WorktreeOption checked={inWorktree()} onChange={setInWorktree} name={worktreeName()} />
@@ -337,7 +344,7 @@ export function Chat(props: {
                   <span class="flex-1">Can’t reach the server. Retrying… What you send goes out once it’s back.</span>
                 </div>
               </Show>
-              <Show when={state.gone}>
+              <Show when={state.gone && !offline()}>
                 <div class="flex items-start gap-3 bg-surface rounded-lg px-3 py-2 text-[13px] text-fg-2">
                   <FolderX class="size-4 shrink-0 mt-0.5" />
                   <span class="flex-1">
@@ -345,9 +352,17 @@ export function Chat(props: {
                   </span>
                 </div>
               </Show>
+              <Show when={offline() && connected()}>
+                <div class="flex items-start gap-3 bg-surface rounded-lg px-3 py-2 text-[13px] text-fg-2">
+                  <MonitorOff class="size-4 shrink-0 mt-0.5" />
+                  <span class="flex-1">
+                    {machineName(machine())} is offline. This chat runs there, so it can't take messages until it's back.
+                  </span>
+                </div>
+              </Show>
               <div
-                inert={state.gone}
-                class={`@container relative border transition-colors rounded-2xl focus-within:border-fg-3 ${dragging() ? 'border-fg-3' : 'border-edge'} ${state.gone ? 'opacity-50' : ''}`}
+                inert={state.gone || offline()}
+                class={`@container relative border transition-colors rounded-2xl focus-within:border-fg-3 ${dragging() ? 'border-fg-3' : 'border-edge'} ${state.gone || offline() ? 'opacity-50' : ''}`}
                 onDragOver={(e) => {
                   if (!e.dataTransfer?.types.includes('Files')) return
                   e.preventDefault()
@@ -543,7 +558,7 @@ function ComposerPanel(props: {
     f()
     props.onClose()
   }
-  const running = () => terminals().filter((t) => t.root === props.root && t.running).length
+  const running = () => terminals().filter((t) => terminalWorkspace(t) === props.root && t.running).length
   return (
     <div
       ref={props.ref}
@@ -632,7 +647,7 @@ function PanelButton(props: { onClick: () => void; children: JSX.Element }) {
 const FOLDERS_SHOWN = 5
 
 /** Every folder on view at once, most recent first; the picked one stays visible even when collapsed. */
-function FolderPicker(props: { folders: string[]; selected?: string; onPick: (cwd: string) => void }) {
+function FolderPicker(props: { folders: Place[]; selected?: Place; onPick: (p: Place) => void }) {
   const [all, setAll] = createSignal(false)
   const shown = () => {
     if (all() || props.folders.length <= FOLDERS_SHOWN + 1) return props.folders
@@ -656,7 +671,12 @@ function FolderPicker(props: { folders: string[]; selected?: string; onPick: (cw
                 }`}
               >
                 <div class="min-w-0 flex-1">
-                  <div class={`truncate text-[13px] ${selected() ? 'text-fg' : 'text-fg-2'}`}>{item.label}</div>
+                  <div class={`flex gap-2 text-[13px] ${selected() ? 'text-fg' : 'text-fg-2'}`}>
+                    <span class="truncate">{item.label}</span>
+                    <Show when={item.machine}>
+                      <span class="ml-auto shrink-0 text-xs text-fg-3">{item.machine}</span>
+                    </Show>
+                  </div>
                   <div
                     class={`mt-0.5 leading-snug text-fg-3 ${item.mono ? 'truncate font-mono text-[11px] text-left [direction:rtl]' : 'text-xs'}`}
                   >

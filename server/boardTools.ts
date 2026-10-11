@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto'
-import { createSdkMcpServer, getSessionInfo, tool, type McpSdkServerConfigWithInstance, type SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk'
+import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance, type SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import { CARD_STATUSES, type Card } from '../shared/protocol.ts'
 import { NO_CARD_CONTEXT, renderCardContext } from '../shared/cardContext.ts'
 import { ancestors, descendants, projectOf } from '../shared/cardTree.ts'
 import type { Actor, Store } from './db.ts'
+import type { Remote } from './peer.ts'
+import type { Board, ChatInfo } from './runnerProtocol.ts'
 
 export const BOARD_SERVER = 'badger'
 
@@ -37,29 +39,31 @@ export function cardContext(store: Store, sessionId: string): string | undefined
   return rendered
 }
 
+/** Claude has just read or written this card, so it already knows this state: don't add it to the next turn. */
+export function markSeen(store: Store, sessionId: string, cardId: number): void {
+  const cards = store.cards()
+  const card = cards.find((c) => c.id === cardId)
+  if (card?.sessionIds.includes(sessionId)) store.setContextHash(sessionId, hashOf(renderCardContext(card, ancestors(cards, card.id))))
+}
+
 const hashOf = (text: string) => createHash('sha1').update(text).digest('hex')
 
 /**
  * The project board as tools, for one chat. A new instance per Claude Code
- * process: it knows which chat it is so "this chat" means something.
+ * process: it knows which chat it is so "this chat" means something. The
+ * tools run beside Claude Code on its machine; the board is the hub's.
+ * `machine` is this one's id, so chats elsewhere can say where they are.
  * `more` are other Badger tools that go on the same server, e.g. merging a worktree.
  */
 export function boardServer(
-  store: Store,
+  board: Remote<Board>,
   sessionId: string,
-  onChange: () => void,
+  machine: () => string,
   more: SdkMcpToolDefinition<any>[] = [],
 ): McpSdkServerConfigWithInstance {
   const actor: Actor = { source: 'claude', sessionId }
-  const thisCard = () => store.cards().find((c) => c.sessionIds.includes(sessionId))
-  // Claude already knows this state (it wrote or just read it), so don't inject it next turn.
-  const markSeen = (card: Card) => {
-    if (card.sessionIds.includes(sessionId)) store.setContextHash(sessionId, hashOf(renderCardContext(card, ancestors(store.cards(), card.id))))
-  }
-  const changed = <T>(value: T): T => {
-    onChange()
-    return value
-  }
+  const thisCard = async () => (await board.cards()).find((c) => c.sessionIds.includes(sessionId))
+  const markSeen = (card: Card) => board.markSeen(sessionId, card.id)
 
   return createSdkMcpServer({
     name: BOARD_SERVER,
@@ -80,9 +84,9 @@ export function boardServer(
           status: status.optional().describe('Only cards in this column, plus the cards they sit inside'),
         },
         async (args) => {
-          const all = store.cards()
+          const all = await board.cards()
           if (args.parent_id !== undefined && !all.some((c) => c.id === args.parent_id)) return error(`No card #${args.parent_id}.`)
-          const mine = thisCard()?.id
+          const mine = all.find((c) => c.sessionIds.includes(sessionId))?.id
           const lines = tree(all, args.parent_id ?? null, args.status, mine)
           return text(lines.length ? lines.join('\n') : 'No cards.')
         },
@@ -93,10 +97,11 @@ export function boardServer(
         "Get a card's full description and its chats. Omit id for the card this chat belongs to.",
         { id: z.number().int().optional() },
         async (args) => {
-          const card = args.id === undefined ? thisCard() : store.card(args.id)
+          const card = args.id === undefined ? await thisCard() : await board.card(args.id)
           if (!card) return error(args.id === undefined ? 'This chat is not on a card.' : `No card #${args.id}.`)
-          markSeen(card)
-          return text(await detail(card, store.cards(), sessionId, store.archivedIds()))
+          const [cards, archived, chats] = await Promise.all([board.cards(), board.archivedIds(), board.chatInfo(card.sessionIds)])
+          await markSeen(card)
+          return text(detail(card, cards, sessionId, new Set(archived), chats, machine()))
         },
         { annotations: { readOnlyHint: true } },
       ),
@@ -116,14 +121,15 @@ export function boardServer(
           link_this_chat: z.boolean().optional().describe('Also put this chat on the new card'),
         },
         async (args) => {
-          const mine = thisCard()
-          const parentId = args.parent_id !== undefined ? args.parent_id : ((mine && projectOf(store.cards(), mine.id)?.id) ?? null)
-          const card = store.createCard({ ...args, parentId }, actor)
-          if (args.link_this_chat) store.linkSession(card.id, sessionId, actor)
-          const created = store.card(card.id)!
-          markSeen(created)
+          const cards = await board.cards()
+          const mine = cards.find((c) => c.sessionIds.includes(sessionId))
+          const parentId = args.parent_id !== undefined ? args.parent_id : ((mine && projectOf(cards, mine.id)?.id) ?? null)
+          const card = await board.createCard({ ...args, parentId }, actor)
+          if (args.link_this_chat) await board.linkSession(card.id, sessionId, actor)
+          const created = (await board.card(card.id))!
+          await markSeen(created)
           const where = parentId === null ? ' as a new project' : ` in project #${parentId}`
-          return changed(text(`Created ${summary(created, !!args.link_this_chat)}${where}`))
+          return text(`Created ${summary(created, !!args.link_this_chat)}${where}`)
         },
       ),
       tool(
@@ -137,10 +143,10 @@ export function boardServer(
           status: status.optional(),
         },
         async ({ id, parent_id, ...patch }) => {
-          const card = store.updateCard(id, { ...patch, parentId: parent_id }, actor)
+          const card = await board.updateCard(id, { ...patch, parentId: parent_id }, actor)
           if (!card) return error(`No card #${id}.`)
-          markSeen(card)
-          return changed(text(`Updated ${summary(card, card.id === thisCard()?.id)}`))
+          await markSeen(card)
+          return text(`Updated ${summary(card, card.sessionIds.includes(sessionId))}`)
         },
         { annotations: { idempotentHint: true } },
       ),
@@ -149,9 +155,9 @@ export function boardServer(
         'Put this chat on a card, moving it off any card it was on.',
         { id: z.number().int() },
         async ({ id }) => {
-          if (!store.card(id)) return error(`No card #${id}.`)
-          store.linkSession(id, sessionId, actor)
-          return changed(text(`This chat is now on card #${id}.`))
+          if (!(await board.card(id))) return error(`No card #${id}.`)
+          await board.linkSession(id, sessionId, actor)
+          return text(`This chat is now on card #${id}.`)
         },
         { annotations: { idempotentHint: true } },
       ),
@@ -169,7 +175,7 @@ export function boardServer(
         async (args) => {
           const id = args.session_id ?? sessionId
           const archived = args.archived ?? true
-          store.setArchived(id, archived, actor)
+          await board.setArchived(id, archived, actor)
           const which = id === sessionId ? 'This chat' : `Chat ${id}`
           return text(`${which} is ${archived ? 'archived' : 'not archived'}.`)
         },
@@ -179,13 +185,14 @@ export function boardServer(
         'delete_card',
         'Delete a card and every card inside it. Their chats are kept. Only do this when the user asks.',
         { id: z.number().int() },
-        async ({ id }) => (store.deleteCard(id, actor) ? changed(text(`Deleted card #${id}.`)) : error(`No card #${id}.`)),
+        async ({ id }) => ((await board.deleteCard(id, actor)) ? text(`Deleted card #${id}.`) : error(`No card #${id}.`)),
         { annotations: { destructiveHint: true } },
       ),
       ...more,
     ],
   })
 }
+
 
 function summary(c: Card, mine: boolean, cards: Card[] = []): string {
   const chats = c.sessionIds.length ? `, ${c.sessionIds.length} chat${c.sessionIds.length === 1 ? '' : 's'}` : ''
@@ -212,17 +219,15 @@ function tree(cards: Card[], parent: number | null, status: Card['status'] | und
 
 const boardOrder = (a: Card, b: Card) => CARD_STATUSES.indexOf(a.status) - CARD_STATUSES.indexOf(b.status) || a.position - b.position
 
-async function detail(c: Card, cards: Card[], sessionId: string, archived: Set<string>): Promise<string> {
-  const chats = await Promise.all(
-    c.sessionIds.map(async (id) => {
-      const info = await getSessionInfo(id).catch(() => undefined)
-      if (!info && id !== sessionId) return null
-      const title = info?.customTitle || info?.summary || info?.firstPrompt || 'New chat'
-      const notes = [info?.cwd && `in ${info.cwd}`, archived.has(id) && 'archived', id === sessionId && 'this chat'].filter(Boolean)
-      return `- ${title} [${id}]${notes.length ? ` (${notes.join(', ')})` : ''}`
-    }),
-  )
-  const lines = chats.filter(Boolean)
+/** A card in full. Chats on other machines say which. */
+function detail(c: Card, cards: Card[], sessionId: string, archived: Set<string>, chats: ChatInfo[], machine: string): string {
+  const lines = c.sessionIds.flatMap((id) => {
+    const info = chats.find((i) => i.id === id)
+    if (!info?.title && id !== sessionId) return []
+    const where = info?.cwd && `in ${info.cwd}${info.machine && info.machine !== machine ? ` on ${info.machineName ?? info.machine}` : ''}`
+    const notes = [where, archived.has(id) && 'archived', id === sessionId && 'this chat'].filter(Boolean)
+    return [`- ${info?.title || 'New chat'} [${id}]${notes.length ? ` (${notes.join(', ')})` : ''}`]
+  })
   const path = ancestors(cards, c.id)
   const inside = tree(cards, c.id, undefined, undefined)
   return [

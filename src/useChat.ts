@@ -20,6 +20,8 @@ export interface ChatState {
   /** Absent for a chat that hasn't run yet. */
   model?: string
   cwd?: string
+  /** The machine it runs on; absent until it has started. */
+  machine?: string
   /** Its folder is gone or can't be opened, so it can't take messages. */
   gone: boolean
   permissions: PendingPermission[]
@@ -46,6 +48,7 @@ function apply(state: ChatState, event: ServerEvent): void {
       state.mode = event.mode
       state.model = event.model
       state.cwd = event.cwd
+      state.machine = event.machine
       state.gone = !!event.gone
       state.permissions = event.permissions
       state.bashOutput = event.bashOutput

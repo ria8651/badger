@@ -1,5 +1,5 @@
 import { createSignal } from 'solid-js'
-import type { Card, CardStatus, ClientEvent, ModelOption, ServerEvent, SessionSummary, TerminalInfo, WorktreeStatus } from '../shared/protocol.ts'
+import type { Card, CardStatus, ClientEvent, Machine, ModelOption, ServerEvent, SessionSummary, TerminalInfo, WorktreeStatus } from '../shared/protocol.ts'
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -34,14 +34,25 @@ export const api = {
   deleteCard: (id: number) => request<void>('DELETE', `/api/cards/${id}`),
   linkSession: (id: number, sessionId: string) => request<Card>('POST', `/api/cards/${id}/sessions`, { sessionId }),
   unlinkSession: (id: number, sessionId: string) => request<Card>('DELETE', `/api/cards/${id}/sessions/${sessionId}`),
-  worktree: (path: string) => get<WorktreeStatus>(`/api/worktree?path=${encodeURIComponent(path)}`),
-  removeWorktree: (path: string) => request<void>('DELETE', `/api/worktree?path=${encodeURIComponent(path)}`),
-  workspace: (cwd: string) => get<{ root: string }>(`/api/workspace?cwd=${encodeURIComponent(cwd)}`),
-  createTerminal: (spec: { cwd: string; command?: string; cols?: number; rows?: number }) =>
+  worktree: (path: string, machine?: string) => get<WorktreeStatus>(`/api/worktree?${where(path, machine, 'path')}`),
+  removeWorktree: (path: string, machine?: string) => request<void>('DELETE', `/api/worktree?${where(path, machine, 'path')}`),
+  workspace: (cwd: string, machine?: string) => get<{ root: string }>(`/api/workspace?${where(cwd, machine, 'cwd')}`),
+  createTerminal: (spec: { cwd: string; machine?: string; command?: string; cols?: number; rows?: number }) =>
     request<TerminalInfo>('POST', '/api/terminals', spec),
   restartTerminal: (id: string) => request<TerminalInfo>('POST', `/api/terminals/${id}/restart`),
   closeTerminal: (id: string) => request<void>('DELETE', `/api/terminals/${id}`),
+  machines: () => get<Machine[]>('/api/machines'),
+  /** The token is only ever shown here. */
+  addMachine: (name: string) => request<{ machine: Machine; token: string }>('POST', '/api/machines', { name }),
+  /** Replaces the machine's token; the old one stops working. Shown only here. */
+  resetMachineToken: (id: string) => request<{ machine: Machine; token: string }>('POST', `/api/machines/${id}/token`),
+  renameMachine: (id: string, name: string) => request<Machine>('PATCH', `/api/machines/${id}`, { name }),
+  removeMachine: (id: string) => request<void>('DELETE', `/api/machines/${id}`),
 }
+
+/** Query parameters for a folder on a machine. */
+const where = (path: string, machine: string | undefined, key: string) =>
+  new URLSearchParams({ [key]: path, ...(machine ? { machine } : {}) }).toString()
 
 type Listener = (event: ServerEvent) => void
 

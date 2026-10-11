@@ -1,20 +1,22 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
-import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, PanelLeft, Pencil, Plus, Radar as RadarIcon } from 'lucide-solid'
+import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, Laptop, PanelLeft, Pencil, Plus, Radar as RadarIcon } from 'lucide-solid'
 import { descendants, projectOf } from '../shared/cardTree.ts'
 import type { Card, SessionSummary } from '../shared/protocol.ts'
 import { api, socket } from './api.ts'
 import { attention, looking, notifications, notify, onAttention, toggleNotifications } from './attention.ts'
-import { basename, folderLabel, isScratch, lastWorkedIn, setScratch } from './folders.ts'
+import { basename, folderLabel, isScratch, lastWorkedIn, onMachine, place, setScratch, type Place } from './folders.ts'
+import { LOCAL, isOnline, machines } from './machines.ts'
 import { Board } from './components/Board.tsx'
 import { CardView } from './components/CardView.tsx'
 import { Radar } from './components/Radar.tsx'
 import { Chat } from './components/Chat.tsx'
+import { Machines } from './components/Machines.tsx'
 import { RenameChat } from './components/RenameChat.tsx'
 import { AccountLimits } from './components/Usage.tsx'
 import { StatusDot, TerminalPage } from './components/Terminals.tsx'
 import { ChatDot, Loading, Menu } from './components/ui.tsx'
-import { terminalLabel, terminals, terminalsLoaded } from './terminals.ts'
+import { terminalLabel, terminalWorkspace, terminals, terminalsLoaded } from './terminals.ts'
 import { accountUsage } from './usage.ts'
 
 /** crypto.randomUUID needs a secure context; fall back for plain-http hosts. */
@@ -34,6 +36,7 @@ type Route =
   | { kind: 'radar' }
   | { kind: 'card'; id: number }
   | { kind: 'terminal'; id: string }
+  | { kind: 'machines' }
 
 function routeFromPath(): Route {
   const path = location.pathname
@@ -41,9 +44,10 @@ function routeFromPath(): Route {
   if (chat) return { kind: 'chat', id: chat[1] }
   const card = path.match(/^\/c\/(\d+)/)
   if (card) return { kind: 'card', id: Number(card[1]) }
-  const terminal = path.match(/^\/t\/([0-9a-f]+)/)
+  const terminal = path.match(/^\/t\/([a-z0-9-]+\.[0-9a-f]+)/)
   if (terminal) return { kind: 'terminal', id: terminal[1] }
   if (path === '/board') return { kind: 'board' }
+  if (path === '/machines') return { kind: 'machines' }
   if (path === '/radar') return { kind: 'radar' }
   return { kind: 'home' }
 }
@@ -59,7 +63,9 @@ const pathFor = (r: Route) =>
           ? '/board'
           : r.kind === 'radar'
             ? '/radar'
-            : '/'
+            : r.kind === 'machines'
+              ? '/machines'
+              : '/'
 
 
 export function App() {
@@ -70,7 +76,8 @@ export function App() {
   const cards = () => cardStore
   const setCards = (next: Card[]) => setCardStore(reconcile(next, { key: 'id' }))
   const [route, setRoute] = createSignal<Route>(routeFromPath())
-  const [drafts, setDrafts] = createSignal<Record<string, string>>({})
+  /** Where each chat that hasn't started will run. */
+  const [drafts, setDrafts] = createSignal<Record<string, Place>>({})
   /** Blank chats that should start with "In a worktree" ticked, e.g. a card whose work is already in one. */
   const [worktreeDrafts, setWorktreeDrafts] = createSignal<Record<string, boolean>>({})
   // Home is a blank chat; it gets a real URL once its first message is sent.
@@ -190,7 +197,7 @@ export function App() {
   }
   // Grouped by workspace, oldest first within each, so a workspace's terminals sit together.
   const sortedTerminals = createMemo(() =>
-    [...terminals()].sort((a, b) => a.root.localeCompare(b.root) || a.createdAt - b.createdAt),
+    [...terminals()].sort((a, b) => terminalWorkspace(a).localeCompare(terminalWorkspace(b)) || a.createdAt - b.createdAt),
   )
   // Looking at a chat reads it, including a turn that ends while you watch.
   createEffect(() => {
@@ -253,6 +260,9 @@ export function App() {
             </div>
             <div class="mt-0.5 flex gap-1.5 text-[11px] text-fg-3 tabular-nums">
               <span class="truncate">{s().cwd && folderLabel(s().cwd!)}</span>
+              <Show when={onMachine(s().machine)}>
+                {(name) => <span class={`shrink-0 ${isOnline(s().machine) ? '' : 'line-through'}`} title={isOnline(s().machine) ? undefined : 'Offline'}>{name()}</span>}
+              </Show>
               <Show when={cardOf().get(s().id)}>{(c) => <span class="shrink-0">#{c().id}</span>}</Show>
               <span class={`ml-auto shrink-0 group-hover:invisible ${s().id === current() ? 'pointer-coarse:invisible' : ''}`}>{when(s().lastModified)}</span>
             </div>
@@ -284,31 +294,41 @@ export function App() {
 
   /**
    * No folder first, then every directory a session has run in, most recent
-   * first, plus the server default. Temp dirs and ones that are gone (removed worktrees) are skipped.
+   * first, plus each machine's default. Temp dirs, ones that are gone (removed
+   * worktrees) and ones on machines that are offline are skipped.
    */
   const projects = createMemo(() => {
-    const dirs = [...new Set(sessions().flatMap((s) => (s.cwd && !s.gone && !TEMP.test(s.cwd) && !isScratch(s.cwd) ? [s.cwd] : [])))]
-    const fallback = config()?.defaultCwd
-    if (fallback && !dirs.includes(fallback)) dirs.push(fallback)
+    const dirs = [
+      ...new Set(
+        sessions().flatMap((s) => (s.cwd && !s.gone && !TEMP.test(s.cwd) && !isScratch(s.cwd) && isOnline(s.machine) ? [place(s.machine, s.cwd)] : [])),
+      ),
+    ]
+    // So a machine with no chats yet can still be picked.
+    const defaults = machines().length
+      ? machines().flatMap((m) => (m.online && m.workspaceDir ? [place(m.id, m.workspaceDir)] : []))
+      : config()
+        ? [place(LOCAL, config()!.defaultCwd)]
+        : []
+    for (const d of defaults) if (!dirs.includes(d)) dirs.push(d)
     const scratch = config()?.scratchCwd
-    return scratch ? [scratch, ...dirs] : dirs
+    return scratch ? [place(LOCAL, scratch), ...dirs] : dirs
   })
   /** New chats start where the most recently active chat ran, or with no folder. */
-  const defaultCwd = createMemo(() => {
+  const defaultPlace = createMemo(() => {
     const recent = sessions()
-      .filter((s) => s.cwd && projects().includes(s.cwd))
+      .filter((s) => s.cwd && projects().includes(place(s.machine, s.cwd)))
       .reduce<SessionSummary | undefined>((a, s) => (!a || s.lastModified > a.lastModified ? s : a), undefined)
-    return recent?.cwd ?? projects()[0]
+    return recent?.cwd ? place(recent.machine, recent.cwd) : projects()[0]
   })
   // Pin it per blank chat so activity elsewhere doesn't move the folder while you type.
   createEffect(() => {
     const id = homeId()
-    if (loaded() && !untrack(drafts)[id]) setDrafts((d) => ({ ...d, [id]: untrack(defaultCwd) }))
+    if (loaded() && !untrack(drafts)[id]) setDrafts((d) => ({ ...d, [id]: untrack(defaultPlace) }))
   })
 
-  const newChat = (from: { cwd: string; worktree: boolean } | undefined, cardId?: number) => {
+  const newChat = (from: { cwd: string; machine?: string; worktree: boolean } | undefined, cardId?: number) => {
     const id = uuid()
-    setDrafts((d) => ({ ...d, [id]: from?.cwd ?? untrack(defaultCwd) }))
+    setDrafts((d) => ({ ...d, [id]: from ? place(from.machine, from.cwd) : untrack(defaultPlace) }))
     if (from?.worktree) setWorktreeDrafts((w) => ({ ...w, [id]: true }))
     if (cardId !== undefined) api.linkSession(cardId, id)
     go({ kind: 'chat', id })
@@ -324,7 +344,7 @@ export function App() {
     if (!f) return go({ kind: 'home' })
     const ids = [f, ...descendants(cards(), f.id)].flatMap((c) => c.sessionIds)
     const from = lastWorkedIn(sessions().filter((s) => ids.includes(s.id)))
-    newChat(from && { cwd: from.cwd, worktree: false }, f.id)
+    newChat(from && { cwd: from.cwd, machine: from.machine, worktree: false }, f.id)
   }
   /** For the switcher: how far along a project is. */
   const projectSummary = (p: Card) => {
@@ -333,8 +353,8 @@ export function App() {
   }
   const switchable = createMemo(() => [null, ...allProjects().filter((c) => c.status !== 'done' || c.id === focusId())])
   /** The home chat's first message went out: give it its own URL and a fresh blank chat for next time. */
-  const startHomeChat = (id: string, cwd?: string) => {
-    if (cwd) setDrafts((d) => ({ ...d, [id]: cwd }))
+  const startHomeChat = (id: string, where?: Place) => {
+    if (where) setDrafts((d) => ({ ...d, [id]: where }))
     history.replaceState(null, '', pathFor({ kind: 'chat', id }))
     setRoute({ kind: 'chat', id })
     setHomeId(uuid())
@@ -349,7 +369,7 @@ export function App() {
       const t = terminals().find((t) => t.id === r.id)
       return t ? terminalLabel(t) : 'Terminal'
     }
-    return r.kind === 'board' ? 'Projects' : r.kind === 'radar' ? 'Radar' : 'New chat'
+    return r.kind === 'board' ? 'Projects' : r.kind === 'radar' ? 'Radar' : r.kind === 'machines' ? 'Machines' : 'New chat'
   }
 
   return (
@@ -365,6 +385,15 @@ export function App() {
         <div class="flex h-12 shrink-0 items-center gap-2 px-4">
           <span class="font-medium tracking-tight">Badger</span>
           <button
+            onClick={() => go({ kind: 'machines' })}
+            title="Machines: where chats and terminals run"
+            class={`ml-auto grid size-7 place-items-center rounded-md transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-10 ${
+              route().kind === 'machines' ? 'bg-surface text-fg' : 'text-fg-3'
+            }`}
+          >
+            <Laptop class="size-4" />
+          </button>
+          <button
             onClick={toggleNotifications}
             disabled={notifications() === 'blocked'}
             title={
@@ -374,7 +403,7 @@ export function App() {
                   ? 'Notifications are blocked in this browser, or need https'
                   : 'Turn on notifications'
             }
-            class="ml-auto grid size-7 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg disabled:opacity-40 pointer-coarse:size-10"
+            class="grid size-7 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg disabled:opacity-40 pointer-coarse:size-10"
           >
             <Show when={notifications() === 'on'} fallback={<BellOff class="size-4" />}>
               <Bell class="size-4" />
@@ -455,7 +484,7 @@ export function App() {
                   >
                     {terminalLabel(t)}
                   </span>
-                  <span class="shrink-0 text-[11px] text-fg-3">{basename(t.root)}</span>
+                  <span class="shrink-0 text-[11px] text-fg-3">{[basename(t.root), onMachine(t.machine)].filter(Boolean).join(' · ')}</span>
                 </button>
               )}
             </For>
@@ -509,12 +538,12 @@ export function App() {
                 return (
                   <Chat
                     sessionId={id}
-                    draftCwd={drafts()[id] ?? defaultCwd()}
+                    draftPlace={drafts()[id] ?? defaultPlace()}
                     projects={projects()}
                     worktree={worktreeDrafts()[id]}
-                    onPickCwd={(cwd) => setDrafts((d) => ({ ...d, [id]: cwd }))}
+                    onPickPlace={(p) => setDrafts((d) => ({ ...d, [id]: p }))}
                     card={cardOf().get(id)}
-                    onStart={() => home() && startHomeChat(id, drafts()[id] ?? defaultCwd())}
+                    onStart={() => home() && startHomeChat(id, drafts()[id] ?? defaultPlace())}
                     onOpenTerminal={(tid) => go({ kind: 'terminal', id: tid })}
                   />
                 )
@@ -526,6 +555,9 @@ export function App() {
                   <TerminalPage id={id} onClosed={newHomeChat} />
                 </Show>
               )}
+            </Match>
+            <Match when={route().kind === 'machines'}>
+              <Machines />
             </Match>
             <Match when={!(cardsLoaded() && loaded())}>
               <Loading />

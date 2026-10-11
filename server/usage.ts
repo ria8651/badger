@@ -7,24 +7,16 @@ import { inaccessible } from './workspace.ts'
 const ACCOUNT_MAX_AGE_MS = 60 * 1000
 
 /**
- * Context and plan usage, read from Claude Code itself. A chat with a live
- * process is asked directly; otherwise a process is started just to answer
- * and closed again. Neither sends anything to the model.
+ * How full each chat's context is, read from Claude Code itself, on the
+ * machine the chat runs on. A chat with a live process is asked directly;
+ * otherwise a process is started just to answer and closed again. Neither
+ * sends anything to the model.
  */
-export class Usage {
-  private account?: AccountUsage
-  private reading?: Promise<AccountUsage | undefined>
+export class ContextReader {
   /** Context of chats with no live process, until their transcript changes. */
   private contexts = new Map<string, { modified: number; usage: ContextUsage }>()
 
-  constructor(
-    private manager: SessionManager,
-    private onAccount: (usage: AccountUsage) => void,
-  ) {}
-
-  latestAccount(): AccountUsage | undefined {
-    return this.account
-  }
+  constructor(private manager: SessionManager) {}
 
   async context(sessionId: string): Promise<ContextUsage | undefined> {
     const live = this.manager.get(sessionId)
@@ -40,15 +32,37 @@ export class Usage {
     return usage
   }
 
-  /** The plan's limits, read again if they're older than a minute. Everyone is told when they change. */
-  refreshAccount(): Promise<AccountUsage | undefined> {
+}
+
+/** The plan's limits, from any live process on this machine or a one-off one. They're the account's, not a chat's. */
+export async function readAccount(manager: SessionManager): Promise<AccountUsage> {
+  const live = manager.any()
+  return accountUsage(live ? await live.ask(readLimits) : await oneOff({ cwd: process.cwd() }, readLimits))
+}
+
+/** The plan's limits as the hub last read them from a runner. Everyone is told when they change. */
+export class AccountLimits {
+  private account?: AccountUsage
+  private reading?: Promise<AccountUsage | undefined>
+
+  constructor(
+    /** Reads them from a runner; undefined when none is connected. */
+    private read: () => Promise<AccountUsage> | undefined,
+    private onAccount: (usage: AccountUsage) => void,
+  ) {}
+
+  latest(): AccountUsage | undefined {
+    return this.account
+  }
+
+  /** Read again if they're older than a minute. */
+  refresh(): Promise<AccountUsage | undefined> {
     if (this.account && Date.now() - this.account.at < ACCOUNT_MAX_AGE_MS) return Promise.resolve(this.account)
     this.reading ??= (async () => {
       try {
-        // Any live process will do; the limits are the account's, not the chat's.
-        const live = this.manager.any()
-        const raw = live ? await live.ask(readAccount) : await oneOff({ cwd: process.cwd() }, readAccount)
-        this.account = accountUsage(raw)
+        const reading = this.read()
+        if (!reading) return this.account
+        this.account = await reading
         this.onAccount(this.account)
         return this.account
       } catch (err) {
@@ -63,7 +77,7 @@ export class Usage {
 }
 
 /** Skips the scan of local transcripts that says what's using the limits; only the limits are wanted. */
-const readAccount = (q: Query) => q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true })
+const readLimits = (q: Query) => q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true })
 
 function contextUsage(raw: SDKControlGetContextUsageResponse): ContextUsage {
   return {

@@ -2,7 +2,8 @@ import { For, Show, createEffect, createMemo, on, onCleanup } from 'solid-js'
 import { ChevronDown, Plus, RotateCw, SquareArrowOutUpRight, SquareTerminal, Trash2, X } from 'lucide-solid'
 import type { TerminalInfo } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
-import { dockHeight, dockState, setDock, setDockHeight, terminalLabel, terminalState, terminals } from '../terminals.ts'
+import { onMachine, unplace, type Place } from '../folders.ts'
+import { dockHeight, dockState, setDock, setDockHeight, terminalLabel, terminalState, terminalWorkspace, terminals } from '../terminals.ts'
 import { TerminalView } from './TerminalView.tsx'
 import { ltr } from './ui.tsx'
 
@@ -12,12 +13,12 @@ export function StatusDot(props: { terminal: TerminalInfo }) {
   return <span title={terminalState(props.terminal)} class={`inline-block size-1.5 shrink-0 rounded-full ${tone()}`} />
 }
 
-const inWorkspace = (root: string) => terminals().filter((t) => t.root === root)
+const inWorkspace = (root: Place) => terminals().filter((t) => terminalWorkspace(t) === root)
 
-/** Opens a shell in the workspace and makes it the dock's active tab. */
-async function newShell(root: string, cwd: string): Promise<void> {
+/** Opens a shell in the workspace, on its machine, and makes it the dock's active tab. */
+async function newShell(root: Place, cwd: string): Promise<void> {
   try {
-    const t = await api.createTerminal({ cwd })
+    const t = await api.createTerminal({ cwd, machine: unplace(root).machine })
     setDock(root, { open: true, active: t.id })
   } catch (err) {
     // An open dock with nothing in it would look like nothing happened.
@@ -27,7 +28,7 @@ async function newShell(root: string, cwd: string): Promise<void> {
 }
 
 /** Show or hide a workspace's dock. Opening one with no terminals starts a shell, like any terminal panel. */
-export function toggleDock(root: string, cwd: string): void {
+export function toggleDock(root: Place, cwd: string): void {
   const open = !dockState(root).open
   setDock(root, { open })
   if (open && inWorkspace(root).length === 0) void newShell(root, cwd)
@@ -37,7 +38,7 @@ const ghost = (active = false) =>
   `grid size-7 shrink-0 place-items-center rounded-md transition-colors hover:bg-surface hover:text-fg ${active ? 'text-fg' : 'text-fg-3'}`
 
 /** For the composer: toggles the dock and says how many terminals are running here. */
-export function TerminalButton(props: { root: string; cwd: string }) {
+export function TerminalButton(props: { root: Place; cwd: string }) {
   const running = () => inWorkspace(props.root).filter((t) => t.running).length
   const open = () => dockState(props.root).open
   return (
@@ -57,10 +58,10 @@ export function TerminalButton(props: { root: string; cwd: string }) {
 
 /**
  * The workspace's terminals, docked under a chat. Every chat in the same
- * workspace shows the same terminals; which tab is open and whether the dock
- * is showing are remembered per workspace.
+ * workspace (on the same machine) shows the same terminals; which tab is open
+ * and whether the dock is showing are remembered per workspace.
  */
-export function TerminalDock(props: { root: string; cwd: string; onOpenPage: (id: string) => void; onHide: () => void }) {
+export function TerminalDock(props: { root: Place; cwd: string; onOpenPage: (id: string) => void; onHide: () => void }) {
   const list = createMemo(() => inWorkspace(props.root))
   const state = () => dockState(props.root)
   const active = () => {
@@ -220,6 +221,7 @@ export function TerminalPage(props: { id: string; onClosed: () => void }) {
               <StatusDot terminal={t()} />
               <span class="truncate text-fg">{terminalLabel(t())}</span>
               <span class="min-w-0 flex-1 truncate text-left font-mono text-[11px] text-fg-3 [direction:rtl]">{ltr(t().cwd)}</span>
+              <Show when={onMachine(t().machine)}>{(name) => <span class="shrink-0 text-xs text-fg-3">{name()}</span>}</Show>
               <span class="shrink-0 text-xs text-fg-3">{terminalState(t())}</span>
               <RestartButton terminal={t()} />
               <button
