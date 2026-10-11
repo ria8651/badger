@@ -3,7 +3,7 @@ import { createStore, reconcile } from 'solid-js/store'
 import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, PanelLeft, Pencil, Plus, Radar as RadarIcon } from 'lucide-solid'
 import { descendants, projectOf } from '../shared/cardTree.ts'
 import type { Card, SessionSummary } from '../shared/protocol.ts'
-import { api, connected, socket } from './api.ts'
+import { api, socket } from './api.ts'
 import { attention, looking, notifications, notify, onAttention, toggleNotifications } from './attention.ts'
 import { basename, folderLabel, isScratch, lastWorkedIn, setScratch } from './folders.ts'
 import { Board } from './components/Board.tsx'
@@ -364,9 +364,6 @@ export function App() {
       >
         <div class="flex h-12 shrink-0 items-center gap-2 px-4">
           <span class="font-medium tracking-tight">Badger</span>
-          <Show when={!connected()}>
-            <span class="text-xs text-fg-3">Reconnecting…</span>
-          </Show>
           <button
             onClick={toggleNotifications}
             disabled={notifications() === 'blocked'}
@@ -495,9 +492,6 @@ export function App() {
             </Show>
           </button>
           <span class="min-w-0 flex-1 truncate text-[13px] font-medium">{pageTitle()}</span>
-          <Show when={!connected()}>
-            <span class="shrink-0 text-xs text-fg-3">Reconnecting…</span>
-          </Show>
           <button
             onClick={newHomeChat}
             title={focus() ? `New chat on ${focus()!.title}` : 'New chat'}
