@@ -6,7 +6,18 @@ import { Children } from './children.ts'
 import { BadRequest } from './db.ts'
 import { MERGE_TOOL, mergeTool } from './merge.ts'
 import { Later, Peer, type Link, type Remote } from './peer.ts'
-import { RUNNER_METHODS, RUNNER_PROTOCOL, type HubApi, type HubEvent, type LiveInfo, type LiveSnapshot, type OpenOptions, type RunnerApi, type RunnerEvent } from './runnerProtocol.ts'
+import {
+  RUNNER_METHODS,
+  RUNNER_PROTOCOL,
+  type HubApi,
+  type HubEvent,
+  type LiveInfo,
+  type LiveSnapshot,
+  type OpenOptions,
+  type RunnerApi,
+  type RunnerEvent,
+  type RunnerWelcome,
+} from './runnerProtocol.ts'
 import { SessionManager, listModels } from './session.ts'
 import { TranscriptSync } from './sync.ts'
 import { TERMINAL_AUTO_ALLOWED, TERMINAL_SERVER, terminalServer } from './terminalTools.ts'
@@ -40,6 +51,8 @@ export class Runner implements RunnerApi {
   readonly terminals: Terminals
   private peer: Peer<HubApi> | null = null
   private machine = ''
+  /** The chats the hub has put on this machine. Only these are copied to it. */
+  private chats = new Set<string>()
   private children: Children
   private sync: TranscriptSync
   private contexts: ContextReader
@@ -84,17 +97,25 @@ export class Runner implements RunnerApi {
           if (event.type === 'message' && event.message.type !== 'stream_event') this.sync.touch(session.id)
         }),
     )
-    this.children = new Children(this.manager, this.hub)
+    this.children = new Children(this.manager, async (child) => {
+      const id = await this.hub.startChild(child)
+      this.chats.add(id)
+      return id
+    })
     this.contexts = new ContextReader(this.manager)
-    this.sync = new TranscriptSync(this.hub, () => this.manager.all().map((s) => s.id))
+    this.sync = new TranscriptSync(
+      this.hub,
+      () => this.manager.all().map((s) => s.id),
+      () => this.chats,
+    )
     this.terminals.on((e) => {
       if (e.type === 'terminals') this.emit({ type: 'terminals', terminals: e.terminals })
       else this.emit({ type: 'term_output', id: e.id, data: e.data })
     })
   }
 
-  /** Serves the hub over this link until it closes. Resolves once the hub has said who this machine is. */
-  async connect(link: Link): Promise<{ id: string; name: string }> {
+  /** Serves the hub over this link until it closes. Resolves once the hub has said who this machine is and which chats are on it. */
+  async connect(link: Link): Promise<RunnerWelcome> {
     const peer = new Peer<HubApi>(
       link,
       this,
@@ -117,6 +138,7 @@ export class Runner implements RunnerApi {
       scratchDir: this.opts.scratchDir,
     })
     this.machine = me.id
+    this.chats = new Set(me.chats)
     this.sendLive()
     // Before the PTY host has said hello the list is unknown, not empty; it's sent once it arrives.
     if (this.terminals.known) this.emit({ type: 'terminals', terminals: this.terminals.terminals })
@@ -141,6 +163,8 @@ export class Runner implements RunnerApi {
   // ── What the hub asks of it ──
 
   async send(sessionId: string, opts: OpenOptions, text: string, pastes: string[], images: ImageAttachment[]): Promise<void> {
+    // The hub only sends chats it has put on this machine.
+    this.chats.add(sessionId)
     const isNew = !this.manager.get(sessionId)
     if (isNew && opts.worktree !== undefined && opts.cwd) {
       await excludeWorktrees(opts.cwd).catch(() => {

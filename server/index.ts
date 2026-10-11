@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { createReadStream, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage } from 'node:http'
 import { homedir, hostname } from 'node:os'
@@ -10,7 +11,18 @@ import { type Actor, BadRequest, type Draft, Store } from './db.ts'
 import { LOCAL, Machines, type Connection } from './machines.ts'
 import { memoryLinks, wsLink } from './peer.ts'
 import { Runner } from './runner.ts'
-import { PROTOCOL_HEADER, RUNNER_PROTOCOL, type ChatInfo, type HubApi, type LiveSnapshot, type RunnerEvent, type TranscriptLines } from './runnerProtocol.ts'
+import {
+  PROTOCOL_HEADER,
+  RUNNER_MAX_FRAME,
+  RUNNER_PROTOCOL,
+  isUuid,
+  type ChatInfo,
+  type HubApi,
+  type LiveSnapshot,
+  type RunnerEvent,
+  type TranscriptFile,
+  type TranscriptLines,
+} from './runnerProtocol.ts'
 import { shellEnv } from './terminals.ts'
 import { suggestTitle } from './titles.ts'
 import { Transcripts, transcriptModel } from './transcripts.ts'
@@ -102,18 +114,41 @@ setInterval(() => sockets.size && void account.refresh(), ACCOUNT_POLL_MS).unref
 
 // ── What runners tell the hub ──
 
+/** What a live chat emits, as its runner passes it on. The rest of ServerEvent is the hub's to send. */
+const SESSION_EVENTS = new Set<unknown>([
+  'message',
+  'bash_output',
+  'status',
+  'background',
+  'permission_request',
+  'permission_resolved',
+  'error',
+  'child_started',
+] satisfies ServerEvent['type'][])
+
+/** A chat's event from a runner, if it's one a chat emits and the chat is on that runner's machine. */
+function sessionEvent(machine: string, event: ServerEvent): ServerEvent | undefined {
+  if (!SESSION_EVENTS.has(event?.type) || !('sessionId' in event) || !machines.owns(machine, event.sessionId)) return undefined
+  if (event.type === 'child_started' && store.parentOf(event.childId) !== event.sessionId) return undefined
+  return event
+}
+
 function runnerEvent(machine: Connection, event: RunnerEvent): void {
   switch (event.type) {
-    case 'session':
-      broadcast(event.event)
-      attention.see(event.event)
+    case 'session': {
+      const e = sessionEvent(machine.id, event.event)
+      if (!e) return
+      broadcast(e)
+      attention.see(e)
       return
+    }
     case 'live':
       // A chat started, closed, or started or finished working.
       broadcast({ type: 'sessions_changed' })
       attention.update()
       return
     case 'turn_end':
+      if (!machines.owns(machine.id, event.sessionId)) return
       sendContext(event.sessionId)
       void account.refresh()
       return
@@ -121,6 +156,7 @@ function runnerEvent(machine: Connection, event: RunnerEvent): void {
       broadcastTerminals()
       return
     case 'term_output': {
+      if (typeof event.id !== 'string' || typeof event.data !== 'string') return
       const id = `${machine.id}.${event.id}`
       for (const [ws, v] of termViewers.get(id) ?? []) if (v.live) send(ws, { type: 'term_output', id, data: event.data })
       return
@@ -150,28 +186,80 @@ function machineChanged(connection: Connection | undefined, id: string): void {
   void account.refresh()
 }
 
-/** What runners can ask of the hub: the board for Claude's tools, recording children, and taking their transcripts. */
+/**
+ * What runners can ask of the hub: the board for Claude's tools, starting
+ * children, and taking their transcripts. A runner acts only for chats on its
+ * own machine; anything about another chat is refused, including who it says
+ * made a change.
+ */
 function hubApi(machine: string): Omit<HubApi, 'hello'> {
+  const own = (sessionId: unknown): string => {
+    if (!machines.owns(machine, sessionId)) throw new BadRequest(`Chat ${String(sessionId).slice(0, 40)} isn't on this machine`)
+    return sessionId
+  }
+  // Claude in one of this machine's chats; runners never act for the UI.
+  const claude = (actor: Actor): Actor => {
+    if (actor?.source !== 'claude') throw new BadRequest('Runners act for a chat')
+    return { source: 'claude', sessionId: own(actor.sessionId) }
+  }
+  const file = (f: TranscriptFile): TranscriptFile => {
+    if (typeof f?.subpath !== 'string' || !SUBPATH.test(f.subpath)) throw new BadRequest('Bad transcript subpath')
+    return { sessionId: own(f.sessionId), subpath: f.subpath }
+  }
   return {
     cards: () => store.cards(),
     card: (id) => store.card(id),
-    createCard: (input, actor) => cardsChanged(store.createCard(input, actor)),
-    updateCard: (id, patch, actor) => cardsChanged(store.updateCard(id, patch, actor)),
-    deleteCard: (id, actor) => cardsChanged(store.deleteCard(id, actor)),
-    linkSession: (cardId, sessionId, actor) => cardsChanged(store.linkSession(cardId, sessionId, actor)),
-    setArchived: (sessionId, archived, actor) => store.setArchived(sessionId, archived, actor),
-    archivedIds: () => [...store.archivedIds()],
-    cardContext: (sessionId) => cardContext(store, sessionId),
-    markSeen: (sessionId, cardId) => markSeen(store, sessionId, cardId),
-    chatInfo,
-    addChild: (child) => {
-      // Children run on their parent's machine.
-      machines.claim(child.sessionId, machine)
-      store.addChild(child)
+    createCard: (input, actor) => cardsChanged(store.createCard(input, claude(actor))),
+    updateCard: (id, patch, actor) => cardsChanged(store.updateCard(id, patch, claude(actor))),
+    deleteCard: (id, actor) => cardsChanged(store.deleteCard(id, claude(actor))),
+    linkSession: (cardId, sessionId, actor) => cardsChanged(store.linkSession(cardId, own(sessionId), claude(actor))),
+    // Any chat on a card can be put away, wherever it runs; the change is this machine's chat's doing.
+    setArchived: (sessionId, archived, actor) => {
+      if (!isUuid(sessionId) || typeof archived !== 'boolean') throw new BadRequest('Bad chat id')
+      return store.setArchived(sessionId, archived, claude(actor))
     },
-    transcriptState: (files) => transcripts.state(files),
-    transcriptLines: (batch) => takeLines(machine, batch),
+    archivedIds: () => [...store.archivedIds()],
+    cardContext: (sessionId) => cardContext(store, own(sessionId)),
+    markSeen: (sessionId, cardId) => markSeen(store, own(sessionId), cardId),
+    chatInfo: (ids) => chatInfo(Array.isArray(ids) ? ids.filter(isUuid) : []),
+    startChild: ({ parentId, toolUseId, kind }) => {
+      own(parentId)
+      if (typeof toolUseId !== 'string' || typeof kind !== 'string') throw new BadRequest('toolUseId and kind must be strings')
+      // Children run on their parent's machine. Recorded before the chat exists, so the sidebar never lists it.
+      const sessionId = randomUUID()
+      store.transaction(() => {
+        machines.assign(sessionId, machine)
+        store.addChild({ sessionId, parentId, toolUseId, kind })
+      })
+      return sessionId
+    },
+    transcriptState: (files) => transcripts.state((Array.isArray(files) ? files : []).map(file)),
+    transcriptLines: (batch) => {
+      file(batch)
+      checkLines(batch)
+      return takeLines(batch)
+    },
   }
+}
+
+/** '' or e.g. `subagents/agent-<id>`; only ever a key here, never a path. */
+const SUBPATH = /^[\w.\/-]{0,200}$/
+
+/** Throws on a batch of transcript lines that isn't shaped like one. */
+function checkLines(b: TranscriptLines): void {
+  const count = (n: unknown) => Number.isSafeInteger(n) && (n as number) >= 0
+  const ok =
+    typeof b.project === 'string' &&
+    b.project.length <= 1000 &&
+    count(b.fromLine) &&
+    count(b.fromBytes) &&
+    count(b.bytes) &&
+    Number.isFinite(b.mtime) &&
+    Array.isArray(b.lines) &&
+    b.lines.every((l) => typeof l === 'string') &&
+    (b.meta === undefined || (typeof b.meta === 'object' && b.meta !== null && !Array.isArray(b.meta))) &&
+    (b.reset === undefined || typeof b.reset === 'boolean')
+  if (!ok) throw new BadRequest('Malformed transcript lines')
 }
 
 async function chatInfo(ids: string[]): Promise<ChatInfo[]> {
@@ -191,9 +279,8 @@ async function chatInfo(ids: string[]): Promise<ChatInfo[]> {
   )
 }
 
-/** A runner's transcript lines. A chat's lines only come from its own machine. */
-function takeLines(machine: string, batch: TranscriptLines) {
-  if (machines.claim(batch.sessionId, machine) !== machine) return { ...transcripts.state([batch])[0], ignored: true }
+/** A runner's transcript lines, already checked to be for one of its own chats. */
+function takeLines(batch: TranscriptLines) {
   const result = store.transaction(() => transcripts.append(batch))
   if (result.bytes === batch.bytes && (batch.lines.length || batch.reset)) transcriptChanged(batch.sessionId)
   return result
@@ -268,13 +355,22 @@ function unsubscribeTerminal(ws: WebSocket, id: string): void {
 
 // ── Chats ──
 
+/** Per viewer and chat, the number of the last snapshot asked for. */
+const snapshotsAsked = new WeakMap<WebSocket, Map<string, number>>()
+
 /**
  * Sends a viewer the chat's history and, if it's live, its process's state.
  * The history comes from the hub's copy of the transcript; the process adds
  * its own turns, which may be newer. The live part is taken last and sent the
  * moment it arrives, so the chat's events after it reach the viewer after it.
+ * Only the newest snapshot asked for is sent: an older one can finish later,
+ * e.g. failing on a connection its runner has just replaced.
  */
 async function sendSnapshot(ws: WebSocket, sessionId: string): Promise<void> {
+  let asked = snapshotsAsked.get(ws)
+  if (!asked) snapshotsAsked.set(ws, (asked = new Map()))
+  const n = (asked.get(sessionId) ?? 0) + 1
+  asked.set(sessionId, n)
   const { text: draft, attachments: draftAttachments } = store.draft(sessionId)
   const children = store.children(sessionId)
   const machine = machines.machineOf(sessionId)
@@ -282,6 +378,7 @@ async function sendSnapshot(ws: WebSocket, sessionId: string): Promise<void> {
   const runner = machine ? machines.get(machine) : undefined
   const base = { type: 'snapshot' as const, sessionId, machine, draft, draftAttachments, children }
   const done = (live: LiveSnapshot | null, gone: boolean) => {
+    if (asked.get(sessionId) !== n) return
     if (!live) {
       return send(ws, {
         ...base,
@@ -356,6 +453,7 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       const { pastes, images } = checkAttachments(event)
       if (event.model !== undefined && typeof event.model !== 'string') throw new BadRequest('model must be a string')
       if (event.machine !== undefined && typeof event.machine !== 'string') throw new BadRequest('machine must be a string')
+      if (!isUuid(event.sessionId)) throw new BadRequest('sessionId must be a UUID')
       // A chat stays where it started; a new one goes where it was asked to.
       const machine = machines.machineOf(event.sessionId) ?? (event.machine || LOCAL)
       const runner = machines.require(machine)
@@ -364,7 +462,7 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       attention.mark(event.sessionId, false)
       // Sending empties the composer in every tab, not just the one that sent.
       saveDraft(ws, event.sessionId, { text: '', attachments: { pastes: [], images: [] } })
-      machines.claim(event.sessionId, machine)
+      machines.assign(event.sessionId, machine)
       await runner.peer.remote.send(
         event.sessionId,
         { cwd: event.cwd, mode: event.mode, model: event.model, worktree: event.worktree },
@@ -721,8 +819,8 @@ const server = createServer(async (req, res) => {
 })
 
 const wss = new WebSocketServer({ noServer: true })
-// Transcript lines can be big (pasted images), and a chunk of them bigger.
-const runnerWss = new WebSocketServer({ noServer: true, maxPayload: 512 * 1024 * 1024 })
+// Transcript lines can be big (pasted images); runners send bigger ones as blanks (see sync.ts).
+const runnerWss = new WebSocketServer({ noServer: true, maxPayload: RUNNER_MAX_FRAME })
 
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url ?? '/', 'http://x')

@@ -13,9 +13,10 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { WebSocket } from 'ws'
+import { BadRequest } from './db.ts'
 import { wsLink } from './peer.ts'
 import { Runner } from './runner.ts'
-import { PROTOCOL_HEADER, RUNNER_PROTOCOL } from './runnerProtocol.ts'
+import { PROTOCOL_HEADER, RUNNER_MAX_FRAME, RUNNER_PROTOCOL } from './runnerProtocol.ts'
 import { shellEnv } from './terminals.ts'
 import { prepareScratch } from './workspace.ts'
 
@@ -58,7 +59,7 @@ let lastError = ''
 function connect(): void {
   const ws = new WebSocket(url, {
     headers: { authorization: `Bearer ${token}`, [PROTOCOL_HEADER]: String(RUNNER_PROTOCOL) },
-    maxPayload: 512 * 1024 * 1024,
+    maxPayload: RUNNER_MAX_FRAME,
   })
   let alive = true
   let ping: ReturnType<typeof setInterval> | undefined
@@ -78,8 +79,11 @@ function connect(): void {
         console.log(`Connected to ${hub} as ${me.name}`)
       },
       (err) => {
-        console.error(`The hub didn't take this runner: ${err.message}`)
-        retryIn = MISMATCH_RETRY_MS
+        // The hub only turns a hello away for its protocol version; anything else, like the connection dropping mid-hello, is retried as usual.
+        if (err instanceof BadRequest) {
+          console.error(`The hub didn't take this runner: ${err.message}`)
+          retryIn = MISMATCH_RETRY_MS
+        } else report(`Connecting to ${hub} failed: ${err.message}`)
         ws.close()
       },
     )

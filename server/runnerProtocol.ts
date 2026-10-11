@@ -27,10 +27,18 @@ import type { CreateSpec } from './ptyProtocol.ts'
  * Runners and the hub are updated separately, so bump this when either side
  * would misread the other; the hub turns away runners on another version.
  */
-export const RUNNER_PROTOCOL = 1
+export const RUNNER_PROTOCOL = 2
 
 /** Header a runner sends its protocol version in, so a mismatch is caught before the upgrade. */
 export const PROTOCOL_HEADER = 'x-badger-protocol'
+
+/** The largest frame either side takes. A transcript line too big to fit is sent as a blank one. */
+export const RUNNER_MAX_FRAME = 64 * 1024 * 1024
+
+/** Chat ids are UUIDs; anything else from a runner is refused. */
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+export const isUuid = (id: unknown): id is string => typeof id === 'string' && UUID.test(id)
 
 /** What a runner says about itself once connected. */
 export interface RunnerHello {
@@ -204,14 +212,27 @@ export interface TranscriptLines extends TranscriptFile {
   reset?: boolean
 }
 
-/** Methods the hub serves to a runner. */
+/** Who the hub says a runner is, and the chats it has put on that machine. */
+export interface RunnerWelcome {
+  id: string
+  name: string
+  /** Every chat on this machine, children included. The runner copies these transcripts and no others. */
+  chats: string[]
+}
+
+/**
+ * Methods the hub serves to a runner. The hub decides which machine every chat
+ * is on, and refuses anything a runner sends about a chat that isn't on its
+ * own machine, board calls and their actor included.
+ */
 export interface HubApi extends Board {
-  hello(hello: RunnerHello): { id: string; name: string }
-  addChild(child: { sessionId: string; parentId: string; toolUseId: string; kind: string }): void
+  hello(hello: RunnerHello): RunnerWelcome
+  /** Puts a new chat on this machine as a child of one already here. Returns its id. */
+  startChild(child: { parentId: string; toolUseId: string; kind: string }): string
   /** What the hub has of these files; missing ones have none. */
   transcriptState(files: TranscriptFile[]): TranscriptState[]
-  /** Appends lines. Returns what the hub has afterwards: a mismatch means start again from there. `ignored` if the chat belongs to another machine. */
-  transcriptLines(batch: TranscriptLines): TranscriptState & { ignored?: boolean }
+  /** Appends lines. Returns what the hub has afterwards: a mismatch means start again from there. */
+  transcriptLines(batch: TranscriptLines): TranscriptState
 }
 
 export const HUB_METHODS = [
@@ -227,7 +248,7 @@ export const HUB_METHODS = [
   'markSeen',
   'chatInfo',
   'hello',
-  'addChild',
+  'startChild',
   'transcriptState',
   'transcriptLines',
 ] as const satisfies readonly (keyof HubApi)[]

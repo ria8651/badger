@@ -117,6 +117,13 @@ const MIGRATIONS = [
      mtime INTEGER NOT NULL,
      data TEXT NOT NULL
    );`,
+  // A removed machine is only marked, so its id is never given to another machine and its chats can't come back to life there.
+  // Badger only shows chats it started, as the hub's machine's chats. Before machines, it didn't record which those were;
+  // the ones on cards, and their children, were certainly its.
+  `ALTER TABLE machines ADD COLUMN removed_at INTEGER;
+   INSERT OR IGNORE INTO chat_machines (session_id, machine, created_at)
+     SELECT session_id, 'local', created_at FROM card_sessions
+     UNION ALL SELECT c.session_id, 'local', c.created_at FROM child_sessions c JOIN card_sessions p ON p.session_id = c.parent_session;`,
 ]
 
 /**

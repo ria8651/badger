@@ -62,6 +62,13 @@ export function wsLink(ws: WebSocket): Link {
 
 type Handler = (...args: any[]) => unknown
 
+/**
+ * How long a call waits for its reply. A half-open connection (a laptop gone
+ * to sleep) answers nothing until the ping drops it, and whoever's waiting,
+ * e.g. a browser tab's queue of events, shouldn't wait that long.
+ */
+const CALL_TIMEOUT_MS = 20 * 1000
+
 /** Every method of T, called remotely: same arguments, always a promise. */
 export type Remote<T> = {
   [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<R extends Later<infer V> ? V : Awaited<R>> : never
@@ -119,7 +126,16 @@ export class Peer<Theirs> {
   request(method: string, args: unknown[], done: (err: Error | null, result?: any) => void): void {
     if (this.closed) return done(new Error('Disconnected'))
     const id = this.next++
-    this.waiting.set(id, (r) => done(r.error === undefined ? null : r.bad ? new BadRequest(r.error) : new Error(r.error), r.result))
+    // A reply after this is dropped: it's no longer waited for.
+    const timer = setTimeout(() => {
+      this.waiting.delete(id)
+      done(new Error(`No answer to ${method} in ${CALL_TIMEOUT_MS / 1000}s`))
+    }, CALL_TIMEOUT_MS)
+    timer.unref?.()
+    this.waiting.set(id, (r) => {
+      clearTimeout(timer)
+      done(r.error === undefined ? null : r.bad ? new BadRequest(r.error) : new Error(r.error), r.result)
+    })
     this.link.send({ t: 'call', id, method, args })
   }
 

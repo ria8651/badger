@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { Machine, TerminalInfo } from '../shared/protocol.ts'
 import { BadRequest } from './db.ts'
 import { Peer, type Link } from './peer.ts'
-import { HUB_METHODS, RUNNER_PROTOCOL, type HubApi, type LiveInfo, type RunnerApi, type RunnerEvent, type RunnerHello } from './runnerProtocol.ts'
+import { HUB_METHODS, RUNNER_PROTOCOL, isUuid, type HubApi, type LiveInfo, type RunnerApi, type RunnerEvent, type RunnerHello } from './runnerProtocol.ts'
 
 /** The hub's own machine. */
 export const LOCAL = 'local'
@@ -41,6 +41,10 @@ export interface MachineEvents {
  * The machines chats run on and the runners connected for them. The hub's own
  * runner is always there; others connect with a token issued here, which is
  * kept only as a hash.
+ *
+ * Which machine each chat is on is decided here and nowhere else: a chat goes
+ * where the browser started it, a child where its parent is. Runners only
+ * ever act for chats already on their own machine.
  */
 export class Machines {
   private connections = new Map<string, Connection>()
@@ -57,7 +61,7 @@ export class Machines {
   }
 
   list(): Machine[] {
-    const rows = this.db.prepare('SELECT * FROM machines ORDER BY created_at').all() as unknown as MachineRow[]
+    const rows = this.db.prepare('SELECT * FROM machines WHERE removed_at IS NULL ORDER BY created_at').all() as unknown as MachineRow[]
     return rows.map((r) => {
       const live = this.connections.get(r.id)
       const info = live?.hello ?? (r.info ? (JSON.parse(r.info) as RunnerHello) : undefined)
@@ -73,6 +77,7 @@ export class Machines {
     })
   }
 
+  /** Removed machines keep their name, for their chats. */
   name(id: string): string {
     const row = this.db.prepare('SELECT name FROM machines WHERE id = ?').get(id) as { name: string } | undefined
     return row?.name ?? id
@@ -98,7 +103,11 @@ export class Machines {
     const clean = typeof name === 'string' ? name.trim() : ''
     if (!clean) throw new BadRequest('Name is required')
     const base = clean.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'machine'
-    const taken = (id: string) => id === LOCAL || !!this.db.prepare('SELECT 1 FROM machines WHERE id = ?').get(id)
+    // Removed machines' ids stay taken, so their chats never turn up on a new machine.
+    const taken = (id: string) =>
+      id === LOCAL ||
+      !!this.db.prepare('SELECT 1 FROM machines WHERE id = ?').get(id) ||
+      !!this.db.prepare('SELECT 1 FROM chat_machines WHERE machine = ?').get(id)
     let id = base
     for (let n = 2; taken(id); n++) id = `${base}-${n}`
     const token = newToken()
@@ -110,7 +119,7 @@ export class Machines {
   rename(id: string, name: unknown): Machine {
     const clean = typeof name === 'string' ? name.trim() : ''
     if (!clean) throw new BadRequest('Name is required')
-    if (!this.db.prepare('UPDATE machines SET name = ? WHERE id = ?').run(clean, id).changes) throw new BadRequest('No such machine')
+    if (!this.db.prepare('UPDATE machines SET name = ? WHERE id = ? AND removed_at IS NULL').run(clean, id).changes) throw new BadRequest('No such machine')
     const live = this.connections.get(id)
     if (live) live.name = clean
     return this.list().find((m) => m.id === id)!
@@ -124,15 +133,21 @@ export class Machines {
   resetToken(id: string): { machine: Machine; token: string } {
     if (id === LOCAL) throw new BadRequest("The hub's own machine has no token")
     const token = newToken()
-    if (!this.db.prepare('UPDATE machines SET token_hash = ? WHERE id = ?').run(hash(token), id).changes) throw new BadRequest('No such machine')
+    if (!this.db.prepare('UPDATE machines SET token_hash = ? WHERE id = ? AND removed_at IS NULL').run(hash(token), id).changes) {
+      throw new BadRequest('No such machine')
+    }
     this.connections.get(id)?.peer.close()
     return { machine: this.list().find((m) => m.id === id)!, token }
   }
 
-  /** Forgets a machine and disconnects it. Its chats stay, read-only. */
+  /**
+   * Retires a machine and disconnects it. Its chats stay, read-only for good:
+   * its id is never used again, so no machine can pick them up.
+   */
   remove(id: string): boolean {
     if (id === LOCAL) throw new BadRequest("The hub's own machine can't be removed")
-    const removed = this.db.prepare('DELETE FROM machines WHERE id = ?').run(id).changes > 0
+    const removed =
+      this.db.prepare('UPDATE machines SET removed_at = ?, token_hash = NULL WHERE id = ? AND removed_at IS NULL').run(Date.now(), id).changes > 0
     this.connections.get(id)?.peer.close()
     return removed
   }
@@ -162,7 +177,7 @@ export class Machines {
         this.connections.set(id, connection)
         this.db.prepare('UPDATE machines SET last_seen = ?, info = ? WHERE id = ?').run(Date.now(), JSON.stringify(hello), id)
         this.events.onChange(connection, id)
-        return { id, name: connection.name }
+        return { id, name: connection.name, chats: this.chatsOn(id) }
       },
     }
     const peer: Peer<RunnerApi> = new Peer<RunnerApi>(
@@ -170,9 +185,13 @@ export class Machines {
       methods,
       HUB_METHODS,
       (event: RunnerEvent) => {
-        if (!connection) return
-        if (event.type === 'live') connection.live = new Map(event.sessions.map((s) => [s.id, s]))
+        if (!connection || !RUNNER_EVENTS.has(event?.type)) return
+        if (event.type === 'live') {
+          if (!Array.isArray(event.sessions)) return
+          connection.live = new Map(event.sessions.filter((s) => this.isLive(s) && this.owns(id, s.id)).map((s) => [s.id, s]))
+        }
         if (event.type === 'terminals') {
+          if (!Array.isArray(event.terminals) || event.terminals.some((t) => typeof t?.id !== 'string')) return
           connection.terminals = event.terminals
           connection.terminalsKnown = true
         }
@@ -194,16 +213,36 @@ export class Machines {
     return row?.machine
   }
 
-  /** Records where a chat runs, unless it's already somewhere: chats stay on the machine they started on. Returns where it is. */
-  claim(sessionId: string, machine: string): string {
+  /** Whether a runner may act for this chat: it's a chat id, and the chat is on that runner's machine. */
+  owns(machine: string, sessionId: unknown): sessionId is string {
+    return isUuid(sessionId) && this.machineOf(sessionId) === machine
+  }
+
+  /**
+   * Puts a chat on a machine, unless it's already somewhere: chats stay on the
+   * machine they started on. Returns where it is. Only for chats the hub
+   * starts; a runner can't put chats anywhere.
+   */
+  assign(sessionId: string, machine: string): string {
     this.db.prepare('INSERT INTO chat_machines (session_id, machine, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING').run(sessionId, machine, Date.now())
     return this.machineOf(sessionId)!
   }
 
+  /** Every chat on a machine. */
+  chatsOn(machine: string): string[] {
+    const rows = this.db.prepare('SELECT session_id FROM chat_machines WHERE machine = ?').all(machine) as { session_id: string }[]
+    return rows.map((r) => r.session_id)
+  }
+
   machinesOf(sessionIds: string[]): Map<string, string> {
-    const rows = this.db.prepare('SELECT session_id, machine FROM chat_machines').all() as { session_id: string; machine: string }[]
-    const want = new Set(sessionIds)
-    return new Map(rows.filter((r) => want.has(r.session_id)).map((r) => [r.session_id, r.machine]))
+    const rows = this.db
+      .prepare('SELECT session_id, machine FROM chat_machines WHERE session_id IN (SELECT value FROM json_each(?))')
+      .all(JSON.stringify(sessionIds)) as { session_id: string; machine: string }[]
+    return new Map(rows.map((r) => [r.session_id, r.machine]))
+  }
+
+  private isLive(s: LiveInfo): boolean {
+    return typeof s === 'object' && s !== null && typeof s.cwd === 'string' && typeof s.running === 'boolean' && typeof s.waiting === 'boolean'
   }
 
   // ── Across every connected runner ──
@@ -249,6 +288,9 @@ export class Machines {
     return { ...info, id: `${machine.id}.${info.id}`, machine: machine.id }
   }
 }
+
+/** The events a runner may send; anything else is dropped. */
+const RUNNER_EVENTS = new Set<unknown>(['live', 'session', 'turn_end', 'terminals', 'term_output'] satisfies RunnerEvent['type'][])
 
 /** What a runner connects with. Only its hash is kept. */
 const newToken = () => `badger_${randomBytes(24).toString('base64url')}`

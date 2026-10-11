@@ -53,7 +53,7 @@ export function Machines() {
   }
 
   const remove = (m: Machine) => {
-    if (!confirm(`Remove ${m.name}? Its runner is disconnected and its token stops working. Its chats stay, but can't run until it's added again.`)) return
+    if (!confirm(`Remove ${m.name}? Its runner is disconnected and its token stops working. Its chats stay readable but can't run again, even if you add the machine again: it comes back as a new machine.`)) return
     if (issued()?.machine.id === m.id) setIssued()
     api.removeMachine(m.id).catch((err: Error) => alert(`Couldn't remove ${m.name}: ${err.message}`))
   }

@@ -1,6 +1,3 @@
-import { randomUUID } from 'node:crypto'
-import type { Remote } from './peer.ts'
-import type { HubApi } from './runnerProtocol.ts'
 import type { LiveSession, SessionManager } from './session.ts'
 
 export interface ChildResult {
@@ -16,21 +13,20 @@ export interface ChildResult {
  * Claude Code session with its own directory. Started from a tool call, which
  * blocks until the child's first turn ends and returns its reply. Children
  * stay out of the sidebar; the client shows each inside its parent's tool call.
- * A child runs on its parent's machine; the hub records it.
+ * A child runs on its parent's machine; the hub puts it there and gives it its id.
  */
 export class Children {
   constructor(
     private manager: SessionManager,
-    private hub: Remote<HubApi>,
+    /** Asks the hub for a new child of a chat on this machine; resolves to its id. */
+    private start: (child: { parentId: string; toolUseId: string; kind: string }) => Promise<string>,
   ) {}
 
   async run(
     parent: LiveSession,
     opts: { toolUseId: string; kind: string; cwd: string; prompt: string; signal?: AbortSignal },
   ): Promise<ChildResult> {
-    const sessionId = randomUUID()
-    // Recorded before the session exists, so the sidebar never lists it.
-    await this.hub.addChild({ sessionId, parentId: parent.id, toolUseId: opts.toolUseId, kind: opts.kind })
+    const sessionId = await this.start({ parentId: parent.id, toolUseId: opts.toolUseId, kind: opts.kind })
     // A child can't propose a plan back to its parent, so plan mode falls back to asking.
     const child = await this.manager.open(sessionId, { cwd: opts.cwd, mode: parent.mode === 'plan' ? 'default' : parent.mode, model: parent.model })
     parent.emitEvent({ type: 'child_started', sessionId: parent.id, toolUseId: opts.toolUseId, childId: sessionId })

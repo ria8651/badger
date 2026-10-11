@@ -101,8 +101,13 @@ export class Transcripts {
     return entries
   }
 
-  private summaries(): SessionSummaryEntry[] {
-    const rows = this.db.prepare('SELECT session_id, mtime, data FROM transcript_summaries').all() as { session_id: string; mtime: number; data: string }[]
+  /** Every chat's summary, or just one's. */
+  private summaries(sessionId?: string): SessionSummaryEntry[] {
+    const rows = (
+      sessionId === undefined
+        ? this.db.prepare('SELECT session_id, mtime, data FROM transcript_summaries').all()
+        : this.db.prepare('SELECT session_id, mtime, data FROM transcript_summaries WHERE session_id = ?').all(sessionId)
+    ) as { session_id: string; mtime: number; data: string }[]
     return rows.map((r) => ({ sessionId: r.session_id, mtime: r.mtime, data: JSON.parse(r.data) }))
   }
 
@@ -118,7 +123,7 @@ export class Transcripts {
 
   /** One chat's title, folder and so on, without reading its transcript. */
   async info(sessionId: string): Promise<SDKSessionInfo | undefined> {
-    const one = this.summaries().filter((s) => s.sessionId === sessionId)
+    const one = this.summaries(sessionId)
     if (!one.length) return undefined
     const [info] = await listSessions({
       sessionStore: { ...this.store, listSessions: async () => one, listSessionSummaries: async () => one },
