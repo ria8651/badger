@@ -3,11 +3,12 @@ import { ChevronDown, FolderInput, GitBranch, Link, Pencil, Plus, Trash2, X } fr
 import { ancestors, descendants, projectOf } from '../../shared/cardTree.ts'
 import { CARD_STATUSES, type Card, type SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
-import { folderLabel, isScratch, lastWorkedIn, worktreeOf } from '../folders.ts'
+import { folderLabel, lastWorkedIn, worktreeOf } from '../folders.ts'
 import { Columns, STATUS_LABELS } from './Board.tsx'
 import { MarkdownEditor } from './MarkdownEditor.tsx'
 import { RenameChat } from './RenameChat.tsx'
-import { ChatDot, Menu, Select } from './ui.tsx'
+import { ChatDot, Menu, SearchMenu, Select, type SearchItem } from './ui.tsx'
+import { ChatSummary } from './ChatSummary.tsx'
 import { attention } from '../attention.ts'
 
 const STATUS_OPTIONS = CARD_STATUSES.map((value) => ({ value, label: STATUS_LABELS[value] }))
@@ -45,7 +46,27 @@ export function CardView(props: {
   // Linked ids with no transcript yet (a chat opened but never sent) are left out.
   const chats = createMemo(() => props.sessions.filter((s) => props.card.sessionIds.includes(s.id)))
   const [renaming, setRenaming] = createSignal<string>()
-  const unlinked = createMemo(() => props.sessions.filter((s) => !props.card.sessionIds.includes(s.id)).slice(0, 30))
+  /**
+   * Chats that could go on this card: ones on no card first, then ones it would take off another card, then archived
+   * ones, greyed. Newest first in each.
+   */
+  const linkable = (q: string): SearchItem[] => {
+    const cardOf = new Map(props.cards.flatMap((c) => c.sessionIds.map((id) => [id, c] as const)))
+    const needle = q.toLowerCase()
+    const found = props.sessions.filter(
+      (s) =>
+        !props.card.sessionIds.includes(s.id) &&
+        (!q || s.title.toLowerCase().includes(needle) || (s.cwd && folderLabel(s.cwd).toLowerCase().includes(needle))),
+    )
+    const rank = (s: SessionSummary) => (s.archived ? 2 : 0) + (cardOf.has(s.id) ? 1 : 0)
+    const item = (s: SessionSummary): SearchItem => ({
+      label: s.title,
+      render: () => <ChatSummary session={s} card={cardOf.get(s.id)} titleClass={s.archived ? 'text-fg-3' : 'text-fg'} />,
+      pick: () => api.linkSession(props.card.id, s.id),
+    })
+    // Capped so a long history stays quick to open; searching reaches the rest.
+    return found.sort((a, b) => rank(a) - rank(b) || b.lastModified - a.lastModified).slice(0, 100).map(item)
+  }
   /** Worktrees this card's chats run in. Made by starting a chat in one; nothing else records them. */
   const worktrees = createMemo(() => [...new Set(chats().flatMap((s) => (s.cwd && !s.gone && worktreeOf(s.cwd) ? [s.cwd] : [])))])
   // A new chat picks up where the card's latest chat ran, else where its project's work happens, but not in another card's worktree.
@@ -133,11 +154,11 @@ export function CardView(props: {
 
       <div class="mt-8 flex items-center gap-1 border-b border-line pb-2">
         <h2 class="mr-auto text-[13px] font-medium text-fg-2">Chats</h2>
-        <Menu
-          items={unlinked().map((s) => ({ label: s.title, description: isScratch(s.cwd) ? 'No folder' : s.cwd, mono: true }))}
-          onPick={(i) => api.linkSession(props.card.id, unlinked()[i].id)}
-          placement="bottom"
-          class="right-0 left-auto! w-80"
+        <SearchMenu
+          items={linkable}
+          placeholder="Find a chat by title or folder"
+          empty="No chats match"
+          width={320}
           triggerClass={menuTrigger}
           trigger={() => (
             <>

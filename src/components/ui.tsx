@@ -1,4 +1,5 @@
-import { For, Show, createSignal, createUniqueId, onCleanup, splitProps, type JSX } from 'solid-js'
+import { For, Show, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, splitProps, type JSX } from 'solid-js'
+import { Portal } from 'solid-js/web'
 import { Check, ChevronDown } from 'lucide-solid'
 import type { AttentionState } from '../../shared/protocol.ts'
 import { connected } from '../api.ts'
@@ -250,5 +251,177 @@ export function Select<T extends string>(props: {
         </>
       )}
     />
+  )
+}
+
+export interface SearchItem extends MenuItem {
+  /** Shown small at the right, e.g. a card number. */
+  hint?: string
+  /** Sits under the item before it, e.g. a card under its project. */
+  indent?: boolean
+  /** Draws the item in place of its label and description, e.g. a chat drawn as the sidebar draws it. */
+  render?: () => JSX.Element
+  pick: () => void
+}
+
+/**
+ * A trigger that opens a list with a search box, for picking from more than fits a Menu. The caller filters,
+ * so it can add items for what's typed, like creating something new. The list floats over the page, so a
+ * scrolling sidebar doesn't clip it.
+ */
+export function SearchMenu(props: {
+  items: (query: string) => SearchItem[]
+  trigger: (open: () => boolean) => JSX.Element
+  triggerClass: (open: boolean) => string
+  placeholder: string
+  title?: string
+  /** Shown when nothing matches. */
+  empty?: string
+  width?: number
+  onOpenChange?: (open: boolean) => void
+}) {
+  const id = createUniqueId()
+  const [open, setOpen] = createSignal(false)
+  const [query, setQuery] = createSignal('')
+  const [active, setActive] = createSignal(0)
+  const [place, setPlace] = createSignal<JSX.CSSProperties>({})
+  const items = createMemo(() => (open() ? props.items(query().trim()) : []))
+  const checkable = () => items().some((o) => o.selected)
+  let trigger!: HTMLButtonElement
+  let panel: HTMLDivElement | undefined
+  const width = () => props.width ?? 288
+
+  const show = () => {
+    const r = trigger.getBoundingClientRect()
+    const left = `${Math.max(8, Math.min(r.left, innerWidth - width() - 8))}px`
+    // Below the trigger if there's room, otherwise on whichever side has more, and no taller than that side.
+    const below = innerHeight - r.bottom - 14
+    const above = r.top - 14
+    setPlace(
+      below > 320 || below >= above
+        ? { left, top: `${r.bottom + 6}px`, 'max-height': `${Math.min(416, below)}px` }
+        : { left, bottom: `${innerHeight - r.top + 6}px`, 'max-height': `${Math.min(416, above)}px` },
+    )
+    setQuery('')
+    setOpen(true)
+    props.onOpenChange?.(true)
+  }
+  const close = (refocus = true) => {
+    if (!open()) return
+    setOpen(false)
+    props.onOpenChange?.(false)
+    if (refocus) trigger.focus()
+  }
+  const pick = (item: SearchItem | undefined) => {
+    if (!item) return
+    close()
+    item.pick()
+  }
+  // Typing starts at the top match; otherwise it starts at the current one. The list growing or changing underneath
+  // leaves it where it is.
+  createEffect(on([open, query], () => setActive(query().trim() ? 0 : Math.max(0, items().findIndex((o) => o.selected)))))
+  createEffect(on(items, (list) => active() >= list.length && setActive(Math.max(0, list.length - 1))))
+  createEffect(on(active, (i) => document.getElementById(`${id}-${i}`)?.scrollIntoView({ block: 'nearest' })))
+
+  const onOutside = (e: PointerEvent) => {
+    const target = e.target as Node
+    if (open() && !panel?.contains(target) && !trigger.contains(target)) close(false)
+  }
+  const onResize = () => close(false)
+  document.addEventListener('pointerdown', onOutside)
+  addEventListener('resize', onResize)
+  onCleanup(() => {
+    document.removeEventListener('pointerdown', onOutside)
+    removeEventListener('resize', onResize)
+    if (open()) props.onOpenChange?.(false)
+  })
+
+  const onKey = (e: KeyboardEvent) => {
+    const n = items().length
+    const keys: Record<string, () => void> = {
+      ArrowDown: () => n && setActive((i) => (i + 1) % n),
+      ArrowUp: () => n && setActive((i) => (i - 1 + n) % n),
+      Enter: () => !e.isComposing && pick(items()[active()]),
+      Escape: () => close(),
+      Tab: () => close(),
+    }
+    const action = keys[e.key]
+    if (!action) return
+    if (e.key !== 'Tab') e.preventDefault()
+    action()
+  }
+
+  return (
+    <>
+      <button
+        ref={trigger}
+        type="button"
+        title={props.title}
+        aria-haspopup="listbox"
+        aria-expanded={open()}
+        onClick={() => (open() ? close() : show())}
+        class={props.triggerClass(open())}
+      >
+        {props.trigger(open)}
+      </button>
+      <Show when={open()}>
+        <Portal>
+          <div
+            ref={panel}
+            style={{ ...place(), width: `${width()}px` }}
+            class="fixed z-40 flex animate-[pop-in_120ms_ease-out] flex-col rounded-xl border border-edge bg-bg shadow-[0_12px_32px_-12px_rgb(0_0_0/0.35)]"
+          >
+            <input
+              ref={(el) => queueMicrotask(() => el.focus())}
+              value={query()}
+              onInput={(e) => setQuery(e.currentTarget.value)}
+              onKeyDown={onKey}
+              placeholder={props.placeholder}
+              role="combobox"
+              aria-expanded="true"
+              aria-controls={id}
+              aria-activedescendant={items().length ? `${id}-${active()}` : undefined}
+              class="h-10 shrink-0 border-b border-line bg-transparent px-3.5 text-[13px] outline-none placeholder:text-fg-3 pointer-coarse:h-12 pointer-coarse:text-base"
+            />
+            <div id={id} role="listbox" class="min-h-0 overflow-y-auto p-1">
+              <For each={items()} fallback={<p class="px-2.5 py-2 text-[13px] text-fg-3">{props.empty ?? 'No matches'}</p>}>
+                {(o, i) => (
+                  <div
+                    id={`${id}-${i()}`}
+                    role="option"
+                    aria-selected={!!o.selected}
+                    onPointerMove={() => setActive(i())}
+                    // Keeps focus in the search box.
+                    onPointerDown={(e) => e.preventDefault()}
+                    onClick={() => pick(o)}
+                    class={`flex cursor-pointer items-center gap-2 rounded-lg py-1.5 pr-2.5 pointer-coarse:py-2.5 ${o.indent ? 'pl-6' : 'pl-2.5'} ${
+                      active() === i() ? 'bg-surface' : ''
+                    }`}
+                  >
+                    <div class="min-w-0 flex-1">
+                      <Show when={!o.render} fallback={o.render!()}>
+                        <div class={`truncate text-[13px] ${o.tone === 'danger' ? 'text-danger' : o.indent ? 'text-fg-2' : 'text-fg'}`}>{o.label}</div>
+                        <Show when={o.description}>
+                          <div class={`mt-0.5 truncate leading-snug text-fg-3 ${o.mono ? 'font-mono text-[11px] text-left [direction:rtl]' : 'text-xs'}`}>
+                            {o.mono ? ltr(o.description!) : o.description}
+                          </div>
+                        </Show>
+                      </Show>
+                    </div>
+                    <Show when={o.hint}>
+                      <span class="shrink-0 text-[11px] text-fg-3 tabular-nums">{o.hint}</span>
+                    </Show>
+                    {/* Only lists with something picked already need the column. */}
+                    <Show when={checkable()}>
+                      <Check class={`size-3.5 shrink-0 text-fg-2 ${o.selected ? '' : 'invisible'}`} />
+                    </Show>
+                  </div>
+                )}
+              </For>
+            </div>
+          </div>
+        </Portal>
+      </Show>
+    </>
   )
 }

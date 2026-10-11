@@ -1,19 +1,21 @@
-import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from 'solid-js'
+import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup, on, onMount, untrack } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
-import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, PanelLeft, Pencil, Plus, Radar as RadarIcon } from 'lucide-solid'
+import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, FolderInput, PanelLeft, Pencil, Plus, Radar as RadarIcon } from 'lucide-solid'
 import { descendants, projectOf } from '../shared/cardTree.ts'
 import type { Card, SessionSummary } from '../shared/protocol.ts'
 import { api, socket } from './api.ts'
 import { attention, looking, notifications, notify, onAttention, toggleNotifications } from './attention.ts'
-import { basename, folderLabel, isScratch, lastWorkedIn, setScratch } from './folders.ts'
+import { basename, isScratch, lastWorkedIn, setScratch } from './folders.ts'
 import { Board } from './components/Board.tsx'
 import { CardView } from './components/CardView.tsx'
 import { Radar } from './components/Radar.tsx'
 import { Chat } from './components/Chat.tsx'
 import { RenameChat } from './components/RenameChat.tsx'
+import { FileChat } from './components/FileChat.tsx'
 import { AccountLimits } from './components/Usage.tsx'
 import { StatusDot, TerminalPage } from './components/Terminals.tsx'
-import { ChatDot, Loading, Menu } from './components/ui.tsx'
+import { ChatSummary } from './components/ChatSummary.tsx'
+import { Loading, Menu } from './components/ui.tsx'
 import { terminalLabel, terminals, terminalsLoaded } from './terminals.ts'
 import { accountUsage } from './usage.ts'
 
@@ -148,10 +150,11 @@ export function App() {
     return r.kind === 'chat' ? r.id : r.kind === 'home' ? homeId() : null
   }
   /**
-   * The project this tab is working in, or null for all of them. Per tab, so two tabs can be on two projects.
-   * It scopes the sidebar, the Board button and new chats.
+   * The project this tab is working in, null for all of them, or 'none' for chats on no card, for filing them.
+   * Per tab, so two tabs can be on two projects. It scopes the sidebar, the Board button and new chats.
    */
-  const [focusId, setFocusId] = createSignal<number | null>(Number(sessionStorage.getItem(FOCUS_KEY)) || null)
+  const stored = sessionStorage.getItem(FOCUS_KEY)
+  const [focusId, setFocusId] = createSignal<number | 'none' | null>(stored === 'none' ? 'none' : Number(stored) || null)
   createEffect(() => {
     const id = focusId()
     if (id === null) sessionStorage.removeItem(FOCUS_KEY)
@@ -161,24 +164,30 @@ export function App() {
   const allProjects = createMemo(() => cards().filter((c) => (c.parentId ?? null) === null))
   // Undefined while cards load, or if the project was deleted or moved, in which case the tab shows everything.
   const focus = createMemo(() => allProjects().find((c) => c.id === focusId()))
+  const unfiled = () => focusId() === 'none'
   const projectOfChat = (id: string) => {
     const card = cardOf().get(id)
     return card && projectOf(cards(), card.id)
   }
   // Focus follows where you go: a project's board focuses it, the projects board shows them all,
-  // and opening something in another project moves there. Chats on no card leave it alone.
-  createEffect(() => {
-    const r = route()
-    if (r.kind === 'board') return setFocusId(null)
-    const card = r.kind === 'card' ? cards().find((c) => c.id === r.id) : r.kind === 'chat' ? cardOf().get(r.id) : undefined
-    if (!card) return
-    if ((card.parentId ?? null) === null && r.kind === 'card') return setFocusId(card.id)
-    const project = projectOf(cards(), card.id)
-    if (project && untrack(focusId) !== null && project.id !== untrack(focusId)) setFocusId(project.id)
-  })
+  // and opening something in another project moves there. Chats on no card leave it alone, and so does
+  // filing the open chat, so only going somewhere moves it. Filing stays put until you open a project.
+  createEffect(
+    on([route, cardsLoaded], ([r]) => {
+      const card = r.kind === 'card' ? cards().find((c) => c.id === r.id) : r.kind === 'chat' ? cardOf().get(r.id) : undefined
+      if (card && (card.parentId ?? null) === null && r.kind === 'card') return setFocusId(card.id)
+      if (focusId() === 'none') return
+      if (r.kind === 'board') return setFocusId(null)
+      const project = card && projectOf(cards(), card.id)
+      if (project && focusId() !== null && project.id !== focusId()) setFocusId(project.id)
+    }),
+  )
+  const unfiledCount = createMemo(() => sessions().filter((s) => !s.archived && !cardOf().has(s.id)).length)
   const inFocus = (s: SessionSummary) => {
+    if (s.id === current()) return true
+    if (unfiled()) return !cardOf().has(s.id)
     const f = focus()
-    return !f || s.id === current() || projectOfChat(s.id)?.id === f.id
+    return !f || projectOfChat(s.id)?.id === f.id
   }
   const currentCard = () => {
     const r = route()
@@ -214,6 +223,8 @@ export function App() {
   }
 
   const [renaming, setRenaming] = createSignal<string>()
+  /** The chat whose project picker is open, so its row keeps its buttons showing. */
+  const [filing, setFiling] = createSignal<string>()
   const renamed = (id: string, title: string) => setSessions((all) => all.map((x) => (x.id === id ? { ...x, title } : x)))
 
   const SessionRow = (props: { session: SessionSummary }) => {
@@ -237,28 +248,35 @@ export function App() {
               s().id === current() ? 'bg-surface' : 'hover:bg-surface/60'
             }`}
           >
-            <div class="flex items-center gap-2">
-              <span
-                class={`min-w-0 flex-1 truncate text-[13px] ${
-                  s().id === current() || attention()[s().id]
-                    ? 'text-fg'
-                    : s().archived
-                      ? 'text-fg-3 group-hover:text-fg'
-                      : 'text-fg-2 group-hover:text-fg'
-                }`}
-              >
-                {s().title}
-              </span>
-              <ChatDot running={s().running} attention={attention()[s().id]} />
-            </div>
-            <div class="mt-0.5 flex gap-1.5 text-[11px] text-fg-3 tabular-nums">
-              <span class="truncate">{s().cwd && folderLabel(s().cwd!)}</span>
-              <Show when={cardOf().get(s().id)}>{(c) => <span class="shrink-0">#{c().id}</span>}</Show>
-              <span class={`ml-auto shrink-0 group-hover:invisible ${s().id === current() ? 'pointer-coarse:invisible' : ''}`}>{when(s().lastModified)}</span>
-            </div>
+            <ChatSummary
+              session={s()}
+              card={cardOf().get(s().id)}
+              titleClass={
+                s().id === current() || attention()[s().id]
+                  ? 'text-fg'
+                  : s().archived
+                    ? 'text-fg-3 group-hover:text-fg'
+                    : 'text-fg-2 group-hover:text-fg'
+              }
+              timeClass={`group-hover:invisible ${filing() === s().id ? 'invisible' : ''} ${s().id === current() ? 'pointer-coarse:invisible' : ''}`}
+            />
           </button>
           {/* Touch has no hover, so there the open chat's row shows them instead. */}
-          <div class={`absolute right-1.5 bottom-1 hidden gap-0.5 group-hover:flex ${s().id === current() ? 'pointer-coarse:flex' : ''}`}>
+          <div
+            class={`absolute right-1.5 bottom-1 gap-0.5 group-hover:flex ${s().id === current() ? 'pointer-coarse:flex' : ''} ${
+              filing() === s().id ? 'flex' : 'hidden'
+            }`}
+          >
+            <FileChat
+              session={s()}
+              cards={cards()}
+              title={cardOf().has(s().id) ? 'Move to another project or card' : 'Put in a project'}
+              onOpenChange={(open) => setFiling(open ? s().id : (id) => (id === s().id ? undefined : id))}
+              triggerClass={(open) =>
+                `grid size-5 place-items-center rounded transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-6 ${open ? 'bg-surface text-fg' : 'text-fg-3'}`
+              }
+              trigger={() => <FolderInput class="size-3.5" />}
+            />
             <button
               onClick={() => setRenaming(s().id)}
               title="Rename"
@@ -331,7 +349,7 @@ export function App() {
     const inside = cards().filter((c) => c.parentId === p.id)
     return inside.length ? `${inside.filter((c) => c.status === 'done').length}/${inside.length} cards done` : 'No cards yet'
   }
-  const switchable = createMemo(() => [null, ...allProjects().filter((c) => c.status !== 'done' || c.id === focusId())])
+  const switchable = createMemo(() => [null, 'none' as const, ...allProjects().filter((c) => c.status !== 'done' || c.id === focusId())])
   /** The home chat's first message went out: give it its own URL and a fresh blank chat for next time. */
   const startHomeChat = (id: string, cwd?: string) => {
     if (cwd) setDrafts((d) => ({ ...d, [id]: cwd }))
@@ -384,12 +402,20 @@ export function App() {
         <div class="px-2 pb-3">
           <Menu
             items={switchable().map((c) =>
-              c
-                ? { label: c.title, description: projectSummary(c), selected: c.id === focus()?.id }
-                : { label: 'All projects', description: 'Everything', selected: !focus() },
+              c === 'none'
+                ? {
+                    label: 'No project',
+                    description: unfiledCount() ? `${unfiledCount()} chat${unfiledCount() === 1 ? '' : 's'} to put in a project` : 'Every chat is in a project',
+                    selected: unfiled(),
+                  }
+                : c
+                  ? { label: c.title, description: projectSummary(c), selected: c.id === focus()?.id }
+                  : { label: 'All projects', description: 'Everything', selected: !focus() && !unfiled() },
             )}
             onPick={(i) => {
               const c = switchable()[i]
+              // There's no page for chats on no card; the sidebar is the list.
+              if (c === 'none') return setFocusId('none')
               go(c ? { kind: 'card', id: c.id } : { kind: 'board' })
             }}
             placement="bottom"
@@ -400,7 +426,12 @@ export function App() {
             }
             trigger={(open) => (
               <>
-                <span class={`min-w-0 flex-1 truncate text-left ${focus() ? 'text-fg' : 'text-fg-2'}`}>{focus()?.title ?? 'All projects'}</span>
+                <span class={`min-w-0 flex-1 truncate text-left ${focus() || unfiled() ? 'text-fg' : 'text-fg-2'}`}>
+                  {unfiled() ? 'No project' : (focus()?.title ?? 'All projects')}
+                </span>
+                <Show when={unfiled() && unfiledCount()}>
+                  <span class="text-[11px] text-fg-3 tabular-nums">{unfiledCount()}</span>
+                </Show>
                 <ChevronDown class={`size-3.5 text-fg-3 transition-transform ${open() ? 'rotate-180' : ''}`} />
               </>
             )}
@@ -463,6 +494,9 @@ export function App() {
         </Show>
         <nav class="flex-1 overflow-y-auto px-2 py-2">
           <For each={active()}>{(s) => <SessionRow session={s} />}</For>
+          <Show when={unfiled() && loaded() && cardsLoaded() && !active().length}>
+            <p class="px-2 py-1.5 text-[13px] text-fg-3">Every chat is in a project.</p>
+          </Show>
           <Show when={archived().length}>
             <button
               onClick={() => setShowArchived((v) => !v)}
@@ -562,12 +596,3 @@ const HOME_KEY = 'badger.homeId'
 const FOCUS_KEY = 'badger.focus'
 
 const TEMP = /^\/(private\/)?(tmp|var\/folders)\//
-
-/** Time today, day and month this year, full date otherwise. */
-function when(ms: number): string {
-  const d = new Date(ms)
-  const now = new Date()
-  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
-  if (d.getFullYear() === now.getFullYear()) return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
-  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
-}
