@@ -73,7 +73,7 @@ export class LiveSession {
   /** Started from the chat itself and running now. They outlive the turn that started them. */
   private background: BackgroundTask[] = []
   /** Any background work is running, the subagents' own included; closing the process would kill it. */
-  private busy = false
+  busy = false
 
   constructor(opts: {
     id: string
@@ -373,7 +373,12 @@ export class LiveSession {
     if (msg.type === 'system' && msg.subtype === 'task_started' && msg.task_type === 'local_agent') this.agents.set(msg.task_id, msg.description)
     if (msg.type === 'system' && msg.subtype === 'background_tasks_changed') {
       const tasks = msg.tasks.filter((t) => !t.ambient)
-      this.busy = tasks.length > 0
+      const busy = tasks.length > 0
+      // The chat list shows a chat waiting on background work as working.
+      if (busy !== this.busy) {
+        this.busy = busy
+        this.onChange()
+      }
       // A running subagent's own tasks show inside it. One that has paused to wait on them isn't in the set, so they show here.
       const ids = new Set(tasks.map((t) => t.task_id))
       this.background = tasks.filter((t) => !t.parent_task_id || !ids.has(t.parent_task_id)).map((t) => ({ id: t.task_id, type: t.task_type, description: t.description }))
@@ -633,8 +638,10 @@ export class SessionManager {
     return this.sessions.get(id)
   }
 
+  /** Taking a turn, or waiting on background work it started. */
   isRunning(id: string): boolean {
-    return this.sessions.get(id)?.running ?? false
+    const s = this.sessions.get(id)
+    return !!s && (s.running || s.busy)
   }
 
   liveIds(): string[] {
