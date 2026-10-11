@@ -17,8 +17,10 @@ Claude auth comes from `ANTHROPIC_API_KEY` if set, otherwise from the server use
 ### Docker / Podman
 
 ```bash
-mkdir badger && docker compose up -d --build   # on :3001
+mkdir badger && docker compose up -d   # on :3001
 ```
+
+That pulls `ghcr.io/ria8651/badger`, built for amd64 and arm64 by GitHub Actions: `latest` follows `spike`, and `v*` tags publish versions. Add `--build` to build it from your checkout instead, e.g. after adding tools to the `Dockerfile`.
 
 Everything that persists is in one folder, `BADGER_DIR` (default `./badger`), mounted at `/badger` and used as the container's `HOME`: Claude Code's transcripts and login, Badger's database, git and gh config, and repos, which go in `~/code` (the default folder). Log in once from a Badger terminal with `claude`, `gh auth login` and `git config --global …`; it survives the container being recreated. Any `user:` works as long as it can write the folder.
 

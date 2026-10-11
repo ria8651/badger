@@ -1,5 +1,7 @@
 services:
   badger:
+    # Published by .github/workflows/image.yml; `--build` builds it from here instead.
+    image: ghcr.io/ria8651/badger:latest
     build: .
     container_name: badger
     restart: unless-stopped

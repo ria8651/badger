@@ -11,12 +11,11 @@
 import { execFileSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, statSync, unlinkSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { connect, createServer, type Socket } from 'node:net'
-import { basename, dirname, join } from 'node:path'
+import { basename } from 'node:path'
 import headless from '@xterm/headless'
 import serialize from '@xterm/addon-serialize'
-import { spawn, type IPty } from 'node-pty'
+import { spawn, type IPty } from '@lydell/node-pty'
 import type { TerminalInfo } from '../shared/protocol.ts'
 import { PTY_HOST_VERSION, type CreateSpec, type HostEvent, type HostRequest } from './ptyProtocol.ts'
 import { workspaceRoot } from './workspace.ts'
@@ -38,11 +37,6 @@ if (!SOCKET) {
   console.error('usage: ptyHost.ts <socket path>')
   process.exit(2)
 }
-
-// node-pty 1.1's prebuilt spawn-helper ships without its exec bit.
-const require = createRequire(import.meta.url)
-const helper = join(dirname(require.resolve('node-pty/package.json')), 'prebuilds', `${process.platform}-${process.arch}`, 'spawn-helper')
-if (existsSync(helper) && !(statSync(helper).mode & 0o111)) chmodSync(helper, 0o755)
 
 interface Term {
   info: TerminalInfo
