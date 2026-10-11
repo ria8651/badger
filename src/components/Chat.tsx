@@ -82,18 +82,15 @@ export function Chat(props: {
   let pinned = true
   let lastTop = 0
   const cwd = () => state.cwd ?? props.draftCwd
-  // Folderless chats get no terminals: there's no project to run anything in.
   const root = () => {
     const dir = cwd()
-    return dir && !isScratch(dir) ? workspaceOf(dir)() : undefined
+    return dir ? workspaceOf(dir)() : undefined
   }
   const where = () => (isScratch(cwd()) ? 'No folder' : (cwd() ?? ''))
 
   // Shared by the transcript and the task tray, so both read the chat's messages once.
   const index = createIndex(() => state.messages, () => props.sessionId)
   const tasks = createMemo(() => trayItems(index(), state.running, state.background, cwd()))
-  const waiting = () => state.running && waitingOnTask(index())
-  const toBackground = () => runInBackground(props.sessionId)
 
   /** Scroll to a tool call, opening it and whatever it's folded into. */
   const jump = (toolUseId: string) => {
@@ -407,9 +404,10 @@ export function Chat(props: {
                       submit()
                     }
                     if (e.key === 'Escape' && state.running) interrupt()
-                    if (e.key === 'b' && e.ctrlKey && !e.metaKey && waiting()) {
+                    // Each subagent and command has its own button; this sends every one at once.
+                    if (e.key === 'b' && e.ctrlKey && !e.metaKey && state.running && waitingOnTask(index())) {
                       e.preventDefault()
-                      toBackground()
+                      runInBackground(props.sessionId)
                     }
                   }}
                   rows={Math.min(10, Math.max(2, text().split('\n').length))}
@@ -447,17 +445,15 @@ export function Chat(props: {
                   />
                   <div class="hidden items-center gap-2 @md:flex">
                     <Show when={root()}>{(r) => <TerminalButton root={r()} cwd={cwd()!} />}</Show>
-                    <Show when={actions().length}>
-                      <Menu
-                        items={actions().map((a) => ({ label: a.label, description: a.description }))}
-                        onPick={(i) => send(actions()[i].prompt)}
-                        title="Chat actions"
-                        triggerClass={(open) =>
-                          `flex h-7 items-center rounded-md px-2 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 ${open ? 'bg-surface text-fg-2' : 'text-fg-3'}`
-                        }
-                        trigger={() => <Zap class="size-3.5" />}
-                      />
-                    </Show>
+                    <Menu
+                      items={actions().map((a) => ({ label: a.label, description: a.description }))}
+                      onPick={(i) => send(actions()[i].prompt)}
+                      title={actions().length ? 'Chat actions' : 'No actions for this chat'}
+                      triggerClass={(open) =>
+                        `flex h-7 items-center rounded-md px-2 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 ${open ? 'bg-surface text-fg-2' : 'text-fg-3'}`
+                      }
+                      trigger={() => <Zap class="size-3.5" />}
+                    />
                     <button
                       type="button"
                       onClick={() => setDetail(detail() === 'full' ? 'result' : 'full')}
@@ -484,16 +480,6 @@ export function Chat(props: {
                   </button>
                   <div class="ml-auto flex items-center gap-2">
                     <Show when={state.context}>{(u) => <ContextMeter usage={u()} />}</Show>
-                    <Show when={waiting()}>
-                      <button
-                        type="button"
-                        onClick={toBackground}
-                        title="Stop waiting and let them carry on (Ctrl+B)"
-                        class="flex h-7 items-center rounded-md px-2 text-xs text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9"
-                      >
-                        Run in background
-                      </button>
-                    </Show>
                     {/* One slot: stop while running with nothing typed, otherwise send. */}
                     <Show
                       when={state.running && !hasInput()}
