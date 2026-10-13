@@ -135,9 +135,10 @@ function steps(messages: WireMessage[] | undefined): number {
 /**
  * The chat's subagents and background work, by the composer so they stay in
  * view however far the transcript scrolls. What's running is always listed;
- * what's finished folds into one row. A subagent's own work is indented under it.
+ * what's finished folds into one row. A subagent's own work is indented under
+ * it. Each opens in a panel beside the chat.
  */
-export function TaskTray(props: { sessionId: string; items: Accessor<TrayItem[]>; onJump: (toolUseId: string) => void }) {
+export function TaskTray(props: { sessionId: string; items: Accessor<TrayItem[]>; onOpen: (toolUseId: string) => void }) {
   const [showDone, setShowDone] = createSignal(false)
   // Rows are listed by key, which stays the same as the items are rebuilt, so they aren't remade on every message.
   const byKey = createMemo(() => new Map(props.items().map((t) => [key(t), t])))
@@ -160,9 +161,9 @@ export function TaskTray(props: { sessionId: string; items: Accessor<TrayItem[]>
           </Show>
         </span>
         <button
-          onClick={() => t().toolUseId && props.onJump(t().toolUseId!)}
+          onClick={() => t().toolUseId && props.onOpen(t().toolUseId!)}
           disabled={!t().toolUseId}
-          title={t().toolUseId ? 'Show in the chat' : undefined}
+          title={t().toolUseId ? 'Open in a panel' : undefined}
           class="group flex min-w-0 flex-1 items-baseline gap-2 py-1 text-left enabled:cursor-pointer"
         >
           <span class="min-w-0 truncate text-fg-2 group-enabled:group-hover:text-fg">{t().label}</span>

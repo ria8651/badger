@@ -7,7 +7,7 @@ import { api, connected, socket } from '../api.ts'
 import { readImage } from '../images.ts'
 import { lastModel, modelValue, models, setLastModel } from '../models.ts'
 import { cardWorktreeName, folderItem, isScratch, worktreeOf } from '../folders.ts'
-import { panelsShown, togglePanels } from '../layout.ts'
+import { openView, panelsShown, togglePanels } from '../layout.ts'
 import { terminals, workspaceOf } from '../terminals.ts'
 import { ChildChats, createChat } from '../useChat.ts'
 import { Attachments } from './Attachments.tsx'
@@ -15,9 +15,9 @@ import { PermissionPrompt } from './PermissionPrompt.tsx'
 import { TerminalButton } from './Terminals.tsx'
 import { TaskTray, trayItems, waitingOnTask } from './TaskTray.tsx'
 import { reveal, revealed, toolLabel } from './ToolCard.tsx'
-import { Transcript, UserMessage, createIndex, detail, runInBackground, setDetail } from './Transcript.tsx'
+import { TaskPane, Transcript, UserMessage, createIndex, detail, runInBackground, setDetail } from './Transcript.tsx'
 import { ContextMeter } from './Usage.tsx'
-import { Workspace } from './Workspace.tsx'
+import { Workspace, type TaskPanes } from './Workspace.tsx'
 import { IconButton, Loading, Menu, Select, ltr, touch, type Option } from './ui.tsx'
 
 const MODES: Option<PermissionMode>[] = [
@@ -102,6 +102,31 @@ export function Chat(props: {
       content.querySelector(`[data-id="${CSS.escape(toolUseId)}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
       revealed()
     })
+  }
+
+  /** Open a subagent or background task in a panel beside the chat. */
+  const openTask = (toolUseId: string) => {
+    const r = root()
+    if (r) openView(r, { kind: 'task', session: props.sessionId, id: toolUseId })
+    else jump(toolUseId)
+  }
+  const taskPanes: TaskPanes = {
+    label: (id) => {
+      const t = tasks().find((t) => t.toolUseId === id)
+      return t?.description || t?.label || 'Task'
+    },
+    live: (id) => tasks().find((t) => t.toolUseId === id)?.status === 'running',
+    render: (id, onReady) => (
+      <TaskPane
+        id={id}
+        index={index}
+        bashOutput={state.bashOutput}
+        running={state.running}
+        cwd={cwd()}
+        onShowInChat={() => jump(id)}
+        onReady={onReady}
+      />
+    ),
   }
 
   createEffect(on(() => state.mode, setMode))
@@ -259,7 +284,14 @@ export function Chat(props: {
   })
 
   return (
-    <Workspace root={root()} cwd={cwd()} onFocusChat={() => input.focus()} onOpenPage={props.onOpenTerminal}>
+    <Workspace
+      root={root()}
+      cwd={cwd()}
+      sessionId={props.sessionId}
+      tasks={taskPanes}
+      onFocusChat={() => input.focus()}
+      onOpenPage={props.onOpenTerminal}
+    >
       <div class="flex h-full min-w-0 flex-1 flex-col">
         <div
           ref={scroller}
@@ -333,7 +365,7 @@ export function Chat(props: {
                   )}
                 </For>
                 <Show when={tasks().length}>
-                  <TaskTray sessionId={props.sessionId} items={tasks} onJump={jump} />
+                  <TaskTray sessionId={props.sessionId} items={tasks} onOpen={openTask} />
                 </Show>
                 <Show when={state.error}>
                   <div class="flex items-start gap-3 bg-danger/10 rounded-lg px-3 py-2 text-[13px] text-danger">

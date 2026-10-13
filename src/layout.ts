@@ -7,9 +7,17 @@ import { api } from './api.ts'
  * in one sees the same panels, and per browser tab, so two tabs can differ.
  */
 
-/** Something a panel shows. More kinds go here as they're added. */
-export type View = { kind: 'terminal'; id: string }
-export const viewKey = (v: View) => `${v.kind}:${v.id}`
+/**
+ * Something a panel shows: a terminal, or a subagent or background task of a
+ * chat, by the tool call that started it. A task is its chat's own, so it only
+ * shows beside that chat.
+ */
+export type View = { kind: 'terminal'; id: string } | { kind: 'task'; session: string; id: string }
+export const viewKey = (v: View) => (v.kind === 'task' ? `task:${v.session}:${v.id}` : `terminal:${v.id}`)
+export function parseKey(key: string): View {
+  const [kind, a, b] = key.split(':')
+  return kind === 'task' ? { kind, session: a, id: b } : { kind: 'terminal', id: key.slice(key.indexOf(':') + 1) }
+}
 
 export type Group = { type: 'group'; id: string; views: View[]; active?: string }
 export type Leaf = { type: 'chat' } | Group
@@ -278,6 +286,33 @@ export async function openTerminal(root: string, cwd: string, where?: { group: s
     return { ...l, tree: placed.tree, focus: placed.group, hidden: false }
   })
   setFocusRequest(viewKey(view))
+}
+
+/**
+ * Shows a view that needs nothing started, e.g. a task: where it already is,
+ * else in the group last worked in, else in a new panel beside the chat.
+ */
+export function openView(root: string, view: View): void {
+  const key = viewKey(view)
+  updateLayout(root, (l) => {
+    const at = groupOf(l.tree, key)
+    if (at) return { ...l, tree: setActive(l.tree, key), focus: at.id, hidden: false }
+    const groups = groupsOf(l.tree)
+    const into = groups.find((g) => g.id === l.focus) ?? groups[0]
+    if (into) return { ...l, tree: addToGroup(l.tree, into.id, view), focus: into.id, hidden: false }
+    const placed = splitWith(l.tree, 'chat', 'right', [view])
+    return { ...l, tree: placed.tree, focus: placed.group, hidden: false }
+  })
+  setFocusRequest(key)
+}
+
+/** Takes other chats' tasks out of a workspace's panels: they only show beside their own chat. */
+export function dropOtherTasks(root: string, session: string): void {
+  updateLayout(root, (l) => {
+    let tree = l.tree
+    for (const v of viewsOf(tree)) if (v.kind === 'task' && v.session !== session) tree = removeView(tree, viewKey(v))
+    return tree === l.tree ? l : { ...l, tree }
+  })
 }
 
 /** Show or hide a workspace's panels. Showing with nothing to show opens a shell, like any terminal panel. */

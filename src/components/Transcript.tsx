@@ -9,7 +9,7 @@ import { collectTasks, type Task } from '../tasks.ts'
 import { ChildChats, type Partial } from '../useChat.ts'
 import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
-import { Disclosure, Pre, ToolCard, resultText, toolLabel, toolSummary, type ToolResult } from './ToolCard.tsx'
+import { Disclosure, Pre, ToolBody, ToolCard, resultText, toolLabel, toolSummary, type ToolResult } from './ToolCard.tsx'
 import { Attachments } from './Attachments.tsx'
 import { LiveDot, compact, plural } from './ui.tsx'
 
@@ -108,6 +108,8 @@ export interface Index {
   tasks: Map<string, Task>
   /** Each tool call's parent: the subagent call it was made in, or '' for the chat's own. */
   parents: Map<string, string>
+  /** Tool calls by tool_use_id. */
+  uses: Map<string, { name: string; input: Record<string, unknown> }>
 }
 
 /** Whether a tool call was made inside the subagent started by `ancestor`, at any depth. */
@@ -120,15 +122,21 @@ export function buildIndex(messages: WireMessage[], sessionId?: string): Index {
   const groups = new Map<string, WireMessage[]>()
   const results = new Map<string, ToolResult>()
   const parents = new Map<string, string>()
+  const uses: Index['uses'] = new Map()
   for (const m of messages) {
     const parent = (m.parent_tool_use_id as string | null | undefined) ?? ''
     let group = groups.get(parent)
     if (!group) groups.set(parent, (group = []))
     group.push(m)
     if (m.type === 'user') collectResults(m, results)
-    if (m.type === 'assistant') for (const b of ((m.message as { content?: Block[] })?.content ?? []) as Block[]) if (b.type === 'tool_use' && b.id) parents.set(b.id, parent)
+    if (m.type !== 'assistant') continue
+    for (const b of ((m.message as { content?: Block[] })?.content ?? []) as Block[]) {
+      if (b.type !== 'tool_use' || !b.id) continue
+      parents.set(b.id, parent)
+      uses.set(b.id, { name: b.name ?? '?', input: b.input ?? {} })
+    }
   }
-  return { sessionId, groups, results, tasks: collectTasks(messages), parents }
+  return { sessionId, groups, results, tasks: collectTasks(messages), parents, uses }
 }
 
 const TranscriptIndex = createContext<Accessor<Index>>()
@@ -473,12 +481,8 @@ function ChildRun(props: { sessionId: string; name: string; result?: ToolResult 
   )
 }
 
-/**
- * A subagent Claude Code started with the Agent tool: its own work nested in
- * the call, then its report. One in the background keeps running after the
- * call returns, until its task says it's done.
- */
-function AgentRun(props: { id: string; input: Record<string, unknown>; bashOutput: Record<string, string>; running: boolean; cwd?: string }) {
+/** How a subagent Claude Code started with the Agent tool is going, read from the chat's index. */
+function agentState(props: { id: string; input: Record<string, unknown>; running: boolean }) {
   const index = useIndex()
   const messages = () => index().groups.get(props.id) ?? NONE
   const items = createMemo(() => buildView(messages(), true).items)
@@ -510,43 +514,21 @@ function AgentRun(props: { id: string; input: Record<string, unknown>; bashOutpu
     if (sessionId && t) socket.send({ type: 'stop_task', sessionId, taskId: t.id })
   }
 
+  return { index, messages, items, task, background, running, status, steps, prompt, report, stop }
+}
+
+type Agent = ReturnType<typeof agentState>
+
+/** A subagent's prompt, its own work and its report, with what can be done while it runs. */
+function AgentBody(props: { id: string; agent: Agent; bashOutput: Record<string, string>; cwd?: string }) {
+  const a = props.agent
   return (
-    <Disclosure
-      id={props.id}
-      label={agentLabel(props.input)}
-      holds={(id) => within(index(), id, props.id)}
-      detail={String(props.input.description ?? '')}
-      trailing={
-        <>
-          <Show when={running() && background()}>
-            <span class="shrink-0 text-xs text-fg-3">In background</span>
-          </Show>
-          <Show when={steps()}>
-            <span class="shrink-0 text-xs text-fg-3 tabular-nums">
-              {plural(steps(), 'step')}
-              {!running() && task()?.tokens ? ` · ${compact(task()!.tokens!)} tokens` : ''}
-            </span>
-          </Show>
-          <Show when={running()}>
-            <LiveDot />
-          </Show>
-          <Show when={!running() && status() === 'failed'}>
-            <span class="shrink-0 text-xs text-danger">Failed</span>
-          </Show>
-          <Show when={!running() && status() === 'stopped'}>
-            <span class="shrink-0 text-xs text-fg-3">Stopped</span>
-          </Show>
-        </>
-      }
-      // One in the background can run for a long while alongside everything else, so it stays folded.
-      live={running() && !background()}
-      peek={running() && task()?.activity && <p class="truncate text-xs text-fg-3">{task()!.activity}</p>}
-    >
-      <Show when={prompt()}>{(p) => <Markdown text={p()} />}</Show>
-      <Show when={items().length || report()}>
+    <>
+      <Show when={a.prompt()}>{(p) => <Markdown text={p()} />}</Show>
+      <Show when={a.items().length || a.report()}>
         <div>
-          <Messages messages={messages()} nested partial={null} bashOutput={props.bashOutput} running={running()} working={running()} cwd={props.cwd} />
-          <Show when={report()}>
+          <Messages messages={a.messages()} nested partial={null} bashOutput={props.bashOutput} running={a.running()} working={a.running()} cwd={props.cwd} />
+          <Show when={a.report()}>
             {(r) => (
               <div class="my-4">
                 <Markdown text={r()} />
@@ -555,20 +537,142 @@ function AgentRun(props: { id: string; input: Record<string, unknown>; bashOutpu
           </Show>
         </div>
       </Show>
-      <Show when={running() && task() && index().sessionId}>
+      <Show when={a.running() && a.task() && a.index().sessionId}>
         <div class="flex gap-4">
-          <Show when={!background()}>
-            <button onClick={() => runInBackground(index().sessionId!, props.id)} class="text-xs text-fg-3 transition-colors hover:text-fg-2">
+          <Show when={!a.background()}>
+            <button onClick={() => runInBackground(a.index().sessionId!, props.id)} class="text-xs text-fg-3 transition-colors hover:text-fg-2">
               Run in background
             </button>
           </Show>
-          <button onClick={stop} class="text-xs text-fg-3 transition-colors hover:text-fg-2">
+          <button onClick={a.stop} class="text-xs text-fg-3 transition-colors hover:text-fg-2">
             Stop agent
           </button>
         </div>
       </Show>
+    </>
+  )
+}
+
+/**
+ * A subagent Claude Code started with the Agent tool: its own work nested in
+ * the call, then its report. One in the background keeps running after the
+ * call returns, until its task says it's done.
+ */
+function AgentRun(props: { id: string; input: Record<string, unknown>; bashOutput: Record<string, string>; running: boolean; cwd?: string }) {
+  const a = agentState(props)
+  return (
+    <Disclosure
+      id={props.id}
+      label={agentLabel(props.input)}
+      holds={(id) => within(a.index(), id, props.id)}
+      detail={String(props.input.description ?? '')}
+      trailing={
+        <>
+          <Show when={a.running() && a.background()}>
+            <span class="shrink-0 text-xs text-fg-3">In background</span>
+          </Show>
+          <Show when={a.steps()}>
+            <span class="shrink-0 text-xs text-fg-3 tabular-nums">
+              {plural(a.steps(), 'step')}
+              {!a.running() && a.task()?.tokens ? ` · ${compact(a.task()!.tokens!)} tokens` : ''}
+            </span>
+          </Show>
+          <Show when={a.running()}>
+            <LiveDot />
+          </Show>
+          <Show when={!a.running() && a.status() === 'failed'}>
+            <span class="shrink-0 text-xs text-danger">Failed</span>
+          </Show>
+          <Show when={!a.running() && a.status() === 'stopped'}>
+            <span class="shrink-0 text-xs text-fg-3">Stopped</span>
+          </Show>
+        </>
+      }
+      // One in the background can run for a long while alongside everything else, so it stays folded.
+      live={a.running() && !a.background()}
+      peek={a.running() && a.task()?.activity && <p class="truncate text-xs text-fg-3">{a.task()!.activity}</p>}
+    >
+      <AgentBody id={props.id} agent={a} bashOutput={props.bashOutput} cwd={props.cwd} />
     </Disclosure>
   )
+}
+
+/**
+ * A subagent or background task in a panel of its own: everything its row in
+ * the transcript holds, opened out, staying at the bottom as it grows unless
+ * scrolled up.
+ */
+export function TaskPane(props: {
+  id: string
+  index: Accessor<Index>
+  bashOutput: Record<string, string>
+  running: boolean
+  cwd?: string
+  onShowInChat: () => void
+  onReady: (focus: () => void) => void
+}) {
+  let scroller!: HTMLDivElement
+  let pinned = true
+  const use = () => props.index().uses.get(props.id)
+  const isAgent = () => use()?.name === 'Agent' || use()?.name === 'Task'
+  return (
+    <TranscriptIndex.Provider value={props.index}>
+      <div
+        ref={(el) => {
+          scroller = el
+          props.onReady(() => el.focus({ preventScroll: true }))
+        }}
+        tabIndex={-1}
+        onScroll={() => (pinned = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 8)}
+        class="size-full overflow-y-auto outline-none [overflow-anchor:none]"
+      >
+        <div
+          ref={(el) => {
+            const observer = new ResizeObserver(() => pinned && (scroller.scrollTop = scroller.scrollHeight))
+            observer.observe(el)
+            onCleanup(() => observer.disconnect())
+          }}
+          class="space-y-2 px-5 pt-2 pb-6 text-[13px]"
+        >
+          <Show when={use()} fallback={<p class="text-xs text-fg-3">This task isn’t in the chat any more.</p>}>
+            {(u) => (
+              <>
+                <div class="flex items-baseline gap-2">
+                  <span class="min-w-0 flex-1 truncate font-mono text-xs text-fg-3">{toolSummary(u().name, u().input, props.cwd)}</span>
+                  <button onClick={props.onShowInChat} class="shrink-0 text-xs text-fg-3 transition-colors hover:text-fg-2">
+                    Show in chat
+                  </button>
+                </div>
+                <Show
+                  when={isAgent()}
+                  fallback={
+                    <ToolBody
+                      id={props.id}
+                      name={u().name}
+                      input={u().input}
+                      result={props.index().results.get(props.id)}
+                      liveOutput={props.bashOutput[props.id]}
+                      running={props.running}
+                      cwd={props.cwd}
+                      task={props.index().tasks.get(props.id)}
+                      fill
+                    />
+                  }
+                >
+                  <AgentPane id={props.id} input={u().input} bashOutput={props.bashOutput} running={props.running} cwd={props.cwd} />
+                </Show>
+              </>
+            )}
+          </Show>
+        </div>
+      </div>
+    </TranscriptIndex.Provider>
+  )
+}
+
+function AgentPane(props: { id: string; input: Record<string, unknown>; bashOutput: Record<string, string>; running: boolean; cwd?: string }) {
+  const a = agentState(props)
+  return <AgentBody id={props.id} agent={a} bashOutput={props.bashOutput} cwd={props.cwd} />
 }
 
 /** What to call a subagent: its type, unless it's the general one. */

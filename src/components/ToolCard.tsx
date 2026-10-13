@@ -230,12 +230,12 @@ export function Disclosure(props: {
   )
 }
 
-export function ToolCard(props: {
+type ToolProps = {
   id?: string
   name: string
   input: Input
   result?: ToolResult
-  /** Output streamed so far while a Bash command runs. */
+  /** Output streamed while a Bash command runs; for one in the background, everything it printed. */
   liveOutput?: string
   running: boolean
   cwd?: string
@@ -243,8 +243,14 @@ export function ToolCard(props: {
   task?: Task
   /** Offered while the call runs and the turn waits on it. */
   onBackground?: () => void
-}) {
-  const live = () => (!props.result && props.running ? props.liveOutput : undefined)
+}
+
+/** Output still coming: the call's, while the turn waits on it, or its task's, for as long as that runs. */
+const liveOf = (props: ToolProps) =>
+  props.task?.status === 'running' || (!props.result && props.running) ? props.liveOutput : undefined
+
+export function ToolCard(props: ToolProps) {
+  const live = () => liveOf(props)
   const status = () =>
     props.task?.status === 'running'
       ? 'running'
@@ -282,19 +288,11 @@ export function ToolCard(props: {
               </Switch>
             </>
           }
-          live={status() === 'running'}
-          peek={live() && <LiveOutput text={live()!} class="max-h-40" />}
+          // One in the background can run for a long while alongside everything else, so it stays folded; its panel shows it.
+          live={status() === 'running' && !props.task?.background}
+          peek={live() && !props.task?.background && <LiveOutput text={live()!} class="max-h-40" />}
         >
-          <ToolInput name={props.name} input={props.input} />
-          <Show when={live()}>{(text) => <LiveOutput text={text()} class="max-h-96" />}</Show>
-          <Show when={props.onBackground && !props.result && props.running && !props.task?.background}>
-            <button onClick={() => props.onBackground!()} class="text-xs text-fg-3 transition-colors hover:text-fg-2">
-              Run in background
-            </button>
-          </Show>
-          <Show when={props.result}>
-            {(r) => <Pre text={resultText(r().content) || '(no output)'} class={r().isError ? 'text-danger' : ''} />}
-          </Show>
+          <ToolBody {...props} />
         </Disclosure>
       }
     >
@@ -303,6 +301,49 @@ export function ToolCard(props: {
       </Match>
       <Match when={answers()}>{(a) => <Answers questions={questions()} answers={a()} />}</Match>
     </Switch>
+  )
+}
+
+/**
+ * What a tool call did: its input, then its output. A command in the
+ * background returns straight away with only a note saying so; what it
+ * printed comes from its own output, and how it ended from its task.
+ */
+export function ToolBody(props: ToolProps & { /** Fill the space given rather than keep output short. */ fill?: boolean }) {
+  const live = () => liveOf(props)
+  const background = () => !!props.task?.background
+  /** A command in the background, whose result is only the note. */
+  const shell = () => props.name === 'Bash' && background()
+  const tall = () => (props.fill ? '' : 'max-h-96')
+  return (
+    <>
+      <ToolInput name={props.name} input={props.input} />
+      <Show when={live()}>{(text) => <LiveOutput text={text()} class={tall()} />}</Show>
+      <Show when={props.onBackground && !props.result && props.running && !background()}>
+        <button onClick={() => props.onBackground!()} class="text-xs text-fg-3 transition-colors hover:text-fg-2">
+          Run in background
+        </button>
+      </Show>
+      <Show
+        when={shell() && props.task}
+        fallback={
+          <Show when={props.result}>
+            {(r) => <Pre text={resultText(r().content) || '(no output)'} class={r().isError ? 'text-danger' : ''} fill={props.fill} />}
+          </Show>
+        }
+      >
+        {(task) => (
+          <>
+            <Show when={task().status !== 'running' && props.liveOutput}>
+              {(text) => <Pre text={text()} fill={props.fill} />}
+            </Show>
+            <p class={`text-xs ${task().status === 'failed' ? 'text-danger' : 'text-fg-3'}`}>
+              {task().status === 'running' ? 'Running in the background' : task().summary || (task().status === 'stopped' ? 'Stopped' : 'Finished')}
+            </p>
+          </>
+        )}
+      </Show>
+    </>
   )
 }
 
@@ -325,12 +366,12 @@ function LiveOutput(props: { text: string; class: string }) {
 
 const LIMIT = 4000
 
-export function Pre(props: { text: string; class?: string }) {
+export function Pre(props: { text: string; class?: string; /** No height limit. */ fill?: boolean }) {
   const [full, setFull] = createSignal(false)
   const long = () => props.text.length > LIMIT
   return (
     <div>
-      <pre class={`max-h-96 ${preClass} ${props.class ?? ''}`}>
+      <pre class={`${props.fill ? '' : 'max-h-96'} ${preClass} ${props.class ?? ''}`}>
         {full() || !long() ? props.text : props.text.slice(0, LIMIT) + '\n…'}
       </pre>
       <Show when={long()}>

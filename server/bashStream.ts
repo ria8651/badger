@@ -38,10 +38,14 @@ interface Stream {
   offset: number
   decoder: StringDecoder
   output: string
+  /** Left running in the background: followed until its task ends, not its tool_result. */
+  taskId?: string
 }
 
 export class BashStreams {
   private streams = new Map<string, Stream>()
+  /** What background commands printed, once they've ended, for snapshots. */
+  private ended = new Map<string, string>()
   private timer: NodeJS.Timeout | null = null
 
   constructor(
@@ -55,7 +59,28 @@ export class BashStreams {
     this.timer ??= setInterval(() => this.poll(), POLL_MS)
   }
 
-  /** Flush and stop following a command once its tool_result arrives. */
+  /**
+   * A command's tool_result arrived. One left running in the background
+   * (`taskId`) only said so, so it's followed until its task ends; anything
+   * else is done.
+   */
+  result(toolUseId: string, taskId?: string): void {
+    const s = this.streams.get(toolUseId)
+    if (s && taskId) s.taskId = taskId
+    else this.finish(toolUseId)
+  }
+
+  /** A background task ended, or isn't among those running any more. */
+  taskEnded(taskId: string): void {
+    for (const s of [...this.streams.values()]) if (s.taskId === taskId) this.finish(s.toolUseId)
+  }
+
+  /** Ids of the background tasks whose commands are being followed. */
+  backgroundTasks(): string[] {
+    return [...this.streams.values()].flatMap((s) => (s.taskId ? [s.taskId] : []))
+  }
+
+  /** Flush and stop following a command. */
   finish(toolUseId: string): void {
     const s = this.streams.get(toolUseId)
     if (!s) return
@@ -63,21 +88,29 @@ export class BashStreams {
       this.read(s)
       for (const ext of ['.out', '.cmd']) rmSync(s.file + ext, { force: true })
     }
+    if (s.taskId && s.output) this.ended.set(toolUseId, s.output)
     this.streams.delete(toolUseId)
     if (this.streams.size === 0) this.stop()
   }
 
-  /** End of turn: stop everything and sweep logs that never matched a command. */
-  finishAll(): void {
-    for (const id of [...this.streams.keys()]) this.finish(id)
+  /**
+   * End of turn: stop following what the turn ran and sweep logs that never
+   * matched a command. Commands in the background carry on; with `all`, as
+   * when the process closes, they're dropped too.
+   */
+  finishAll(all = false): void {
+    for (const s of [...this.streams.values()]) if (all || !s.taskId) this.finish(s.toolUseId)
+    const keep = new Set([...this.streams.values()].flatMap((s) => (s.file ? [s.file + '.out', s.file + '.cmd'] : [])))
     for (const name of readdirSync(STREAM_DIR)) {
-      if (name.startsWith(this.sessionId + '.')) rmSync(join(STREAM_DIR, name), { force: true })
+      const file = join(STREAM_DIR, name)
+      if (name.startsWith(this.sessionId + '.') && !keep.has(file)) rmSync(file, { force: true })
     }
   }
 
-  /** Output so far for commands still running, for snapshots. */
+  /** Output so far for commands still running, and background ones that have ended, for snapshots. */
   outputs(): Record<string, string> {
-    return Object.fromEntries([...this.streams.values()].filter((s) => s.output).map((s) => [s.toolUseId, s.output]))
+    const live = [...this.streams.values()].filter((s) => s.output).map((s) => [s.toolUseId, s.output])
+    return { ...Object.fromEntries(this.ended), ...Object.fromEntries(live) }
   }
 
   private poll(): void {

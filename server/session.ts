@@ -340,7 +340,7 @@ export class LiveSession {
     if (this.idleTimer) clearTimeout(this.idleTimer)
     this.queue.close()
     this.agent.close()
-    this.bash.finishAll()
+    this.bash.finishAll(true)
   }
 
   private canUseTool: CanUseTool = (toolName, input, { signal, suggestions, blockedPath, toolUseID, agentID }) =>
@@ -424,9 +424,17 @@ export class LiveSession {
       const ids = new Set(tasks.map((t) => t.task_id))
       this.background = tasks.filter((t) => !t.parent_task_id || !ids.has(t.parent_task_id)).map((t) => ({ id: t.task_id, type: t.task_type, description: t.description }))
       this.emit({ type: 'background', sessionId: this.id, tasks: this.background })
+      const live = new Set(msg.tasks.map((t) => t.task_id))
+      for (const id of this.bash.backgroundTasks()) if (!live.has(id)) this.bash.taskEnded(id)
       if (!this.running) this.setRunning(false)
     }
-    if (msg.type === 'user') for (const id of toolResultIds(wire)) this.bash.finish(id)
+    if (msg.type === 'user') {
+      const ids = toolResultIds(wire)
+      // A command left running in the background says so in its result, which is the only one in its message.
+      const taskId = ids.length === 1 ? (wire.tool_use_result as { backgroundTaskId?: string } | undefined)?.backgroundTaskId : undefined
+      for (const id of ids) this.bash.result(id, taskId)
+    }
+    if (msg.type === 'system' && msg.subtype === 'task_notification') this.bash.taskEnded(msg.task_id)
     if (msg.type === 'result') {
       this.bash.finishAll()
       wire.ended_at = Date.now()

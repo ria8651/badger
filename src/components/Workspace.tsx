@@ -1,10 +1,11 @@
-import { For, Index, Show, children, createEffect, createMemo, createSignal, on, onCleanup, untrack, type JSX } from 'solid-js'
+import { For, Index, Match, Show, Switch, children, createEffect, createMemo, createSignal, on, onCleanup, untrack, type JSX } from 'solid-js'
 import { Minimize2, Plus, SquareArrowOutUpRight, X } from 'lucide-solid'
 import { api } from '../api.ts'
 import {
   CHAT,
   LEADER,
   activeOf,
+  dropOtherTasks,
   focusRequest,
   groupOf,
   groupsOf,
@@ -15,7 +16,9 @@ import {
   narrowTree,
   openTerminal,
   panelsShown,
+  parseKey,
   placeTerminals,
+  removeView,
   setActive,
   setFocusRequest,
   setSizes,
@@ -33,6 +36,7 @@ import {
 import { terminalLabel, terminals, terminalsLoaded } from '../terminals.ts'
 import { RestartButton, StatusDot, ghost } from './Terminals.tsx'
 import { TerminalView } from './TerminalView.tsx'
+import { LiveDot } from './ui.tsx'
 
 /** Height of a group's tab bar, which its views sit under. */
 const BAR = 36
@@ -51,8 +55,14 @@ const box = (r: Rect, top = 0): JSX.CSSProperties => ({
   height: `calc(${pct(r.h)} - ${top}px)`,
 })
 
-const parseKey = (key: string): View => ({ kind: 'terminal', id: key.slice(key.indexOf(':') + 1) })
-const terminalOf = (v: View) => terminals().find((t) => t.id === v.id)
+const terminalOf = (v: View) => (v.kind === 'terminal' ? terminals().find((t) => t.id === v.id) : undefined)
+
+/** What the chat says about its own tasks, for the panels showing them. */
+export interface TaskPanes {
+  label: (toolUseId: string) => string
+  live: (toolUseId: string) => boolean
+  render: (toolUseId: string, onReady: (focus: () => void) => void) => JSX.Element
+}
 
 const BINDINGS: [string, string][] = [
   ['T', 'New terminal'],
@@ -74,6 +84,9 @@ export function Workspace(props: {
   /** The workspace (git root); panels aren't offered until it's known. */
   root?: string
   cwd?: string
+  /** The chat's session, whose tasks can show in panels. */
+  sessionId: string
+  tasks: TaskPanes
   onFocusChat: () => void
   onOpenPage: (terminalId: string) => void
   children: JSX.Element
@@ -91,7 +104,9 @@ export function Workspace(props: {
   const groupIds = createMemo(() => groupsOf(tree()).map((g) => g.id))
   const groupById = (id: string) => groupsOf(tree()).find((g) => g.id === id)
   // Every view in the workspace, shown or not, so hiding or moving one never unmounts it.
-  const keys = createMemo(() => (props.root ? viewsOf(layoutOf(props.root).tree).map(viewKey) : []))
+  const keys = createMemo(() =>
+    props.root ? viewsOf(layoutOf(props.root).tree).filter((v) => v.kind !== 'task' || v.session === props.sessionId).map(viewKey) : [],
+  )
 
   const update = (change: Parameters<typeof updateLayout>[1]) => props.root && updateLayout(props.root, change)
 
@@ -105,6 +120,9 @@ export function Workspace(props: {
       .map((t) => t.id)
     untrack(() => placeTerminals(root, ids))
   })
+
+  // Another chat's tasks don't belong beside this one.
+  createEffect(() => props.root && untrack(() => dropOtherTasks(props.root!, props.sessionId)))
 
   // ── Focus ──
 
@@ -157,7 +175,7 @@ export function Workspace(props: {
     focusView(key)
   }
 
-  /** Closing a terminal's tab stops it, like the dock's did; the next tab along takes its place. */
+  /** Closing a terminal's tab stops it, like the dock's did; a task's only leaves the panel. The next tab along takes its place. */
   const close = (key: string) => {
     const g = groupOf(tree(), key)
     if (g && activeOf(g) === key) {
@@ -171,6 +189,7 @@ export function Workspace(props: {
     }
     const v = parseKey(key)
     if (v.kind === 'terminal') void api.closeTerminal(v.id)
+    else update((l) => ({ ...l, tree: removeView(l.tree, key) }))
   }
 
   const hide = () => {
@@ -338,6 +357,7 @@ export function Workspace(props: {
   // ── Rendering ──
 
   const tabLabel = (v: View) => {
+    if (v.kind === 'task') return props.tasks.label(v.id)
     const t = terminalOf(v)
     return t ? terminalLabel(t) : 'Starting…'
   }
@@ -363,16 +383,19 @@ export function Workspace(props: {
                     <button
                       onPointerDown={(e) => startTabDrag(e, key, tabLabel(v))}
                       onClick={(e) => (e.stopPropagation(), activate(key))}
-                      title={`${tabLabel(v)}\n${terminalOf(v)?.cwd ?? ''}`}
+                      title={v.kind === 'terminal' ? `${tabLabel(v)}\n${terminalOf(v)?.cwd ?? ''}` : tabLabel(v)}
                       class="flex h-full min-w-0 items-center gap-1.5 pl-2 text-xs"
                     >
                       <Show when={terminalOf(v)}>{(t) => <StatusDot terminal={t()} />}</Show>
+                      <Show when={v.kind === 'task' && props.tasks.live(v.id)}>
+                        <LiveDot />
+                      </Show>
                       <span class="truncate">{tabLabel(v)}</span>
                     </button>
                     <button
                       onPointerDown={(e) => e.stopPropagation()}
                       onClick={() => close(key)}
-                      title="Delete terminal: stops it and everything it started"
+                      title={v.kind === 'terminal' ? 'Delete terminal: stops it and everything it started' : 'Close'}
                       class={`mx-0.5 grid size-5 shrink-0 place-items-center rounded text-fg-3 transition-colors hover:text-fg ${
                         isActive() ? '' : 'invisible group-hover:visible'
                       }`}
@@ -429,8 +452,12 @@ export function Workspace(props: {
               style={place() ? box(place()!.rect, BAR) : undefined}
               onFocusIn={() => place() && focusIn(place()!.group)}
             >
-              {/* Terminals are the only kind so far; others get their own case here. */}
-              <TerminalView id={view.id} visible={!!place()} onReady={(focus) => ready(key, focus)} class="size-full px-3 py-2" />
+              <Switch>
+                <Match when={view.kind === 'terminal'}>
+                  <TerminalView id={view.id} visible={!!place()} onReady={(focus) => ready(key, focus)} class="size-full px-3 py-2" />
+                </Match>
+                <Match when={view.kind === 'task'}>{props.tasks.render(view.id, (focus) => ready(key, focus))}</Match>
+              </Switch>
             </div>
           )
         }}
