@@ -50,6 +50,8 @@ export function TerminalView(props: {
   class?: string
 }) {
   let el!: HTMLDivElement
+  // Read once: a view shows one terminal for life, and callers pass the id through a <Show> that's gone by cleanup.
+  const id = props.id
 
   onMount(() => {
     const term = new Terminal({
@@ -74,19 +76,19 @@ export function TerminalView(props: {
       const next = `${term.cols}x${term.rows}`
       if (next === size) return
       size = next
-      socket.send({ type: 'term_resize', id: props.id, cols: term.cols, rows: term.rows })
+      socket.send({ type: 'term_resize', id, cols: term.cols, rows: term.rows })
     }
 
     const off = socket.on((e) => {
-      if (e.type === 'term_snapshot' && e.id === props.id) {
+      if (e.type === 'term_snapshot' && e.id === id) {
         term.reset()
         term.write(e.data)
-      } else if (e.type === 'term_output' && e.id === props.id) term.write(e.data)
+      } else if (e.type === 'term_output' && e.id === id) term.write(e.data)
     })
     // Size first, so the snapshot comes back already laid out for this view.
     resize()
-    socket.send({ type: 'term_subscribe', id: props.id })
-    const input = term.onData((data) => socket.send({ type: 'term_input', id: props.id, data }))
+    socket.send({ type: 'term_subscribe', id })
+    const input = term.onData((data) => socket.send({ type: 'term_input', id, data }))
 
     let timer: ReturnType<typeof setTimeout>
     const observer = new ResizeObserver(() => {
@@ -107,7 +109,7 @@ export function TerminalView(props: {
       dark.removeEventListener('change', retheme)
       off()
       input.dispose()
-      socket.send({ type: 'term_unsubscribe', id: props.id })
+      socket.send({ type: 'term_unsubscribe', id })
       term.dispose()
     })
   })
