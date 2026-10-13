@@ -27,7 +27,7 @@ export function PreviewFrame(props: { view: PreviewView; onReady: (focus: () => 
           <iframe
             ref={frame}
             title={props.view.name ?? `Port ${props.view.id}`}
-            allow="clipboard-read; clipboard-write; fullscreen"
+            allow="clipboard-write; fullscreen"
             class={`${props.class} block border-0 bg-white`}
           />
         )

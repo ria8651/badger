@@ -31,10 +31,15 @@ export function previewPort(host: string | undefined, opts: { ownPort: number; l
 
 const HOP_BY_HOP = ['connection', 'keep-alive', 'proxy-connection', 'te', 'trailer', 'transfer-encoding', 'upgrade']
 
-/** What the browser called it, so the dev server sees itself at localhost and its redirects can be turned back. */
+/**
+ * What the browser called it, so the dev server sees itself at localhost and
+ * its redirects can be turned back, and where Badger's page is: the same host
+ * without the port label, on any port (in development it's Vite's).
+ */
 function origins(req: IncomingMessage, port: number) {
   const proto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim() || 'http'
-  return { outside: `${proto}://${req.headers.host}`, inside: `http://localhost:${port}` }
+  const badger = new URL(`http://${req.headers.host}`).hostname.replace(/^\d+\./, '')
+  return { outside: `${proto}://${req.headers.host}`, inside: `http://localhost:${port}`, badger: `${proto}://${badger}:*` }
 }
 
 /**
@@ -57,16 +62,20 @@ export function proxyPreview(req: IncomingMessage, res: ServerResponse, port: nu
   const upstream = request({ host: 'localhost', port, method: req.method, path: req.url, headers }, (up) => {
     const out = { ...up.headers }
     for (const h of HOP_BY_HOP) delete out[h]
-    // Badger shows previews in a frame; only Badger's own page can frame them, and it's the same site.
+    // Badger shows previews in a frame, so the page's own rules on framing give way to one: only Badger's page may.
     delete out['x-frame-options']
-    const csp = out['content-security-policy']
-    if (csp) out['content-security-policy'] = [csp].flat().map((p) => p.replace(/(^|;)\s*frame-ancestors[^;]*/gi, '$1').replace(/^;\s*|;\s*$/g, ''))
+    const csp = [out['content-security-policy'] ?? []].flat().map((p) => p.replace(/(^|;)\s*frame-ancestors[^;]*/gi, '$1').replace(/^;\s*|;\s*$/g, ''))
+    out['content-security-policy'] = [...csp.filter(Boolean), `frame-ancestors ${o.badger}`]
     for (const local of [o.inside, `http://127.0.0.1:${port}`]) {
-      if (out.location?.startsWith(local)) out.location = o.outside + out.location.slice(local.length)
+      const at = out.location?.[local.length]
+      if (out.location?.startsWith(local) && (at === undefined || '/?#'.includes(at))) out.location = o.outside + out.location.slice(local.length)
     }
     res.writeHead(up.statusCode ?? 502, up.statusMessage, out)
     up.pipe(res)
   })
+  // A browser that goes away mid-response (a reload, an event stream) lets go of the dev server's connection too.
+  res.on('close', () => upstream.destroy())
+  req.on('error', () => upstream.destroy())
   upstream.on('error', () => {
     if (res.headersSent) return void res.destroy()
     res.writeHead(502, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })

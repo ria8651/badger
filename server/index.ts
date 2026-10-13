@@ -56,15 +56,23 @@ function broadcast(event: ServerEvent): void {
   for (const ws of targets ?? []) send(ws, event)
 }
 
-/** Where browsers reach previews, as the latest one to connect said, with `{port}` in it. */
-let previewUrl: string | undefined
+/**
+ * Where each browser reaches previews, with `{port}` in it. Claude gets the
+ * latest that isn't localhost when there is one, since that works from
+ * anywhere, and the user may be on their phone.
+ */
+const previewUrls = new Map<WebSocket, string>()
+const previewUrl = () => {
+  const urls = [...previewUrls.values()].reverse()
+  return urls.find((u) => !/\{port\}\.localhost\b/.test(u)) ?? urls[0]
+}
 
 const previews: Previews = {
   open(root, port, name, path) {
     broadcast({ type: 'open_preview', root, port, name, path })
     return sockets.size
   },
-  url: (port, path = '/') => previewUrl && previewUrl.replace('{port}', String(port)) + path,
+  url: (port, path = '/') => previewUrl()?.replace('{port}', String(port)).concat(path),
 }
 
 const store = new Store(DATA_DIR, () => broadcast({ type: 'sessions_changed' }))
@@ -305,7 +313,7 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       terminals.resize(event.id, event.cols, event.rows)
       return
     case 'preview_url':
-      if (/^https?:\/\/\{port\}\.[^/]+$/.test(event.url)) previewUrl = event.url
+      if (/^https?:\/\/\{port\}\.[a-z0-9.-]+(:\d+)?$/i.test(event.url)) previewUrls.delete(ws), previewUrls.set(ws, event.url)
       return
   }
 }
@@ -578,6 +586,7 @@ wss.on('connection', (ws: WebSocket) => {
   })
   ws.on('close', () => {
     sockets.delete(ws)
+    previewUrls.delete(ws)
     for (const set of viewers.values()) set.delete(ws)
     for (const set of termViewers.values()) set.delete(ws)
   })
