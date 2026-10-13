@@ -642,14 +642,24 @@ function CardContextBadge(props: { context: CardContext }) {
 
 /**
  * A user's message; long ones (big pastes) are clamped with a fade until expanded. Left-aligned, hanging
- * its padding into the margin so the text lines up with Claude's.
+ * its padding into the margin so the text lines up with Claude's. Children go beside it, e.g. a queued one's buttons.
  */
-function UserMessage(props: { text: string; pastes?: string[]; images?: ImageAttachment[]; card?: CardContext }) {
+export function UserMessage(props: {
+  text: string
+  pastes?: string[]
+  images?: ImageAttachment[]
+  card?: CardContext
+  /** Replaces the spacing it has in the transcript. */
+  class?: string
+  /** How tall it gets before it's clamped. */
+  maxHeight?: string
+  children?: JSX.Element
+}) {
   const [overflows, setOverflows] = createSignal(false)
   const [expanded, setExpanded] = createSignal(false)
   const clamped = () => overflows() && !expanded()
   return (
-    <div class="mt-8 mb-4 flex justify-start first:mt-0">
+    <div class={`flex items-center justify-start gap-1 ${props.class ?? 'mt-8 mb-4 first:mt-0'}`}>
       <div class="-ml-4 max-w-[80%] min-w-0 bg-surface rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed">
         <Show when={props.pastes?.length || props.images?.length || props.card}>
           <Attachments pastes={props.pastes ?? []} images={props.images ?? []} card={props.card} class={props.text ? 'mb-2' : ''} />
@@ -664,7 +674,7 @@ function UserMessage(props: { text: string; pastes?: string[]; images?: ImageAtt
             }}
             class="overflow-hidden whitespace-pre-wrap"
             style={{
-              'max-height': expanded() ? undefined : '18rem',
+              'max-height': expanded() ? undefined : (props.maxHeight ?? '18rem'),
               'mask-image': clamped() ? 'linear-gradient(to bottom, black 70%, transparent)' : undefined,
             }}
           >
@@ -677,6 +687,7 @@ function UserMessage(props: { text: string; pastes?: string[]; images?: ImageAtt
           </Show>
         </Show>
       </div>
+      {props.children}
     </div>
   )
 }

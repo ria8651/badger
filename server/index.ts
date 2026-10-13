@@ -176,6 +176,7 @@ async function snapshotFor(sessionId: string): Promise<ServerEvent> {
     draftAttachments,
     children: childSessions,
     background: [],
+    queued: [],
   }
 }
 
@@ -248,6 +249,20 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       if (event.text !== undefined && typeof event.text !== 'string') throw new BadRequest('text must be a string')
       saveDraft(ws, event.sessionId, { text: event.text, attachments: event.attachments && checkAttachments(event.attachments) })
       return
+    case 'unqueue': {
+      if (typeof event.id !== 'string') throw new BadRequest('id must be a string')
+      const message = await manager.get(event.sessionId)?.unqueue(event.id)
+      if (!message || !event.edit) return
+      // Back into the composer, ahead of anything typed since, in every tab.
+      const saved = store.draft(event.sessionId)
+      const change = {
+        text: [message.text, saved.text].filter(Boolean).join('\n\n'),
+        attachments: { pastes: [...message.pastes, ...saved.attachments.pastes], images: [...message.images, ...saved.attachments.images] },
+      }
+      store.setDraft(event.sessionId, change)
+      for (const other of viewers.get(event.sessionId) ?? []) send(other, { type: 'draft', sessionId: event.sessionId, ...change })
+      return
+    }
     case 'interrupt':
       await Promise.all([manager.get(event.sessionId)?.interrupt(), children.interrupt(event.sessionId)])
       return

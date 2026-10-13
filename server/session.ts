@@ -16,7 +16,7 @@ import {
   type Query,
   type SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk'
-import type { AnswerDraft, BackgroundTask, ImageAttachment, ModelOption, PendingPermission, PermissionMode, ServerEvent, WireMessage } from '../shared/protocol.ts'
+import type { AnswerDraft, BackgroundTask, ImageAttachment, ModelOption, PendingPermission, PermissionMode, QueuedMessage, ServerEvent, WireMessage } from '../shared/protocol.ts'
 import { wrapPaste } from '../shared/pastes.ts'
 import { BashStreams, streamEnv } from './bashStream.ts'
 import { inaccessible } from './workspace.ts'
@@ -33,6 +33,11 @@ export interface SessionTools {
   allowedTools: string[]
   /** Text to add to the conversation alongside the user's next message, if any. */
   turnContext?: () => string | undefined
+}
+
+/** A queued message, with what was sent to Claude Code so it can join the transcript once taken in. */
+interface Held extends QueuedMessage {
+  message: WireMessage
 }
 
 interface Pending extends PendingPermission {
@@ -72,6 +77,8 @@ export class LiveSession {
   private agents = new Map<string, string>()
   /** Started from the chat itself and running now. They outlive the turn that started them. */
   private background: BackgroundTask[] = []
+  /** Sent while Claude was busy and not taken in yet; Claude Code holds them until its next break or turn. */
+  private queued: Held[] = []
   /** Any background work is running, the subagents' own included; closing the process would kill it. */
   busy = false
 
@@ -204,6 +211,7 @@ export class LiveSession {
       permissions: [...this.pending.values()].map(publicPermission),
       bashOutput: this.bash.outputs(),
       background: this.background,
+      queued: this.queued.map(publicQueued),
     }
   }
 
@@ -221,10 +229,32 @@ export class LiveSession {
       message: { role: 'user' as const, content: pastes.length || images.length ? blocks : text },
     }
     if (!this.queue.push(message)) return false
-    // Echo immediately so every tab shows the message before the SDK replays it.
-    this.record({ ...message, timestamp: new Date().toISOString() } as unknown as WireMessage)
-    this.setRunning(true)
+    if (this.running) {
+      // Claude Code holds it until its next break; it joins the transcript once it's taken in, and can be withdrawn until then.
+      this.queued.push({ id: message.uuid, text, pastes, images, message: message as unknown as WireMessage })
+      this.emitQueued()
+    } else {
+      // Echo immediately so every tab shows the message before the SDK replays it.
+      this.record({ ...message, timestamp: new Date().toISOString() } as unknown as WireMessage)
+      this.setRunning(true)
+    }
     return true
+  }
+
+  /** Withdraws a queued message from Claude Code. Undefined if it was already taken in. */
+  async unqueue(id: string): Promise<QueuedMessage | undefined> {
+    // In the SDK but not yet in its types.
+    const cancel = (this.agent as Query & { cancelAsyncMessage?: (uuid: string) => Promise<boolean> }).cancelAsyncMessage
+    const queued = this.queued.find((m) => m.id === id)
+    if (!queued || !cancel || !(await cancel.call(this.agent, id))) return
+    // Claude Code also reports it cancelled, usually first; either takes it off the list.
+    this.dequeue(id)
+    return publicQueued(queued)
+  }
+
+  /** Messages Claude Code is holding mean the turn that's ending isn't the last. */
+  get hasQueued(): boolean {
+    return this.queued.length > 0
   }
 
   async interrupt(): Promise<void> {
@@ -351,6 +381,17 @@ export class LiveSession {
 
   private handle(msg: SDKMessage): void {
     const wire = msg as unknown as WireMessage
+    // Where a queued message stands in Claude Code's queue; not yet in the SDK's types.
+    if (wire.type === 'command_lifecycle') {
+      const { command_uuid: id, state } = wire as { command_uuid?: string; state?: string }
+      const queued = id && (state === 'started' || state === 'cancelled') ? this.dequeue(id) : undefined
+      // Taken in, mid-turn after a tool result or as the next turn: it joins the transcript here.
+      if (queued && state === 'started') {
+        this.record({ ...queued.message, timestamp: new Date().toISOString() })
+        this.setRunning(true)
+      }
+      return
+    }
     if (msg.type === 'stream_event') {
       this.emit({ type: 'message', sessionId: this.id, message: wire })
       return
@@ -398,6 +439,19 @@ export class LiveSession {
       this.setRunning(false)
       this.onTurnEnd()
     } else if (msg.type === 'assistant') this.setRunning(true)
+  }
+
+  /** Takes a message off the queued list, e.g. once Claude Code has taken it in or dropped it. */
+  private dequeue(id: string): Held | undefined {
+    const queued = this.queued.find((m) => m.id === id)
+    if (!queued) return
+    this.queued = this.queued.filter((m) => m !== queued)
+    this.emitQueued()
+    return queued
+  }
+
+  private emitQueued(): void {
+    this.emit({ type: 'queued', sessionId: this.id, messages: this.queued.map(publicQueued) })
   }
 
   private record(message: WireMessage): void {
@@ -615,6 +669,10 @@ export function listModels(): Promise<ModelOption[]> {
   // Ask again next time rather than keep a failure.
   models.catch(() => (models = undefined))
   return models
+}
+
+function publicQueued({ message: _, ...rest }: Held): QueuedMessage {
+  return rest
 }
 
 function publicPermission({ resolve: _r, suggestions: _s, ...rest }: Pending): PendingPermission {

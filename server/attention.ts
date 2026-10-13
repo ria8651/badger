@@ -21,7 +21,8 @@ export class Attention {
   watch(session: LiveSession): void {
     session.subscribe((e) => {
       if (e.type === 'permission_request' || e.type === 'permission_resolved') this.update()
-      else if (e.type === 'message' && e.message.type === 'result' && !this.store.parentOf(session.id)) this.mark(session.id, true)
+      // Not when Claude Code is holding messages that start the next turn.
+      else if (e.type === 'message' && e.message.type === 'result' && !session.hasQueued && !this.store.parentOf(session.id)) this.mark(session.id, true)
       else if (e.type === 'error' && !this.store.parentOf(session.id)) this.mark(session.id, true)
     })
   }

@@ -1,7 +1,7 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, mapArray, on, onCleanup, onMount, type JSX } from 'solid-js'
-import { ArrowUp, Check, FolderX, GitBranch, ImagePlus, ListChevronsDownUp, ListChevronsUpDown, SlidersHorizontal, Square, SquareTerminal, WifiOff, Zap } from 'lucide-solid'
+import { ArrowUp, Check, FolderX, GitBranch, ImagePlus, Pencil, ListChevronsDownUp, ListChevronsUpDown, SlidersHorizontal, Square, SquareTerminal, WifiOff, X, Zap } from 'lucide-solid'
 import { isLongPaste } from '../../shared/pastes.ts'
-import type { Card, DraftAttachments, PermissionMode } from '../../shared/protocol.ts'
+import type { Card, DraftAttachments, PermissionMode, QueuedMessage } from '../../shared/protocol.ts'
 import { chatActions, type ChatAction } from '../actions.ts'
 import { api, connected, socket } from '../api.ts'
 import { readImage } from '../images.ts'
@@ -15,7 +15,7 @@ import { PermissionPrompt } from './PermissionPrompt.tsx'
 import { TerminalButton } from './Terminals.tsx'
 import { TaskTray, trayItems, waitingOnTask } from './TaskTray.tsx'
 import { reveal, revealed, toolLabel } from './ToolCard.tsx'
-import { Transcript, createIndex, detail, runInBackground, setDetail } from './Transcript.tsx'
+import { Transcript, UserMessage, createIndex, detail, runInBackground, setDetail } from './Transcript.tsx'
 import { ContextMeter } from './Usage.tsx'
 import { Workspace } from './Workspace.tsx'
 import { IconButton, Loading, Menu, Select, ltr, touch, type Option } from './ui.tsx'
@@ -235,6 +235,12 @@ export function Chat(props: {
   // A card's new chat sends the card with its first message, so it's shown as attached until then.
   const pendingCard = () => (props.card && state.loaded && state.messages.length === 0 ? { card: props.card } : undefined)
   const interrupt = () => socket.send({ type: 'interrupt', sessionId: props.sessionId })
+  const unqueue = (id: string, edit = false) => {
+    // Saved first so the server puts the message ahead of what's typed, and the composer takes the result.
+    if (edit) saveDraft()
+    socket.send({ type: 'unqueue', sessionId: props.sessionId, id, edit })
+    if (edit) input.focus()
+  }
 
   /** The panel a narrow composer keeps its mode, model and the rest in. */
   const [more, setMore] = createSignal(false)
@@ -307,6 +313,10 @@ export function Chat(props: {
               ref={composer}
               class="sticky bottom-0 -mx-6 bg-bg px-6 pb-5 md:-mx-9 md:px-9 before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-bg"
             >
+              {/* Laid out like the transcript's own messages, since that's where they're headed. */}
+              <For each={state.queued}>
+                {(m) => <Queued message={m} onEdit={() => unqueue(m.id, true)} onRemove={() => unqueue(m.id)} />}
+              </For>
               {/* Everything here hangs out as far as the composer, so prompts and notices read as part of it, not the transcript. */}
               <div class="-mx-[calc(1rem+1px)] space-y-2">
                 <For each={state.permissions}>
@@ -505,6 +515,22 @@ export function Chat(props: {
         </div>
       </div>
     </Workspace>
+  )
+}
+
+/** A message waiting for Claude's next break: your message as it'll appear, with ways to take it back. */
+function Queued(props: { message: QueuedMessage; onEdit: () => void; onRemove: () => void }) {
+  const button = 'grid size-7 shrink-0 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:size-9'
+  return (
+    // Clamped shorter than in the transcript so a long one doesn't push the chat out of view above the composer.
+    <UserMessage text={props.message.text} pastes={props.message.pastes} images={props.message.images} class="mb-2" maxHeight="6lh">
+      <button type="button" onClick={props.onEdit} title="Edit" class={button}>
+        <Pencil class="size-3.5" />
+      </button>
+      <button type="button" onClick={props.onRemove} title="Remove" class={button}>
+        <X class="size-3.5" />
+      </button>
+    </UserMessage>
   )
 }
 

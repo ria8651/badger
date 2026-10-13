@@ -147,6 +147,14 @@ export type ImageAttachment = { mediaType: (typeof IMAGE_TYPES)[number]; data: s
 /** Big pastes and images waiting in the composer to be sent. */
 export type DraftAttachments = { pastes: string[]; images: ImageAttachment[] }
 
+/** A message sent while Claude was busy, which Claude Code holds until its next break; it can be withdrawn until then. */
+export interface QueuedMessage {
+  id: string
+  text: string
+  pastes: string[]
+  images: ImageAttachment[]
+}
+
 /** Anything the SDK emits, or a transcript entry read back from disk. */
 export type WireMessage = { type: string; uuid?: string; [key: string]: unknown }
 
@@ -168,6 +176,8 @@ export type ClientEvent =
       worktree?: string
     }
   | { type: 'interrupt'; sessionId: string }
+  /** Withdraw a queued message if Claude Code hasn't taken it in; with edit, it goes back into the composer ahead of what's typed there. */
+  | { type: 'unqueue'; sessionId: string; id: string; edit?: boolean }
   /** Stop one subagent or background task, leaving the rest of the chat running. */
   | { type: 'stop_task'; sessionId: string; taskId: string }
   /** Stop waiting on a running subagent or command and let it carry on in the background; without toolUseId, every one. */
@@ -215,6 +225,7 @@ export type ServerEvent =
       /** Chats this one started from a tool call and waited on, by that call's tool_use_id. */
       children: Record<string, string>
       background: BackgroundTask[]
+      queued: QueuedMessage[]
     }
   | { type: 'message'; sessionId: string; message: WireMessage }
   /** Another viewer changed the chat's unsent text or attachments. */
@@ -223,6 +234,8 @@ export type ServerEvent =
   | { type: 'bash_output'; sessionId: string; toolUseId: string; chunk: string }
   /** cwd changes when the chat moves into a worktree. */
   | { type: 'status'; sessionId: string; running: boolean; mode: PermissionMode; model?: string; cwd: string }
+  /** Messages Claude Code is holding for its next break; replaces the previous list. */
+  | { type: 'queued'; sessionId: string; messages: QueuedMessage[] }
   /** The background tasks running now; replaces the previous set. */
   | { type: 'background'; sessionId: string; tasks: BackgroundTask[] }
   /** The chat's context window after its latest turn; sent after each one and on subscribe. */
