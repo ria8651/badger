@@ -140,6 +140,23 @@ export function App() {
 
   /** On narrow screens the sidebar is a drawer over the page; going anywhere closes it. */
   const [drawer, setDrawer] = createSignal(false)
+  /** The sidebar's width on wide screens, dragged from its edge. Narrow screens use a fixed drawer. */
+  const [sidebarWidth, setSidebarWidth] = createSignal(Number(localStorage.getItem(SIDEBAR_KEY)) || SIDEBAR_DEFAULT)
+  createEffect(() => localStorage.setItem(SIDEBAR_KEY, String(sidebarWidth())))
+  const startSidebarDrag = (e: PointerEvent) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    const start = e.clientX - sidebarWidth()
+    document.body.style.cursor = 'col-resize'
+    const move = (m: PointerEvent) => setSidebarWidth(Math.round(Math.max(200, Math.min(480, m.clientX - start))))
+    const up = () => {
+      document.body.style.cursor = ''
+      removeEventListener('pointermove', move)
+      removeEventListener('pointerup', up)
+    }
+    addEventListener('pointermove', move)
+    addEventListener('pointerup', up)
+  }
   const go = (r: Route) => {
     history.pushState(null, '', pathFor(r))
     setRoute(r)
@@ -376,9 +393,10 @@ export function App() {
         <div onClick={() => setDrawer(false)} class="fixed inset-0 z-20 animate-[fade-in_150ms_ease-out] bg-[rgb(0_0_0/0.4)] md:hidden" />
       </Show>
       <aside
-        class={`fixed inset-y-0 left-0 z-30 flex w-72 max-w-[85vw] shrink-0 flex-col border-r border-line bg-bg transition-[translate,visibility] duration-200 ease-out md:static md:z-auto md:w-64 md:translate-x-0 md:visible md:transition-none ${
+        class={`fixed inset-y-0 left-0 z-30 flex w-72 max-w-[85vw] shrink-0 flex-col border-r border-line bg-bg transition-[translate,visibility] duration-200 ease-out md:relative md:z-10 md:w-(--sidebar-w) md:translate-x-0 md:visible md:transition-none ${
           drawer() ? 'translate-x-0 shadow-[0_0_48px_rgb(0_0_0/0.3)] md:shadow-none' : 'invisible -translate-x-full'
         }`}
+        style={{ '--sidebar-w': `${sidebarWidth()}px` }}
       >
         <div class="flex h-12 shrink-0 items-center gap-2 px-4">
           <span class="font-medium tracking-tight">Badger</span>
@@ -511,6 +529,12 @@ export function App() {
           </Show>
         </nav>
         <Show when={accountUsage()}>{(u) => <AccountLimits usage={u()} />}</Show>
+        <div
+          onPointerDown={startSidebarDrag}
+          onDblClick={() => setSidebarWidth(SIDEBAR_DEFAULT)}
+          title="Drag to resize; double-click to reset"
+          class="absolute inset-y-0 -right-1 z-10 hidden w-2 cursor-col-resize md:block"
+        />
       </aside>
 
       <div class="flex min-w-0 flex-1 flex-col">
@@ -594,5 +618,7 @@ export function App() {
 
 const HOME_KEY = 'badger.homeId'
 const FOCUS_KEY = 'badger.focus'
+const SIDEBAR_KEY = 'badger.sidebarWidth'
+const SIDEBAR_DEFAULT = 256
 
 const TEMP = /^\/(private\/)?(tmp|var\/folders)\//
