@@ -66,8 +66,6 @@ export function TerminalView(props: {
     term.loadAddon(new WebLinksAddon((_e, uri) => window.open(uri, '_blank', 'noopener')))
     term.open(el)
     muteQueryReplies(term)
-    // Ctrl+` toggles the dock; let it through to the page instead of the shell.
-    term.attachCustomKeyEventHandler((e) => !(e.ctrlKey && e.key === '`'))
 
     let size = ''
     const resize = () => {
