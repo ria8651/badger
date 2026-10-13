@@ -133,6 +133,10 @@ export interface TerminalInfo {
   /** The chat whose Claude started it, if any. */
   sessionId?: string
   running: boolean
+  /** The process the terminal runs, while it's running. */
+  pid?: number
+  /** TCP ports it or anything it started is listening on, e.g. a dev server's. */
+  ports?: number[]
   exitCode?: number
   /** Set when the process was killed by a signal. */
   signal?: number
@@ -203,6 +207,8 @@ export type ClientEvent =
   | { type: 'term_unsubscribe'; id: string }
   | { type: 'term_input'; id: string; data: string }
   | { type: 'term_resize'; id: string; cols: number; rows: number }
+  /** Where this browser reaches previews, with `{port}` for the port, e.g. `https://{port}.badger.example.com`. */
+  | { type: 'preview_url'; url: string }
 
 export type ServerEvent =
   | {
@@ -257,4 +263,6 @@ export type ServerEvent =
   /** The terminal's screen and scrollback as escape sequences; replaces whatever the viewer had. */
   | { type: 'term_snapshot'; id: string; data: string }
   | { type: 'term_output'; id: string; data: string }
+  /** Claude asked to show a port's preview in the workspace's panels. */
+  | { type: 'open_preview'; root: string; port: number; name?: string; path?: string }
   | { type: 'error'; sessionId?: string; error: string }

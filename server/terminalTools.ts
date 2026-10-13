@@ -1,3 +1,4 @@
+import { connect } from 'node:net'
 import { isAbsolute, resolve } from 'node:path'
 import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
@@ -8,7 +9,7 @@ import { workspaceRoot } from './workspace.ts'
 export const TERMINAL_SERVER = 'terminals'
 
 /** Reading is free; anything that runs, types or stops goes through the normal permission flow. */
-export const TERMINAL_AUTO_ALLOWED = ['list_terminals', 'read_terminal'].map((t) => `mcp__${TERMINAL_SERVER}__${t}`)
+export const TERMINAL_AUTO_ALLOWED = ['list_terminals', 'read_terminal', 'open_preview'].map((t) => `mcp__${TERMINAL_SERVER}__${t}`)
 
 const DEFAULT_LINES = 50
 /** Without wait_for, how long to collect output after an action before replying. */
@@ -23,11 +24,19 @@ const waitFor = z
   .describe('Regex to wait for in output that arrives after this call, e.g. "ready in|listening on". Matched without colours.')
 const timeout = z.number().min(1).max(600).optional().describe('Seconds to wait for wait_for (default 30)')
 
+/** Showing what a port serves in the user's browser. */
+export interface Previews {
+  /** Shows it in the panels of every browser tab on that workspace; returns how many tabs are connected. */
+  open(root: string, port: number, name?: string, path?: string): number
+  /** The address a browser opens it at, once one has said where previews are. */
+  url(port: number, path?: string): string | undefined
+}
+
 /**
  * Badger's terminals as tools, for one chat. Terminals are the user's: they
  * see them in the browser, and they outlive this chat and Badger restarts.
  */
-export function terminalServer(terminals: Terminals, sessionId: string, chatCwd: () => string): McpSdkServerConfigWithInstance {
+export function terminalServer(terminals: Terminals, sessionId: string, chatCwd: () => string, previews: Previews): McpSdkServerConfigWithInstance {
   // The chat's directory moves if Claude enters a worktree; look its root up again when it does.
   let rootOf: [string, string] | undefined
   const root = () => {
@@ -122,7 +131,8 @@ export function terminalServer(terminals: Terminals, sessionId: string, chatCwd:
     const state = t.running ? 'running' : t.signal ? `killed (signal ${t.signal})` : `exited ${t.exitCode ?? '?'}`
     const what = t.command ? `$ ${t.command}` : `shell, showing "${t.title}"`
     const where = t.root === root() ? (t.cwd === root() ? '' : ` in ${t.cwd}`) : ` in ${t.cwd} (another workspace)`
-    return `${t.id} [${state}] ${what}${where}${t.sessionId === sessionId ? ' (started by this chat)' : ''}`
+    const ports = t.ports?.length ? `, listening on ${t.ports.join(', ')}` : ''
+    return `${t.id} [${state}${ports}] ${what}${where}${t.sessionId === sessionId ? ' (started by this chat)' : ''}`
   }
 
   const missing = (tid: string) => error(`No terminal ${tid}. Use list_terminals.`)
@@ -134,6 +144,7 @@ export function terminalServer(terminals: Terminals, sessionId: string, chatCwd:
       "Badger has terminals the user can see and type into in the browser. They belong to the user's workspace, not this chat: they keep running across chats and Badger restarts, and the user may already have dev servers running in them.",
       'For anything long-running (dev servers, watchers, tails), use start_terminal rather than a background Bash command, so the user can see it and it outlives this chat. Check list_terminals first: if what you need is already running, read or restart that terminal instead of starting a second copy.',
       'Shell terminals the user opened can be driven with send_input, but they may be in the middle of something; prefer reading them.',
+      "To show the user a web page a dev server serves, use open_preview: it opens in a panel beside this chat. The user may be on another computer or a phone, so give them preview URLs, never localhost ones.",
     ].join('\n'),
     tools: [
       tool(
@@ -213,7 +224,42 @@ export function terminalServer(terminals: Terminals, sessionId: string, chatCwd:
         },
         { annotations: { destructiveHint: true } },
       ),
+      tool(
+        'open_preview',
+        "Show what a port on this machine serves, e.g. a dev server, in a panel beside this chat in the user's browser. Returns the preview's URL, which works in its own browser tab too. Opening a port that's already showing navigates it to path and reloads it.",
+        {
+          port: z.number().int().min(1).max(65535),
+          name: z.string().optional().describe('Tab label, e.g. "Storefront" or "Storybook". Defaults to the port.'),
+          path: z.string().optional().describe('Path to open, e.g. "/settings". Defaults to "/".'),
+        },
+        async (args) => {
+          const path = args.path ? (args.path.startsWith('/') ? args.path : `/${args.path}`) : '/'
+          const listening = await isListening(args.port)
+          const tabs = previews.open(root(), args.port, args.name, path)
+          const url = previews.url(args.port, path)
+          return text(
+            [
+              tabs ? `Opened in the panels of ${tabs === 1 ? 'the browser tab' : `${tabs} browser tabs`} showing Badger.` : 'No browser has Badger open, so nothing was shown.',
+              url ? `URL: ${url}` : '',
+              listening ? '' : `Nothing is listening on port ${args.port} yet; the preview loads once something does.`,
+            ]
+              .filter(Boolean)
+              .join('\n'),
+          )
+        },
+        { annotations: { readOnlyHint: true } },
+      ),
     ],
+  })
+}
+
+function isListening(port: number): Promise<boolean> {
+  return new Promise((done) => {
+    const s = connect({ host: 'localhost', port })
+    const finish = (ok: boolean) => (s.destroy(), done(ok))
+    s.setTimeout(1000, () => finish(false))
+    s.once('connect', () => finish(true))
+    s.once('error', () => finish(false))
   })
 }
 

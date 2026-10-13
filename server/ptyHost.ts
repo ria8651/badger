@@ -131,7 +131,7 @@ function start(t: Term): void {
     return
   }
   t.pty = p
-  Object.assign(t.info, { running: true, exitCode: undefined, signal: undefined })
+  Object.assign(t.info, { running: true, pid: p.pid, exitCode: undefined, signal: undefined })
   p.onData((data) => {
     if (t.pty !== p) return
     t.screen.write(data, () => broadcast({ type: 'output', id: t.info.id, data }))
@@ -139,7 +139,7 @@ function start(t: Term): void {
   p.onExit(({ exitCode, signal }) => {
     if (t.pty !== p) return
     t.pty = null
-    Object.assign(t.info, { running: false, exitCode, signal: signal || undefined })
+    Object.assign(t.info, { running: false, pid: undefined, exitCode, signal: signal || undefined })
     // A shell that exits on its own is finished with, like closing a terminal tab.
     if (!t.info.command && !t.keep) return void remove(t).catch(() => {})
     if (!t.keep) note(t, signal ? `killed by signal ${signal}` : `exited with code ${exitCode}`)

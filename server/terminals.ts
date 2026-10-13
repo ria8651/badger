@@ -5,6 +5,7 @@ import { connect, type Socket } from 'node:net'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { TerminalInfo } from '../shared/protocol.ts'
+import { listeningPorts } from './ports.ts'
 import { PTY_HOST_VERSION, type CreateSpec, type HostEvent, type HostRequest } from './ptyProtocol.ts'
 
 const HOST_SCRIPT = fileURLToPath(new URL('./ptyHost.ts', import.meta.url))
@@ -12,6 +13,9 @@ const HOST_SCRIPT = fileURLToPath(new URL('./ptyHost.ts', import.meta.url))
 export type TerminalEvent = { type: 'terminals'; terminals: TerminalInfo[] } | { type: 'output'; id: string; data: string }
 
 type Reply = { result?: unknown; error?: string }
+
+/** How often running terminals are checked for ports they listen on. */
+const PORTS_POLL_MS = 2000
 
 /**
  * The server's connection to the PTY host (server/ptyHost.ts), starting the
@@ -31,6 +35,8 @@ export class Terminals {
   /** Set while an outdated host with no terminals is shutting down so a current one can replace it. */
   private replacing = false
   private readonly socketPath: string
+  /** What each running terminal listens on; the host doesn't know, so it's added to its list here. */
+  private ports = new Map<string, number[]>()
 
   constructor(
     private dataDir: string,
@@ -38,6 +44,7 @@ export class Terminals {
     private env: NodeJS.ProcessEnv,
   ) {
     this.socketPath = join(dataDir, 'pty.sock')
+    setInterval(() => void this.pollPorts(), PORTS_POLL_MS).unref()
   }
 
   /** Listeners run synchronously, in the order the host sent things. */
@@ -77,9 +84,36 @@ export class Terminals {
   }
 
   private upsert(info: TerminalInfo): TerminalInfo {
+    info = this.withPorts(info)
     const i = this.terminals.findIndex((t) => t.id === info.id)
     this.terminals = i < 0 ? [...this.terminals, info] : this.terminals.with(i, info)
     return info
+  }
+
+  private withPorts = (t: TerminalInfo): TerminalInfo => {
+    const ports = t.running ? this.ports.get(t.id) : undefined
+    return ports ? { ...t, ports } : { ...t, ports: undefined }
+  }
+
+  private polling = false
+  private async pollPorts(): Promise<void> {
+    const running = this.terminals.filter((t) => t.running && t.pid)
+    if (this.polling || (!running.length && !this.ports.size)) return
+    this.polling = true
+    try {
+      const byPid = await listeningPorts(running.map((t) => t.pid!))
+      const next = new Map<string, number[]>()
+      for (const t of running) if (byPid.has(t.pid!)) next.set(t.id, byPid.get(t.pid!)!)
+      const key = (m: Map<string, number[]>) => JSON.stringify([...m].sort())
+      if (key(next) === key(this.ports)) return
+      this.ports = next
+      this.terminals = this.terminals.map(this.withPorts)
+      this.emit({ type: 'terminals', terminals: this.terminals })
+    } catch (err) {
+      console.error('Checking terminal ports failed:', err instanceof Error ? err.message : err)
+    } finally {
+      this.polling = false
+    }
   }
 
   /** Plain text of the last `lines` lines on screen. */
@@ -220,14 +254,14 @@ export class Terminals {
             `PTY host ${event.pid} runs protocol v${event.version}, this server v${PTY_HOST_VERSION}. Close all terminals (or kill ${event.pid}) to update it.`,
           )
         }
-        this.terminals = event.terminals
+        this.terminals = event.terminals.map(this.withPorts)
         this.known = true
-        this.emit({ type: 'terminals', terminals: event.terminals })
+        this.emit({ type: 'terminals', terminals: this.terminals })
         this.greeted()
         return
       case 'terminals':
-        this.terminals = event.terminals
-        this.emit(event)
+        this.terminals = event.terminals.map(this.withPorts)
+        this.emit({ type: 'terminals', terminals: this.terminals })
         return
       case 'output':
         this.emit(event)

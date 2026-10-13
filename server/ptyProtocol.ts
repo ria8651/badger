@@ -6,7 +6,7 @@ import type { TerminalInfo } from '../shared/protocol.ts'
  * started by older code; bump this when the messages or the host's behaviour
  * change, and the server replaces an outdated host once it has no terminals.
  */
-export const PTY_HOST_VERSION = 2
+export const PTY_HOST_VERSION = 3
 
 export interface CreateSpec {
   cwd: string

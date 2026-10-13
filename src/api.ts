@@ -16,7 +16,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 const get = <T>(path: string) => request<T>('GET', path)
 
-type Config = { defaultCwd: string; scratchCwd: string }
+type Config = { defaultCwd: string; scratchCwd: string; port: number }
 
 type CardPatch = Partial<Pick<Card, 'title' | 'description' | 'status' | 'position' | 'parentId'>>
 
