@@ -406,6 +406,7 @@ export function App() {
         style={{ '--sidebar-w': `${sidebarWidth()}px` }}
       >
         <div class="flex h-12 shrink-0 items-center gap-2 px-4">
+          <img src="/favicon.svg" alt="" class="size-5" />
           <span class="font-medium tracking-tight">Badger</span>
           <button
             onClick={toggleNotifications}

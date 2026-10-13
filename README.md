@@ -1,18 +1,42 @@
-# Badger
+<h1 align="center">
+  <img src="public/favicon.svg" alt="" width="72"><br>
+  Badger
+</h1>
 
-A web chat interface for Claude Code running on a server. The browser talks to a Node server over a WebSocket; the server drives Claude Code through the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk).
+<p align="center">
+  Claude Code in your browser, running on your own machine.<br>
+  Chats, terminals, dev server previews and a project board in one tab.
+</p>
 
-## Running
+<p align="center">
+  <img src="docs/screenshots/chat.png" alt="A chat beside a terminal running a dev server, with the dev server previewed in a panel (Badger, inside Badger)" width="900">
+</p>
 
-```bash
-cp .env.example .env   # set WORKSPACE_DIR
-pnpm install
-pnpm dev               # server on :3001, Vite on :5173
-```
+Badger is a web UI for [Claude Code](https://claude.com/claude-code) that runs on a server: your laptop, a NAS or a box in the cupboard. Start a chat from your phone, close the tab, and pick it up at your desk. Every chat is a real Claude Code session, so your `CLAUDE.md`, settings, hooks, skills and MCP servers all work, and chats you start in the terminal show up too.
 
-Production: `pnpm build && pnpm start` (the server serves `dist/` itself).
+## Features
 
-Claude auth comes from `ANTHROPIC_API_KEY` if set, otherwise from the server user's existing `claude` login.
+- **The full Claude Code.** Driven through the [Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk), not a reimplementation. Plan mode, auto mode, model picker, images, queued messages.
+- **Terminals beside the chat.** Tiled around the conversation. Claude can start, read and restart them, and wait for a dev server to come up.
+- **Previews.** Anything listening on a port opens in a panel at `<port>.your-host`, hot reload included.
+- **A project board.** Cards hold chats from any repo. Claude can read and update the board, and the radar shows what needs you across every project.
+- **Worktrees.** Run several chats on one repo side by side, each in its own git worktree, and merge one back with a button.
+- **Subagents and background tasks.** See what each agent is doing as it happens, and stop or background them.
+- **Permissions in the browser.** Approve tool calls, answer Claude's questions and review plans from any tab or your phone, with notifications when something's waiting.
+
+## Screenshots
+
+| | |
+|---|---|
+| <img src="docs/screenshots/agents.png" alt="Three subagents running in the background, one open in a pane with its report"> | <img src="docs/screenshots/question.png" alt="Claude asking a multiple-choice question in the chat"> |
+| **Subagents**: watch them work, open one in a pane | **Questions and permissions**: answer from any tab |
+
+<p align="center">
+  <img src="docs/screenshots/board.png" alt="A project board with backlog, to do, in progress, review and done columns" width="900"><br>
+  <b>Projects</b>: a board of cards, each holding its chats. Claude can read and update it too.
+</p>
+
+## Quick start
 
 ### Docker / Podman
 
@@ -20,39 +44,35 @@ Claude auth comes from `ANTHROPIC_API_KEY` if set, otherwise from the server use
 mkdir badger && docker compose up -d   # on :3001
 ```
 
-That pulls `ghcr.io/ria8651/badger`, built for amd64 and arm64 by GitHub Actions: `latest` follows `spike`, and `v*` tags publish versions. Add `--build` to build it from your checkout instead, e.g. after adding tools to the `Dockerfile`.
+That pulls `ghcr.io/ria8651/badger` (amd64 and arm64). Open a terminal in Badger and log in once with `claude`, `gh auth login` and `git config --global …`. Everything persists in `./badger`: logins, transcripts, the database and your repos (in `~/code`).
 
-Everything that persists is in one folder, `BADGER_DIR` (default `./badger`), mounted at `/badger` and used as the container's `HOME`: Claude Code's transcripts and login, Badger's database, git and gh config, and repos, which go in `~/code` (the default folder). Log in once from a Badger terminal with `claude`, `gh auth login` and `git config --global …`; it survives the container being recreated. Any `user:` works as long as it can write the folder.
+### From source
 
-- It has no auth of its own: put it behind a proxy that does. Proxies must pass WebSocket upgrades on `/ws` and keep the `Host` header.
-- For previews, also send `*.<Badger's host>` to it (a wildcard DNS record, certificate and proxy route, behind the same auth), with WebSocket upgrades on any path. In bastion that's a `*.badger.example.com` route to the same upstream and gate. Previews only work when the browser reaches Badger by host name, not by IP address.
+```bash
+cp .env.example .env   # set WORKSPACE_DIR
+pnpm install
+pnpm dev               # server on :3001, Vite on :5173
+```
+
+Production: `pnpm build && pnpm start`. Claude auth comes from `ANTHROPIC_API_KEY` if set, otherwise from the server user's `claude` login.
+
+## Security
+
+**Badger runs commands as its user and has no login of its own.** It binds to `127.0.0.1` by default. To reach it from elsewhere, put it behind a proxy that handles auth, such as [bastion](https://github.com/ria8651/bastion).
+
+<details>
+<summary>Self-hosting notes</summary>
+
+- Proxies must pass WebSocket upgrades on `/ws` and keep the `Host` header.
+- For previews, also send `*.<Badger's host>` to it (a wildcard DNS record, certificate and proxy route, behind the same auth), with WebSocket upgrades on any path. Previews only work when the browser reaches Badger by host name, not by IP address.
+- `latest` follows `spike`, and `v*` tags publish versions. `docker compose up -d --build` builds from your checkout instead, e.g. after adding tools to the `Dockerfile`.
+- `BADGER_DIR` (default `./badger`) is mounted at `/badger` and used as the container's `HOME`. Any `user:` works as long as it can write the folder.
 - Use git over HTTPS (`gh auth login` sets it up). `ssh` refuses to run as a uid with no passwd entry, which a custom `user:` is.
 - The container user can't `apt-get`; install extra tools with `docker exec -u root badger apt-get install …`, or add them to the `Dockerfile`.
 - Terminals don't outlive the container: restarting it restarts the server and the PTY host together.
 
+</details>
+
 ## How it works
 
-- **One live Claude Code process per chat** (`server/session.ts`). `query()` is fed by an async queue (`server/queue.ts`), so the process persists between turns and messages sent mid-turn are delivered at the next break. Idle processes close after 15 minutes; the next message resumes the session from disk.
-- **Transcripts stay with Claude Code.** They live where Claude Code puts them (`~/.claude/projects`). The session list and history come from the SDK's `listSessions` / `getSessionMessages`, so CLI sessions show up too.
-- **Chats without a folder.** Claude Code always needs a working directory, so "No folder" chats run in `SCRATCH_DIR` (default `~/.badger/scratch`, outside any repo). It's created on startup with a `CLAUDE.md` saying there's no codebase. It's the default for new chats, and these chats get no terminals.
-- **Cards in SQLite.** Project management (a board of cards, each holding chats from any repo) lives in `DATA_DIR/badger.db` via `node:sqlite` (`server/db.ts`). Cards sit above repos, so nothing is committed to one. Writes broadcast `cards_changed` so every tab refetches. **Projects** are the top-level cards; each one's page is its board of cards, with its brief and chats folded away above it (`parent_id`, shared helpers in `shared/cardTree.ts`). Deeper nesting works in the data but isn't offered in the UI. Deleting is soft: only the deleted card is marked (`deleted_at`), and every query goes through `VISIBLE`, which hides it and everything inside it. The rows stay in the table so migrations carry them along, ready for restoring later (clearing the one mark, so a card deleted on its own beforehand would stay deleted); the audit log is history, not a backup. There's no restore UI yet.
-- **Focus and radar.** Each tab works in one project or all of them (`sessionStorage`, so two tabs can be on two projects). Focus scopes the sidebar's chats, the Board button and new chats, which go on the project's card in the repo its work last ran in. It follows navigation: opening a project focuses it, the projects board unfocuses, and opening something in another project moves there. A third choice, No project, lists only chats on no card, for filing them: each sidebar row can be put on a project or card by searching (or a new project by typing its name), and it stays put until you open a project. The radar (`/radar`) is the across-everything view with nothing to set up: chats that need you, cards in progress or review (flagged idle after 3 days), the top of each project's to do or backlog, and what was done this week. It works from data Badger already has (status changes come from the audit log), since views that depend on people filling in fields don't get used. Everything is yours until there are users.
-- **Claude can use the board.** Every chat gets an in-process MCP server (`server/boardTools.ts`) with tools to list, read, create and update cards and to link itself to a card. New cards go in the chat's project unless Claude says otherwise. These are pre-approved; `delete_card` goes through the normal permission flow. When a chat is on a card, a `UserPromptSubmit` hook also adds the card's current state, including the project it's in, to the next turn, but only when it has changed since that chat last saw it (tracked by hash in the database, so restarts don't repeat it). It goes into the conversation rather than the system prompt, so it never invalidates the prompt cache.
-- **Permissions in the browser.** `canUseTool` parks each request until a client answers. In auto mode Claude Code's classifier approves or denies calls itself and only the ones it can't decide reach the browser. `AskUserQuestion` and `ExitPlanMode` get dedicated UIs. Pending prompts survive reloads via the snapshot sent on subscribe.
-- **Attention** (`server/attention.ts`, `src/attention.ts`). A chat needs you when a prompt is waiting on you (a child chat's counts as its parent's) or a turn ended that you haven't looked at. Unread is stored in the database; a tab clears it by sending `seen` for the chat it has open while it's visible and focused. Every tab gets the whole set as `attention`, for the sidebar and board dots and the `(n)` in the page title. The bell in the sidebar turns on browser notifications, shown only while you're not looking at the page; they need https or localhost. There's one user, so there's one unread set.
-- **Multi-tab.** Any number of sockets can view a session; all receive the same stream.
-- **Terminals outlive the server.** PTYs live in a separate detached process (`server/ptyHost.ts`, reached over `DATA_DIR/pty.sock`, log in `DATA_DIR/pty-host.log`), so shells and dev servers keep running when the Badger server restarts. The server starts the host when there isn't one; the host exits once it has neither terminals nor a server. A headless xterm per terminal tracks the screen, so a viewer that attaches or reloads gets an exact repaint (`term_snapshot`) before live output, and Claude reads output as plain text. Terminals get the environment Badger started with, minus what pnpm and `.env` add.
-- **Terminals belong to a workspace, not a chat.** Each is grouped by the git root of its directory (each worktree is its own), and every chat in that workspace shows the same panels, tiled around the chat (Cmd/Ctrl+K, then a key: T new terminal, `\` and `-` split, arrows move focus, W close, P show or hide). The sidebar lists all of them; `/t/:id` shows one full page. Closing a tab or restarting kills the process tree, not just the shell.
-- **Worktrees are Claude Code's.** Before a chat's first message, an "In a worktree" checkbox under its folder starts it in its own git worktree, so several pieces of work on one repo run side by side. Badger passes `--worktree <name>` (the card's number and title, or Claude picks one) and Claude Code makes it under `<repo>/.claude/worktrees/`, applying its own worktree settings, hooks and `.worktreeinclude`. The chat's directory follows what Claude reports, including mid-chat `EnterWorktree`/`ExitWorktree`, so terminals follow too. Badger adds `/.claude/worktrees/` to the repo's `.git/info/exclude` so the main checkout stays clean. A card lists the worktrees its chats run in, with uncommitted and unmerged counts, and can remove one: refused while it has uncommitted changes, a chat is working in it or it has terminals; its branch is deleted only if merged.
-- **Subagents show their work.** Claude Code's own subagents (the `Agent` tool) render as a card with the agent's transcript nested inside and its report at the end. Live, their messages arrive tagged with `parent_tool_use_id`; from disk they're read with `listSubagents` / `getSubagentMessages`. Claude Code's `task_*` events (kept in memory only, since it doesn't save them) say whether each is still running, so a background agent stays live after its call returns, with a one-line progress summary (`agentProgressSummaries`). Read back from disk, the `<task-notification>` Claude was given stands in for them. The chat's tasks are listed in a tray by the composer (`src/components/TaskTray.tsx`), so they stay in view however far the transcript scrolls: every subagent, plus shells, monitors and workflows once they run as tasks, with anything in `background_tasks_changed` not otherwise accounted for. A subagent's own tasks are indented under it, at any depth. Running ones are always shown with Stop; finished ones fold into one row, though a finished subagent with work still running stays up with it. Clicking one opens its call in the transcript, unfolding whatever it's folded into (subagents included), and scrolls to it. A subagent or command the turn is waiting on can be sent to the background (`backgroundTasks`, Claude Code's Ctrl+B): from its row, its card, or the composer for all of them (Ctrl+B there too). Badger declares `perTaskStopAffordance`, so stopping a turn leaves background work running. Background work keeps the process from idling out. A permission prompt from a subagent says which one asked.
-- **Child chats.** A tool call can start another chat and wait on it, like a subagent, but as a full Claude Code session in a directory of its own (`server/children.ts`). The parent blocks until the child's turn ends and gets its reply as the tool result; in-process MCP tools have no call timeout by default. Children are recorded in the database, kept out of the sidebar and shown nested inside the parent's tool call, with their permission prompts alongside the parent's. Stopping the parent stops them too.
-- **Merging a worktree** (`server/merge.ts`) is the first use. A worktree can't merge itself, so `merge_worktree` checks the worktree is committed and the main checkout is clean and idle, then runs a child chat in the main checkout that merges, resolves conflicts and runs checks. One merge per checkout at a time. If it lands, cleanup waits until the parent's turn ends, since the parent is still running in the worktree. Badger then removes the worktree and its branch and closes its terminals. It moves the card to done if nothing else on it is still going, and otherwise just archives the chat. The composer's actions menu offers it to worktree chats (`src/actions.ts`).
-- **Context and plan usage** (`server/usage.ts`) come from Claude Code itself: `getContextUsage` for how full a chat's window is, shown by the composer and broken down on click, and the `/usage` data for the plan's session and weekly limits, shown at the foot of the sidebar. A chat with a live process is asked directly; otherwise a process is started just to answer (resumed from the transcript, no settings loaded so no hooks run, nothing sent to the model) and closed. Context is sent on subscribe and after each turn. Plan limits are read on connect, after each turn and every 5 minutes while a tab is open, at most once a minute.
-- **Claude can use the terminals.** A second in-process MCP server (`server/terminalTools.ts`) lists, reads, starts, types into, restarts and stops terminals, with an optional `wait_for` regex so Claude can restart a dev server and wait until it's up. Reading is pre-approved; the rest goes through the normal permission flow.
-- **Previews** (`server/preview.ts`). `<port>.<Badger's host>` is whatever listens on that port on Badger's machine: `5173.badger.example.com`, or `5173.localhost:3001` locally (browsers resolve `*.localhost` themselves). A subdomain rather than a path, so dev servers can assume they're at `/`, and an origin per port, so a previewed page can't reach Badger's API. The proxy addresses requests to `localhost:<port>` (Vite refuses other hosts), turns the preview's own `Origin` and redirects to `localhost` around, strips headers that forbid framing, and passes WebSockets through, so hot reload works. Badger's own port is refused. Bound to loopback, only `*.localhost` names count, against DNS rebinding. Nothing listening yet gets a page that checks again every 2 seconds. Every 2 seconds the server also checks which ports each running terminal's process tree listens on (`server/ports.ts`: lsof, or `/proc` on Linux); the terminal's tab and page offer those as preview buttons. A preview opens as a panel (`src/components/PreviewFrame.tsx`, a frame on the preview's URL) with reload and open-in-a-new-tab. Badger can't see where a cross-origin frame navigates, so both start from the path it was opened at. Claude opens them with the pre-approved `open_preview` tool, with an optional name for the tab and path. Each browser tells the server where it reaches previews, so the URL Claude gets back works from wherever you're looking.
-
-Protocol types: `shared/protocol.ts`.
-
-## Security
-
-The server can run arbitrary commands as its user. It binds to `127.0.0.1` by default and has no authentication yet, so don't expose it beyond localhost.
+A Node server drives one Claude Code process per chat and streams it to any number of browser tabs over a WebSocket. Transcripts stay where Claude Code keeps them; Badger's own state (cards, attention, child chats) is a SQLite file.
