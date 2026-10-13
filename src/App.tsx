@@ -211,7 +211,6 @@ export function App() {
     const archived = new Set(sessions().flatMap((s) => (s.archived ? [s.id] : [])))
     return Object.keys(attention()).filter((id) => !archived.has(id)).length
   })
-  createEffect(() => (document.title = needsYou() ? `(${needsYou()}) Badger` : 'Badger'))
 
   const active = createMemo(() => sessions().filter((s) => !s.archived && inFocus(s)))
   const archived = createMemo(() => sessions().filter((s) => s.archived && inFocus(s)))
@@ -369,6 +368,14 @@ export function App() {
     }
     return r.kind === 'board' ? 'Projects' : r.kind === 'radar' ? 'Radar' : 'New chat'
   }
+  // The page first, since tabs cut titles short, and a dot on the icon for when the count is cut off too.
+  createEffect(() => {
+    const page = route().kind === 'home' ? '' : pageTitle()
+    document.title = `${needsYou() ? `(${needsYou()}) ` : ''}${page ? `${page} · ` : ''}Badger`
+  })
+  createEffect(() => {
+    document.querySelector<HTMLLinkElement>('link[rel=icon]')!.href = needsYou() ? '/favicon-alert.svg' : '/favicon.svg'
+  })
 
   return (
     <div class="flex h-full">
