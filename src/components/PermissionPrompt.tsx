@@ -1,6 +1,6 @@
 import { For, Match, Show, Switch, createEffect, createSignal, on, onCleanup, type JSX } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
-import { Check } from 'lucide-solid'
+import { Check, ChevronDown } from 'lucide-solid'
 import type { AnswerDraft, PendingPermission, PermissionMode } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
 import { Markdown } from './Markdown.tsx'
@@ -35,21 +35,30 @@ export function PermissionPrompt(props: {
   return (
     <Switch
       fallback={
-        <Shell from={props.from} title={`Allow ${toolLabel(p().toolName)}?`} subtitle={toolSummary(p().toolName, p().input, props.cwd)}>
+        <Shell
+          id={p().requestId}
+          from={props.from}
+          title={`Allow ${toolLabel(p().toolName)}?`}
+          subtitle={toolSummary(p().toolName, p().input, props.cwd)}
+          actions={
+            <>
+              <FeedbackInput value={feedback()} onChange={setFeedback} placeholder="Reason for denying (optional)" />
+              <div class="flex flex-wrap gap-2 pt-1">
+                <Button primary onClick={() => respond('allow')}>Allow</Button>
+                <Show when={p().canAlwaysAllow}>
+                  <Button onClick={() => respond('allow_always')}>Always allow</Button>
+                </Show>
+                <Button onClick={() => respond('deny')}>Deny</Button>
+              </div>
+            </>
+          }
+        >
           <ToolInput name={p().toolName} input={p().input} />
           <Show when={p().blockedPath}>
             {(path) => (
               <p class="text-xs text-danger">Outside allowed directories: {relPath(path(), props.cwd)}</p>
             )}
           </Show>
-          <FeedbackInput value={feedback()} onChange={setFeedback} placeholder="Reason for denying (optional)" />
-          <div class="flex flex-wrap gap-2 pt-1">
-            <Button primary onClick={() => respond('allow')}>Allow</Button>
-            <Show when={p().canAlwaysAllow}>
-              <Button onClick={() => respond('allow_always')}>Always allow</Button>
-            </Show>
-            <Button onClick={() => respond('deny')}>Deny</Button>
-          </div>
         </Shell>
       }
     >
@@ -65,16 +74,24 @@ export function PermissionPrompt(props: {
         />
       </Match>
       <Match when={p().toolName === 'ExitPlanMode'}>
-        <Shell from={props.from} title="Ready to leave plan mode?">
-          <div class="max-h-[50vh] overflow-auto border border-line px-4 py-3 rounded-lg">
+        <Shell
+          id={p().requestId}
+          from={props.from}
+          title="Ready to leave plan mode?"
+          actions={
+            <>
+              <FeedbackInput value={feedback()} onChange={setFeedback} placeholder="Tell Claude what to change (optional)" />
+              <div class="flex flex-wrap gap-2 pt-1">
+                <Button primary onClick={() => approvePlan('auto')}>Approve, auto mode</Button>
+                <Button onClick={() => approvePlan('acceptEdits')}>Approve, auto-accept edits</Button>
+                <Button onClick={() => approvePlan('default')}>Approve, ask before edits</Button>
+                <Button onClick={() => respond('deny')}>Keep planning</Button>
+              </div>
+            </>
+          }
+        >
+          <div class="border border-line px-4 py-3 rounded-lg">
             <Markdown text={String(p().input.plan ?? '')} />
-          </div>
-          <FeedbackInput value={feedback()} onChange={setFeedback} placeholder="Tell Claude what to change (optional)" />
-          <div class="flex flex-wrap gap-2 pt-1">
-            <Button primary onClick={() => approvePlan('auto')}>Approve, auto mode</Button>
-            <Button onClick={() => approvePlan('acceptEdits')}>Approve, auto-accept edits</Button>
-            <Button onClick={() => approvePlan('default')}>Approve, ask before edits</Button>
-            <Button onClick={() => respond('deny')}>Keep planning</Button>
           </div>
         </Shell>
       </Match>
@@ -87,7 +104,6 @@ const copy = <T,>(value: T): T => JSON.parse(JSON.stringify(value))
 
 /**
  * Every question at once, so ones that depend on each other can be read together.
- * The questions scroll inside a capped height so the buttons stay on screen.
  * Half-finished answers are saved with the pending question on the server, so they
  * survive reloads and switching chats, and every tab shows the same ones.
  */
@@ -155,8 +171,24 @@ function QuestionPrompt(props: {
   }
 
   return (
-    <Shell from={props.from} title={questions().length > 1 ? `Claude has ${questions().length} questions` : 'Claude has a question'}>
-      <div class="-mx-4 max-h-[60vh] space-y-5 overflow-y-auto px-4">
+    <Shell
+      id={props.requestId}
+      from={props.from}
+      title={questions().length > 1 ? `Claude has ${questions().length} questions` : 'Claude has a question'}
+      actions={
+        <div class="flex flex-wrap items-center gap-2 pt-1">
+          {/* Unanswered questions go back as "No answer"; Skip declines the whole set. */}
+          <Button primary disabled={unanswered() === questions().length} onClick={submit}>
+            Submit
+          </Button>
+          <Button onClick={props.onSkip}>{questions().length > 1 ? 'Skip all' : 'Skip'}</Button>
+          <Show when={unanswered() && questions().length > 1}>
+            <span class="ml-auto text-xs tabular-nums text-fg-3">{unanswered()} unanswered</span>
+          </Show>
+        </div>
+      }
+    >
+      <div class="space-y-5">
         <For each={questions()}>
           {(q) => {
             // Only the picked option's preview: following the pointer would reflow the options under it.
@@ -225,25 +257,37 @@ function QuestionPrompt(props: {
           }}
         </For>
       </div>
-      <div class="flex flex-wrap items-center gap-2 pt-1">
-        {/* Unanswered questions go back as "No answer"; Skip declines the whole set. */}
-        <Button primary disabled={unanswered() === questions().length} onClick={submit}>
-          Submit
-        </Button>
-        <Button onClick={props.onSkip}>{questions().length > 1 ? 'Skip all' : 'Skip'}</Button>
-        <Show when={unanswered() && questions().length > 1}>
-          <span class="ml-auto text-xs tabular-nums text-fg-3">{unanswered()} unanswered</span>
-        </Show>
-      </div>
     </Shell>
   )
 }
 
-/** Accent dot: this is waiting on you. */
-function Shell(props: { title: string; subtitle?: string; from?: string; children: JSX.Element }) {
+/** Prompts folded away, by request id. Kept outside them so it survives switching chats. */
+const [folded, setFolded] = createSignal<ReadonlySet<string>>(new Set())
+
+/**
+ * Accent dot: this is waiting on you. The header folds the prompt down to itself, so a long
+ * one doesn't hide the chat you need to answer it. Open, it fits the chat pane above the
+ * composer: the body scrolls and the actions stay on screen.
+ */
+function Shell(props: {
+  id: string
+  title: string
+  subtitle?: string
+  from?: string
+  actions: JSX.Element
+  children: JSX.Element
+}) {
+  const open = () => !folded().has(props.id)
+  const toggle = () =>
+    setFolded((set) => {
+      const next = new Set(set)
+      if (!next.delete(props.id)) next.add(props.id)
+      return next
+    })
+
   return (
-    <div class="space-y-3 border border-edge p-4 text-[13px] rounded-2xl">
-      <div class="flex items-center gap-2.5">
+    <div class="flex max-h-[max(14rem,calc(100cqh-10rem))] flex-col border border-edge text-[13px] rounded-2xl">
+      <button onClick={toggle} title={open() ? 'Fold away' : 'Unfold'} class="flex shrink-0 items-center gap-2.5 p-4 text-left">
         <span class="size-1.5 shrink-0 rounded-full bg-accent" />
         <Show when={props.from}>
           <span class="shrink-0 text-fg-3">{props.from} ·</span>
@@ -252,8 +296,12 @@ function Shell(props: { title: string; subtitle?: string; from?: string; childre
         <Show when={props.subtitle}>
           <span class="min-w-0 truncate font-mono text-xs text-fg-3">{props.subtitle}</span>
         </Show>
-      </div>
-      {props.children}
+        <ChevronDown class={`ml-auto size-3.5 shrink-0 text-fg-3 transition-transform ${open() ? '' : 'rotate-180'}`} />
+      </button>
+      <Show when={open()}>
+        <div class="min-h-0 space-y-3 overflow-y-auto px-4">{props.children}</div>
+        <div class="shrink-0 space-y-3 p-4 pt-3">{props.actions}</div>
+      </Show>
     </div>
   )
 }

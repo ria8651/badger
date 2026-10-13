@@ -298,7 +298,8 @@ export function Chat(props: {
           onScroll={onScroll}
           // Unstick on the gesture itself, before streamed content can push the bottom away.
           onWheel={(e) => e.deltaY < 0 && scroller.scrollHeight > scroller.clientHeight && (pinned = false)}
-          class="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]"
+          // A size container, so prompts above the composer can fit this pane rather than the window.
+          class="min-h-0 flex-1 overflow-y-auto [container-type:size] [overflow-anchor:none]"
         >
           {/* One column for the transcript and the composer. Its padding leaves room for your messages and the
               composer to hang out by their own padding, so the text in them lines up with Claude's. */}
