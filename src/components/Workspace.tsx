@@ -1,5 +1,5 @@
 import { For, Index, Show, children, createEffect, createMemo, createSignal, on, onCleanup, untrack, type JSX } from 'solid-js'
-import { Columns2, Minimize2, Plus, Rows2, SquareArrowOutUpRight, X } from 'lucide-solid'
+import { Minimize2, Plus, SquareArrowOutUpRight, X } from 'lucide-solid'
 import { api } from '../api.ts'
 import {
   CHAT,
@@ -397,14 +397,6 @@ export function Workspace(props: {
                 </button>
               </>
             )}
-          </Show>
-          <Show when={wide()}>
-            <button onClick={() => newTerminal({ beside: g().id, edge: 'right' })} title={`Split right (${LEADER} \\)`} class={ghost()}>
-              <Columns2 class="size-3.5" />
-            </button>
-            <button onClick={() => newTerminal({ beside: g().id, edge: 'bottom' })} title={`Split down (${LEADER} -)`} class={ghost()}>
-              <Rows2 class="size-3.5" />
-            </button>
           </Show>
           <button onClick={hide} title={`Hide panels (${LEADER} P)`} class={ghost()}>
             <Minimize2 class="size-3.5" />
