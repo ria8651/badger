@@ -341,17 +341,17 @@ export function Chat(props: {
             </div>
 
             {/* Stuck to the bottom of the column and as wide as it, padding included, so the transcript fades out as it
-                scrolls under even where the composer hangs into the padding. */}
+                scrolls under even where the composer hangs into the padding. It leaves room for that fade even when full, and prompts give way first. */}
             <div
               ref={composer}
-              class="sticky bottom-0 -mx-6 bg-bg px-6 pb-5 md:-mx-9 md:px-9 before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-bg"
+              class="sticky bottom-0 flex max-h-[calc(100cqh-2rem)] flex-col -mx-6 bg-bg px-6 pb-5 md:-mx-9 md:px-9 before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-bg"
             >
               {/* Laid out like the transcript's own messages, since that's where they're headed. */}
               <For each={state.queued}>
                 {(m) => <Queued message={m} onEdit={() => unqueue(m.id, true)} onRemove={() => unqueue(m.id)} />}
               </For>
               {/* Everything here hangs out as far as the composer, so prompts and notices read as part of it, not the transcript. */}
-              <div class="-mx-[calc(1rem+1px)] space-y-2">
+              <div class="-mx-[calc(1rem+1px)] flex min-h-0 flex-col gap-2">
                 <For each={state.permissions}>
                   {(p) => <PermissionPrompt sessionId={props.sessionId} permission={p} cwd={cwd()} from={p.agent} />}
                 </For>

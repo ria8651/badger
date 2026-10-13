@@ -266,8 +266,9 @@ const [folded, setFolded] = createSignal<ReadonlySet<string>>(new Set())
 
 /**
  * Accent dot: this is waiting on you. The header folds the prompt down to itself, so a long
- * one doesn't hide the chat you need to answer it. Open, it fits the chat pane above the
- * composer: the body scrolls and the actions stay on screen.
+ * one doesn't hide the chat you need to answer it. Open, it shrinks to fit what the composer
+ * leaves of the chat pane: the body scrolls and the header and actions stay on screen, unless
+ * there isn't even room for those, when the whole prompt scrolls.
  */
 function Shell(props: {
   id: string
@@ -286,7 +287,7 @@ function Shell(props: {
     })
 
   return (
-    <div class="flex max-h-[max(14rem,calc(100cqh-10rem))] flex-col border border-edge text-[13px] rounded-2xl">
+    <div class="flex min-h-0 flex-col overflow-y-auto border border-edge text-[13px] rounded-2xl">
       <button onClick={toggle} title={open() ? 'Fold away' : 'Unfold'} class="flex shrink-0 items-center gap-2.5 p-4 text-left">
         <span class="size-1.5 shrink-0 rounded-full bg-accent" />
         <Show when={props.from}>
