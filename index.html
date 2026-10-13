@@ -6,6 +6,15 @@
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Badger</title>
+    <script>
+      // Before first paint, so the page doesn't flash the other theme. src/theme.ts takes over after.
+      {
+        const t = localStorage.getItem('badger.theme')
+        const dark = t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches
+        document.documentElement.classList.toggle('dark', dark)
+        document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

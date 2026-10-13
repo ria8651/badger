@@ -32,19 +32,18 @@
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-bg: #141413;
-    --color-surface: #1f1e1c;
-    --color-line: #282725;
-    --color-edge: #3a3936;
-    --color-fg: #e9e7e2;
-    --color-fg-2: #a3a19b;
-    --color-fg-3: #6f6d68;
-    --color-accent: #d97757;
-    --color-danger: #e26d5f;
-    --color-ok: #7cb08a;
-  }
+/* Dark is a class rather than a media query so it can be picked by hand; src/theme.ts sets it. */
+:root.dark {
+  --color-bg: #1e1d1b;
+  --color-surface: #2a2927;
+  --color-line: #33322f;
+  --color-edge: #45443f;
+  --color-fg: #ecebe6;
+  --color-fg-2: #b0aea8;
+  --color-fg-3: #7d7b76;
+  --color-accent: #d97757;
+  --color-danger: #e26d5f;
+  --color-ok: #7cb08a;
 }
 
 @layer base {
@@ -60,6 +59,7 @@
   ::selection { background: color-mix(in srgb, var(--color-accent) 25%, transparent); }
   :focus-visible { outline: 1.5px solid var(--color-fg-3); outline-offset: 2px; }
   .lucide { stroke-width: 1.75; }
+  .theme-switching, .theme-switching * { transition: none !important; }
 }
 
 /* Popovers: in, and a quicker out. Reduced motion keeps the fade only. */

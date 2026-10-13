@@ -125,7 +125,7 @@ export function proxyPreviewUpgrade(req: IncomingMessage, socket: Duplex, head: 
  */
 function waiting(port: number): string {
   return `<!doctype html><meta charset="utf-8"><title>:${port}</title>
-<style>body{font:13px system-ui,sans-serif;color:#888;display:grid;place-items:center;height:100vh;margin:0}@media(prefers-color-scheme:dark){body{background:#1a1a1a}}</style>
+<style>body{font:13px system-ui,sans-serif;color:#888;display:grid;place-items:center;height:100vh;margin:0}@media(prefers-color-scheme:dark){body{background:#1e1d1b}}</style>
 <p>Nothing is listening on port ${port} yet.</p>
 <script>setInterval(() => fetch(location.href, { cache: 'no-store' }).then((r) => r.headers.has('x-badger-waiting') || location.reload(), () => {}), 2000)</script>`
 }

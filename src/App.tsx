@@ -1,6 +1,6 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup, on, onMount, untrack } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
-import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, FolderInput, PanelLeft, Pencil, Plus, Radar as RadarIcon } from 'lucide-solid'
+import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, FolderInput, Moon, PanelLeft, Pencil, Plus, Radar as RadarIcon, Sun } from 'lucide-solid'
 import { descendants, projectOf } from '../shared/cardTree.ts'
 import type { Card, SessionSummary } from '../shared/protocol.ts'
 import { api, socket } from './api.ts'
@@ -18,6 +18,7 @@ import { ChatSummary } from './components/ChatSummary.tsx'
 import { Loading, Menu } from './components/ui.tsx'
 import { terminalLabel, terminals, terminalsLoaded } from './terminals.ts'
 import { accountUsage } from './usage.ts'
+import { isDark, toggleTheme } from './theme.ts'
 
 /** crypto.randomUUID needs a secure context; fall back for plain-http hosts. */
 function uuid(): string {
@@ -409,6 +410,15 @@ export function App() {
           <img src="/favicon.svg" alt="" class="size-5" />
           <span class="font-medium tracking-tight">Badger</span>
           <button
+            onClick={toggleTheme}
+            title={isDark() ? 'Switch to the light theme' : 'Switch to the dark theme'}
+            class="ml-auto grid size-7 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-10"
+          >
+            <Show when={isDark()} fallback={<Moon class="size-4" />}>
+              <Sun class="size-4" />
+            </Show>
+          </button>
+          <button
             onClick={toggleNotifications}
             disabled={notifications() === 'blocked'}
             title={
@@ -418,7 +428,7 @@ export function App() {
                   ? 'Notifications are blocked in this browser, or need https'
                   : 'Turn on notifications'
             }
-            class="ml-auto grid size-7 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg disabled:opacity-40 pointer-coarse:size-10"
+            class="grid size-7 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg disabled:opacity-40 pointer-coarse:size-10"
           >
             <Show when={notifications() === 'on'} fallback={<BellOff class="size-4" />}>
               <Bell class="size-4" />

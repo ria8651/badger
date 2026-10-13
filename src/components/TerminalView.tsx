@@ -1,9 +1,10 @@
-import { createEffect, onCleanup, onMount } from 'solid-js'
+import { createEffect, on, onCleanup, onMount } from 'solid-js'
 import { Terminal, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { socket } from '../api.ts'
+import { isDark } from '../theme.ts'
 
 /** ANSI colours tuned to sit on the palette in index.css; the rest of the theme comes from its variables. */
 const ANSI = {
@@ -12,12 +13,10 @@ const ANSI = {
     brightBlack: '#6f6d68', brightRed: '#c13a2e', brightGreen: '#4a8f57', brightYellow: '#a07d16', brightBlue: '#3b6fb6', brightMagenta: '#a05aa6', brightCyan: '#348e94', brightWhite: '#5f5d58',
   },
   dark: {
-    black: '#3a3936', red: '#e26d5f', green: '#7cb08a', yellow: '#d9b866', blue: '#7aa2d9', magenta: '#c597d0', cyan: '#6fb8bb', white: '#c9c7c2',
+    black: '#45443f', red: '#e26d5f', green: '#7cb08a', yellow: '#d9b866', blue: '#7aa2d9', magenta: '#c597d0', cyan: '#6fb8bb', white: '#c9c7c2',
     brightBlack: '#6f6d68', brightRed: '#f08a7d', brightGreen: '#95c7a2', brightYellow: '#ebcb82', brightBlue: '#97b9e6', brightMagenta: '#d6b0df', brightCyan: '#8dcfd1', brightWhite: '#e9e7e2',
   },
 }
-
-const dark = matchMedia('(prefers-color-scheme: dark)')
 
 function theme(): ITheme {
   const css = getComputedStyle(document.documentElement)
@@ -31,7 +30,7 @@ function theme(): ITheme {
     selectionBackground: v('accent') + '40',
     scrollbarSliderBackground: v('fg-3') + '4d',
     scrollbarSliderHoverBackground: v('fg-3') + '80',
-    ...(dark.matches ? ANSI.dark : ANSI.light),
+    ...(isDark() ? ANSI.dark : ANSI.light),
   }
 }
 
@@ -98,15 +97,14 @@ export function TerminalView(props: {
     observer.observe(el)
     createEffect(() => props.visible && queueMicrotask(resize))
 
-    const retheme = () => (term.options.theme = theme())
-    dark.addEventListener('change', retheme)
+    // A tick late, so the page's colours have switched before they're read.
+    createEffect(on(isDark, () => queueMicrotask(() => (term.options.theme = theme())), { defer: true }))
 
     props.onReady?.(() => term.focus())
 
     onCleanup(() => {
       clearTimeout(timer)
       observer.disconnect()
-      dark.removeEventListener('change', retheme)
       off()
       input.dispose()
       socket.send({ type: 'term_unsubscribe', id })
