@@ -10,8 +10,9 @@ import { BOARD_AUTO_ALLOWED, BOARD_SERVER, boardServer, cardContext } from './bo
 import { Children } from './children.ts'
 import { type Actor, BadRequest, type Draft, Store } from './db.ts'
 import { MERGE_TOOL, mergeTool } from './merge.ts'
+import { proxyPreview, proxyPreviewUpgrade, previewPort } from './preview.ts'
 import { SessionManager, diskTranscript, listModels, transcriptModel } from './session.ts'
-import { TERMINAL_AUTO_ALLOWED, TERMINAL_SERVER, terminalServer } from './terminalTools.ts'
+import { TERMINAL_AUTO_ALLOWED, TERMINAL_SERVER, terminalServer, type Previews } from './terminalTools.ts'
 import { Terminals, shellEnv } from './terminals.ts'
 import { suggestTitle } from './titles.ts'
 import { Usage } from './usage.ts'
@@ -55,6 +56,17 @@ function broadcast(event: ServerEvent): void {
   for (const ws of targets ?? []) send(ws, event)
 }
 
+/** Where browsers reach previews, as the latest one to connect said, with `{port}` in it. */
+let previewUrl: string | undefined
+
+const previews: Previews = {
+  open(root, port, name, path) {
+    broadcast({ type: 'open_preview', root, port, name, path })
+    return sockets.size
+  },
+  url: (port, path = '/') => previewUrl && previewUrl.replace('{port}', String(port)) + path,
+}
+
 const store = new Store(DATA_DIR, () => broadcast({ type: 'sessions_changed' }))
 /** Changes made through the REST API and WebSocket, i.e. by someone in the browser. */
 const UI: Actor = { source: 'ui' }
@@ -87,7 +99,7 @@ const manager: SessionManager = new SessionManager(
           MERGE_TOOL_NAME,
         ),
       ]),
-      [TERMINAL_SERVER]: terminalServer(terminals, sessionId, cwd),
+      [TERMINAL_SERVER]: terminalServer(terminals, sessionId, cwd, previews),
     },
     allowedTools: [...BOARD_AUTO_ALLOWED, MERGE_TOOL_NAME, ...TERMINAL_AUTO_ALLOWED],
     turnContext: () => cardContext(store, sessionId),
@@ -292,6 +304,9 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
     case 'term_resize':
       terminals.resize(event.id, event.cols, event.rows)
       return
+    case 'preview_url':
+      if (/^https?:\/\/\{port\}\.[^/]+$/.test(event.url)) previewUrl = event.url
+      return
   }
 }
 
@@ -475,7 +490,11 @@ function sameOrigin(req: IncomingMessage): boolean {
   }
 }
 
+const PREVIEW_HOSTS = { ownPort: PORT, localOnly: CHECK_HOST }
+
 const server = createServer(async (req, res) => {
+  const preview = previewPort(req.headers.host, PREVIEW_HOSTS)
+  if (preview) return proxyPreview(req, res, preview)
   const url = new URL(req.url ?? '/', 'http://x')
   const json = (status: number, body: unknown) => {
     if (status === 204) return void res.writeHead(204).end()
@@ -484,7 +503,7 @@ const server = createServer(async (req, res) => {
   }
   if (!sameOrigin(req)) return json(403, { error: 'Cross-origin requests are not allowed' })
   try {
-    if (url.pathname === '/api/config') return json(200, { defaultCwd: WORKSPACE_DIR, scratchCwd: SCRATCH_DIR })
+    if (url.pathname === '/api/config') return json(200, { defaultCwd: WORKSPACE_DIR, scratchCwd: SCRATCH_DIR, port: PORT })
     if (url.pathname.startsWith('/api/')) {
       if (url.pathname === '/api/sessions') return json(200, await sessionList())
       if (url.pathname === '/api/models') return json(200, await listModels())
@@ -519,6 +538,8 @@ const server = createServer(async (req, res) => {
 const wss = new WebSocketServer({ noServer: true })
 
 server.on('upgrade', (req, socket, head) => {
+  const preview = previewPort(req.headers.host, PREVIEW_HOSTS)
+  if (preview) return proxyPreviewUpgrade(req, socket, head, preview)
   const url = new URL(req.url ?? '/', 'http://x')
   if (url.pathname !== '/ws' || !sameOrigin(req)) {
     socket.write(url.pathname !== '/ws' ? 'HTTP/1.1 404 Not Found\r\n\r\n' : 'HTTP/1.1 403 Forbidden\r\n\r\n')

@@ -1,5 +1,5 @@
 import { For, Index, Show, children, createEffect, createMemo, createSignal, on, onCleanup, untrack, type JSX } from 'solid-js'
-import { Minimize2, Plus, SquareArrowOutUpRight, X } from 'lucide-solid'
+import { Globe, Minimize2, Plus, RotateCw, SquareArrowOutUpRight, X } from 'lucide-solid'
 import { api } from '../api.ts'
 import {
   CHAT,
@@ -13,9 +13,12 @@ import {
   measure,
   moveView,
   narrowTree,
+  openPreview,
   openTerminal,
   panelsShown,
   placeTerminals,
+  reloadPreview,
+  removeView,
   setActive,
   setFocusRequest,
   setSizes,
@@ -27,11 +30,14 @@ import {
   type Drop,
   type Edge,
   type Group,
+  type PreviewView,
   type Rect,
   type View,
 } from '../layout.ts'
+import { previewUrl } from '../previews.ts'
 import { terminalLabel, terminals, terminalsLoaded } from '../terminals.ts'
-import { RestartButton, StatusDot, ghost } from './Terminals.tsx'
+import { PreviewFrame } from './PreviewFrame.tsx'
+import { PortButtons, RestartButton, StatusDot, ghost } from './Terminals.tsx'
 import { TerminalView } from './TerminalView.tsx'
 
 /** Height of a group's tab bar, which its views sit under. */
@@ -51,8 +57,7 @@ const box = (r: Rect, top = 0): JSX.CSSProperties => ({
   height: `calc(${pct(r.h)} - ${top}px)`,
 })
 
-const parseKey = (key: string): View => ({ kind: 'terminal', id: key.slice(key.indexOf(':') + 1) })
-const terminalOf = (v: View) => terminals().find((t) => t.id === v.id)
+const terminalOf = (v?: View) => (v?.kind === 'terminal' ? terminals().find((t) => t.id === v.id) : undefined)
 
 const BINDINGS: [string, string][] = [
   ['T', 'New terminal'],
@@ -94,6 +99,7 @@ export function Workspace(props: {
   const keys = createMemo(() => (props.root ? viewsOf(layoutOf(props.root).tree).map(viewKey) : []))
 
   const update = (change: Parameters<typeof updateLayout>[1]) => props.root && updateLayout(props.root, change)
+  const viewOf = (key: string) => (props.root ? viewsOf(layoutOf(props.root).tree).find((v) => viewKey(v) === key) : undefined)
 
   // The server's terminals are the truth: closed ones leave the layout, new ones join it.
   createEffect(() => {
@@ -157,7 +163,7 @@ export function Workspace(props: {
     focusView(key)
   }
 
-  /** Closing a terminal's tab stops it, like the dock's did; the next tab along takes its place. */
+  /** Closing a terminal's tab stops it, like the dock's did, and a preview's just closes; the next tab along takes its place. */
   const close = (key: string) => {
     const g = groupOf(tree(), key)
     if (g && activeOf(g) === key) {
@@ -169,8 +175,9 @@ export function Workspace(props: {
         if (current() === g.id) focusView(viewKey(next))
       } else if (current() === g.id) props.onFocusChat()
     }
-    const v = parseKey(key)
-    if (v.kind === 'terminal') void api.closeTerminal(v.id)
+    const v = viewOf(key)
+    if (v?.kind === 'terminal') void api.closeTerminal(v.id)
+    else update((l) => ({ ...l, tree: removeView(l.tree, key) }))
   }
 
   const hide = () => {
@@ -337,14 +344,21 @@ export function Workspace(props: {
 
   // ── Rendering ──
 
-  const tabLabel = (v: View) => {
+  const tabLabel = (v?: View) => {
+    if (v?.kind === 'preview') return v.name ?? `:${v.id}`
     const t = terminalOf(v)
     return t ? terminalLabel(t) : 'Starting…'
   }
+  const tabTitle = (v?: View) =>
+    v?.kind === 'preview' ? `${tabLabel(v)}\n${previewUrl(v.id, v.path) ?? `Port ${v.id}`}` : `${tabLabel(v)}\n${terminalOf(v)?.cwd ?? ''}`
 
   const GroupFrame = (p: { group: Group }) => {
     const g = () => p.group
-    const active = () => parseKey(activeOf(g()))
+    const active = () => viewOf(activeOf(g()))
+    const preview = () => {
+      const v = active()
+      return v?.kind === 'preview' ? v : undefined
+    }
     const focused = () => current() === g().id
     return (
       <div class="absolute flex flex-col bg-bg" style={box(rect(g().id)!)} onPointerDown={() => focusLeaf(g().id)}>
@@ -352,7 +366,7 @@ export function Workspace(props: {
           <div class="flex min-w-0 items-center gap-0.5 overflow-x-auto [scrollbar-width:none]">
             <For each={g().views.map(viewKey)}>
               {(key) => {
-                const v = parseKey(key)
+                const v = () => viewOf(key)
                 const isActive = () => activeOf(g()) === key
                 return (
                   <div
@@ -361,18 +375,21 @@ export function Workspace(props: {
                     } ${drag()?.key === key ? 'opacity-50' : ''}`}
                   >
                     <button
-                      onPointerDown={(e) => startTabDrag(e, key, tabLabel(v))}
+                      onPointerDown={(e) => startTabDrag(e, key, tabLabel(v()))}
                       onClick={(e) => (e.stopPropagation(), activate(key))}
-                      title={`${tabLabel(v)}\n${terminalOf(v)?.cwd ?? ''}`}
+                      title={tabTitle(v())}
                       class="flex h-full min-w-0 items-center gap-1.5 pl-2 text-xs"
                     >
-                      <Show when={terminalOf(v)}>{(t) => <StatusDot terminal={t()} />}</Show>
-                      <span class="truncate">{tabLabel(v)}</span>
+                      <Show when={v()?.kind === 'preview'}>
+                        <Globe class="size-3 shrink-0" />
+                      </Show>
+                      <Show when={terminalOf(v())}>{(t) => <StatusDot terminal={t()} />}</Show>
+                      <span class="truncate">{tabLabel(v())}</span>
                     </button>
                     <button
                       onPointerDown={(e) => e.stopPropagation()}
                       onClick={() => close(key)}
-                      title="Delete terminal: stops it and everything it started"
+                      title={v()?.kind === 'preview' ? 'Close preview' : 'Delete terminal: stops it and everything it started'}
                       class={`mx-0.5 grid size-5 shrink-0 place-items-center rounded text-fg-3 transition-colors hover:text-fg ${
                         isActive() ? '' : 'invisible group-hover:visible'
                       }`}
@@ -391,10 +408,27 @@ export function Workspace(props: {
           <Show when={terminalOf(active())}>
             {(t) => (
               <>
+                <PortButtons terminal={t()} onOpen={(port) => props.root && openPreview(props.root, port, { name: terminalLabel(t()) })} />
                 <RestartButton terminal={t()} />
                 <button onClick={() => props.onOpenPage(t().id)} title="Open on its own page" class={ghost()}>
                   <SquareArrowOutUpRight class="size-3.5" />
                 </button>
+              </>
+            )}
+          </Show>
+          <Show when={preview()}>
+            {(v) => (
+              <>
+                <button onClick={() => props.root && reloadPreview(props.root, v())} title="Reload from where it was opened" class={ghost()}>
+                  <RotateCw class="size-3.5" />
+                </button>
+                <Show when={previewUrl(v().id, v().path)}>
+                  {(url) => (
+                    <a href={url()} target="_blank" rel="noopener" title="Open in a new browser tab" class={ghost()}>
+                      <SquareArrowOutUpRight class="size-3.5" />
+                    </a>
+                  )}
+                </Show>
               </>
             )}
           </Show>
@@ -416,7 +450,7 @@ export function Workspace(props: {
 
       <For each={keys()}>
         {(key) => {
-          const view = parseKey(key)
+          const view = () => viewOf(key)
           const place = createMemo(() => {
             const g = groupOf(tree(), key)
             const r = g && rect(g.id)
@@ -429,8 +463,16 @@ export function Workspace(props: {
               style={place() ? box(place()!.rect, BAR) : undefined}
               onFocusIn={() => place() && focusIn(place()!.group)}
             >
-              {/* Terminals are the only kind so far; others get their own case here. */}
-              <TerminalView id={view.id} visible={!!place()} onReady={(focus) => ready(key, focus)} class="size-full px-3 py-2" />
+              <Show when={view()}>
+                {(v) => (
+                  <Show
+                    when={v().kind === 'preview' && (v() as PreviewView)}
+                    fallback={<TerminalView id={v().id} visible={!!place()} onReady={(focus) => ready(key, focus)} class="size-full px-3 py-2" />}
+                  >
+                    {(p) => <PreviewFrame view={p()} onReady={(focus) => ready(key, focus)} class="size-full" />}
+                  </Show>
+                )}
+              </Show>
             </div>
           )
         }}

@@ -1,8 +1,9 @@
-import { Show } from 'solid-js'
-import { RotateCw, SquareTerminal, Trash2 } from 'lucide-solid'
+import { For, Show } from 'solid-js'
+import { Globe, RotateCw, SquareTerminal, Trash2 } from 'lucide-solid'
 import type { TerminalInfo } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { LEADER, panelsShown, togglePanels } from '../layout.ts'
+import { previewUrl, previewsAvailable } from '../previews.ts'
 import { terminalLabel, terminalState, terminals } from '../terminals.ts'
 import { TerminalView } from './TerminalView.tsx'
 import { ltr } from './ui.tsx'
@@ -48,6 +49,36 @@ export function RestartButton(props: { terminal: TerminalInfo }) {
   )
 }
 
+/**
+ * A button per port the terminal is listening on, to preview it: onOpen, or
+ * without it a link to the preview in a new browser tab.
+ */
+export function PortButtons(props: { terminal: TerminalInfo; onOpen?: (port: number) => void }) {
+  return (
+    <Show when={previewsAvailable()}>
+      <For each={props.terminal.ports ?? []}>
+        {(port) => {
+          const cls = 'flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs tabular-nums text-fg-3 transition-colors hover:bg-surface hover:text-fg'
+          const label = (
+            <>
+              <Globe class="size-3.5" />:{port}
+            </>
+          )
+          return props.onOpen ? (
+            <button onClick={() => props.onOpen!(port)} title={`Preview port ${port} in a panel`} class={cls}>
+              {label}
+            </button>
+          ) : (
+            <a href={previewUrl(port)} target="_blank" rel="noopener" title={`Open port ${port} in a new browser tab`} class={cls}>
+              {label}
+            </a>
+          )
+        }}
+      </For>
+    </Show>
+  )
+}
+
 /** One terminal filling the page, at /t/:id. */
 export function TerminalPage(props: { id: string; onClosed: () => void }) {
   const terminal = () => terminals().find((t) => t.id === props.id)
@@ -65,6 +96,7 @@ export function TerminalPage(props: { id: string; onClosed: () => void }) {
               <span class="truncate text-fg">{terminalLabel(t())}</span>
               <span class="min-w-0 flex-1 truncate text-left font-mono text-[11px] text-fg-3 [direction:rtl]">{ltr(t().cwd)}</span>
               <span class="shrink-0 text-xs text-fg-3">{terminalState(t())}</span>
+              <PortButtons terminal={t()} />
               <RestartButton terminal={t()} />
               <button
                 onClick={() => api.closeTerminal(t().id).then(props.onClosed)}

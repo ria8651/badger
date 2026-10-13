@@ -8,7 +8,12 @@ import { api } from './api.ts'
  */
 
 /** Something a panel shows. More kinds go here as they're added. */
-export type View = { kind: 'terminal'; id: string }
+export type View = { kind: 'terminal'; id: string } | PreviewView
+/**
+ * What a port serves, in a frame; id is the port. Opening it again changes
+ * path, and bumps nav, which reloads it.
+ */
+export type PreviewView = { kind: 'preview'; id: string; name?: string; path?: string; nav?: number }
 export const viewKey = (v: View) => `${v.kind}:${v.id}`
 
 export type Group = { type: 'group'; id: string; views: View[]; active?: string }
@@ -88,6 +93,10 @@ export function addToGroup(tree: Node, groupId: string, view: View, activate = t
   return mapGroups(tree, (g) =>
     g.id !== groupId ? g : { ...g, views: g.views.some((v) => viewKey(v) === viewKey(view)) ? g.views : [...g.views, view], active: activate ? viewKey(view) : g.active },
   )
+}
+
+function replaceView(tree: Node, view: View): Node {
+  return mapGroups(tree, (g) => ({ ...g, views: g.views.map((v) => (viewKey(v) === viewKey(view) ? view : v)) }))
 }
 
 export function setActive(tree: Node, key: string): Node {
@@ -278,6 +287,33 @@ export async function openTerminal(root: string, cwd: string, where?: { group: s
     return { ...l, tree: placed.tree, focus: placed.group, hidden: false }
   })
   setFocusRequest(viewKey(view))
+}
+
+/**
+ * Shows a port's preview: the tab it already has, navigated and reloaded, or
+ * a new one with the other previews, else in a new panel right of the chat,
+ * where a page gets the width it needs. Shows hidden panels: asking for a
+ * preview is asking to see it.
+ */
+export function openPreview(root: string, port: number, opts: { name?: string; path?: string } = {}): void {
+  updateLayout(root, (l) => {
+    const id = String(port)
+    const found = viewsOf(l.tree).find((v): v is PreviewView => v.kind === 'preview' && v.id === id)
+    if (found) {
+      const view: PreviewView = { ...found, name: opts.name ?? found.name, path: opts.path ?? found.path, nav: (found.nav ?? 0) + 1 }
+      return { ...l, tree: setActive(replaceView(l.tree, view), viewKey(view)), hidden: false }
+    }
+    const view: View = { kind: 'preview', id, name: opts.name, path: opts.path }
+    const into = groupsOf(l.tree).find((g) => g.views.some((v) => v.kind === 'preview'))
+    if (into) return { ...l, tree: addToGroup(l.tree, into.id, view), hidden: false }
+    // Focus stays where it was, so new terminals still go with the others.
+    return { ...l, tree: splitWith(l.tree, 'chat', 'right', [view]).tree, hidden: false }
+  })
+}
+
+/** Loads a preview again from the path it was opened at. */
+export function reloadPreview(root: string, view: PreviewView): void {
+  updateLayout(root, (l) => ({ ...l, tree: replaceView(l.tree, { ...view, nav: (view.nav ?? 0) + 1 }) }))
 }
 
 /** Show or hide a workspace's panels. Showing with nothing to show opens a shell, like any terminal panel. */
