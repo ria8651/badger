@@ -319,6 +319,11 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       for (const other of viewers.get(event.sessionId) ?? []) if (other !== ws) send(other, update)
       return
     }
+    case 'client_error': {
+      const text = (v: unknown) => (typeof v === 'string' ? v.slice(0, 4000) : '')
+      console.error(`[browser] ${text(event.message)} at ${text(event.url)}${event.stack ? `\n${text(event.stack)}` : ''}`)
+      return
+    }
     case 'seen':
       attention.mark(event.sessionId, false)
       return

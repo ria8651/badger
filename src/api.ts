@@ -75,7 +75,14 @@ class Socket {
     }
     ws.onmessage = (e) => {
       const event = JSON.parse(e.data) as ServerEvent
-      for (const l of this.listeners) l(event)
+      // One listener throwing mustn't keep the event from the rest; the error is still reported.
+      for (const l of this.listeners) {
+        try {
+          l(event)
+        } catch (err) {
+          reportError(err)
+        }
+      }
     }
     ws.onclose = () => {
       this.setConnected(false)

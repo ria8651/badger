@@ -205,6 +205,8 @@ export type ClientEvent =
   | { type: 'answer_draft'; sessionId: string; requestId: string; answers: AnswerDraft }
   /** The plan in a pending ExitPlanMode as edited so far; replaces what's saved. */
   | { type: 'plan_draft'; sessionId: string; requestId: string; plan: string }
+  /** An uncaught error in the page, for the server to log. */
+  | { type: 'client_error'; message: string; stack?: string; url: string }
   /** The user is looking at this chat, so it's no longer unread. */
   | { type: 'seen'; sessionId: string }
   | { type: 'term_subscribe'; id: string }
