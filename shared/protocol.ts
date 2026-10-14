@@ -95,6 +95,17 @@ export interface WorktreeStatus {
   base: string
 }
 
+/** Work in any git checkout that hasn't landed anywhere yet: what a review looks at. */
+export interface ChangesStatus {
+  branch: string
+  /** Files with uncommitted changes. */
+  changes: number
+  /** What `ahead` is counted against: the main checkout's branch for a worktree, otherwise the branch's upstream, if it has one. */
+  base?: string
+  /** Commits on HEAD that `base` doesn't have. */
+  ahead: number
+}
+
 export const CARD_STATUSES = ['backlog', 'todo', 'in_progress', 'review', 'done'] as const
 export type CardStatus = (typeof CARD_STATUSES)[number]
 

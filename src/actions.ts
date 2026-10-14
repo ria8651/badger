@@ -1,4 +1,4 @@
-import type { WorktreeStatus } from '../shared/protocol.ts'
+import type { ChangesStatus, WorktreeStatus } from '../shared/protocol.ts'
 
 /**
  * Something a chat can be asked to do from the composer. Each is a prompt;
@@ -14,19 +14,23 @@ export interface ChatAction {
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
-export function chatActions(ctx: { worktree?: WorktreeStatus }): ChatAction[] {
+export function chatActions(ctx: { worktree?: WorktreeStatus; changes?: ChangesStatus }): ChatAction[] {
   const actions: ChatAction[] = []
-  const wt = ctx.worktree
-  if (wt) {
-    // Uncommitted work counts: Claude commits it before merging.
-    const pending = [wt.unmerged && plural(wt.unmerged, 'commit'), wt.changes && plural(wt.changes, 'uncommitted change')].filter(Boolean)
+  const ch = ctx.changes
+  if (ch) {
+    const pending = [ch.ahead && `${plural(ch.ahead, 'commit')} not on ${ch.base}`, ch.changes && plural(ch.changes, 'uncommitted change')].filter(Boolean)
     actions.push({
       label: 'Review changes',
       description: pending.length
         ? `${pending.join(', ')}. A fresh chat reviews them and reports back here.`
-        : `Nothing to review: everything here is already on ${wt.base}.`,
-      prompt: 'Have the changes in this worktree reviewed.',
+        : `Nothing to review: no uncommitted changes${ch.base ? `, and everything is already on ${ch.base}` : ''}.`,
+      prompt: 'Have the changes here reviewed.',
     })
+  }
+  const wt = ctx.worktree
+  if (wt) {
+    // Uncommitted work counts: Claude commits it before merging.
+    const pending = [wt.unmerged && plural(wt.unmerged, 'commit'), wt.changes && plural(wt.changes, 'uncommitted change')].filter(Boolean)
     actions.push({
       label: `Merge into ${wt.base}`,
       description: pending.length

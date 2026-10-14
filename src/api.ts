@@ -1,5 +1,5 @@
 import { createSignal } from 'solid-js'
-import type { Card, CardStatus, ClientEvent, ModelOption, ServerEvent, SessionSummary, TerminalInfo, WorktreeStatus } from '../shared/protocol.ts'
+import type { Card, CardStatus, ChangesStatus, ClientEvent, ModelOption, ServerEvent, SessionSummary, TerminalInfo, WorktreeStatus } from '../shared/protocol.ts'
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -35,6 +35,8 @@ export const api = {
   linkSession: (id: number, sessionId: string) => request<Card>('POST', `/api/cards/${id}/sessions`, { sessionId }),
   unlinkSession: (id: number, sessionId: string) => request<Card>('DELETE', `/api/cards/${id}/sessions/${sessionId}`),
   worktree: (path: string) => get<WorktreeStatus>(`/api/worktree?path=${encodeURIComponent(path)}`),
+  /** Null outside a git repo. */
+  changes: (path: string) => get<ChangesStatus | null>(`/api/changes?path=${encodeURIComponent(path)}`),
   removeWorktree: (path: string) => request<void>('DELETE', `/api/worktree?path=${encodeURIComponent(path)}`),
   workspace: (cwd: string) => get<{ root: string }>(`/api/workspace?cwd=${encodeURIComponent(cwd)}`),
   createTerminal: (spec: { cwd: string; command?: string; cols?: number; rows?: number }) =>

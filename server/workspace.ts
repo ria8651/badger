@@ -3,7 +3,7 @@ import { accessSync, constants, statSync } from 'node:fs'
 import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
-import type { WorktreeStatus } from '../shared/protocol.ts'
+import type { ChangesStatus, WorktreeStatus } from '../shared/protocol.ts'
 
 /** The git root of a directory (each worktree has its own), or the directory itself outside a repo. */
 export function workspaceRoot(cwd: string): string {
@@ -61,6 +61,22 @@ export async function worktreeStatus(path: string): Promise<WorktreeStatus> {
   ])
   const unmerged = Number(await git(path, 'rev-list', '--count', `${await git(main, 'rev-parse', 'HEAD')}..HEAD`))
   return { path, branch, changes: status ? status.split('\n').length : 0, unmerged, base }
+}
+
+/** Uncommitted changes and commits not yet on the base, for any git checkout. Undefined outside a repo. */
+export async function changesStatus(path: string): Promise<ChangesStatus | undefined> {
+  if (WORKTREE_PATH.test(path)) {
+    const wt = await worktreeStatus(path)
+    return { branch: wt.branch, changes: wt.changes, base: wt.base, ahead: wt.unmerged }
+  }
+  const status = await git(path, 'status', '--porcelain').catch(() => undefined)
+  if (status === undefined) return undefined
+  const [branch, upstream] = await Promise.all([
+    git(path, 'branch', '--show-current'),
+    git(path, 'rev-parse', '--abbrev-ref', '@{upstream}').catch(() => ''),
+  ])
+  const ahead = upstream ? Number(await git(path, 'rev-list', '--count', '@{upstream}..HEAD')) : 0
+  return { branch, changes: status ? status.split('\n').length : 0, base: upstream || undefined, ahead }
 }
 
 /**

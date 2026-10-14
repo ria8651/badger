@@ -17,7 +17,7 @@ import { TERMINAL_AUTO_ALLOWED, TERMINAL_SERVER, terminalServer, type Previews }
 import { Terminals, shellEnv } from './terminals.ts'
 import { suggestTitle } from './titles.ts'
 import { Usage } from './usage.ts'
-import { excludeWorktrees, inaccessible, removeWorktree, workspaceRoot, worktreeStatus } from './workspace.ts'
+import { changesStatus, excludeWorktrees, inaccessible, removeWorktree, workspaceRoot, worktreeStatus } from './workspace.ts'
 
 // Terminals get the environment Badger was started with, before .env adds PORT and friends.
 const startEnv = shellEnv(process.env)
@@ -551,6 +551,11 @@ const server = createServer(async (req, res) => {
         if (!cwd) throw new BadRequest('cwd is required')
         if (!roots.has(cwd)) roots.set(cwd, workspaceRoot(cwd))
         return json(200, { root: roots.get(cwd) })
+      }
+      if (url.pathname === '/api/changes') {
+        const dir = url.searchParams.get('path')
+        if (!dir || !isAbsolute(dir)) throw new BadRequest('path must be an absolute path')
+        return json(200, (await changesStatus(dir).catch(badRequest)) ?? null)
       }
       const sessions = await sessionsApi(req.method ?? 'GET', url.pathname, req)
       if (sessions) return json(...sessions)
