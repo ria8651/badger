@@ -33,6 +33,8 @@ export interface SessionTools {
   allowedTools: string[]
   /** Text to add to the conversation alongside the user's next message, if any. */
   turnContext?: () => string | undefined
+  /** Environment for Claude Code and the commands it runs, on top of the server's. */
+  env?: Record<string, string>
 }
 
 /** A queued message, with what was sent to Claude Code so it can join the transcript once taken in. */
@@ -126,7 +128,7 @@ export class LiveSession {
         allowedTools: opts.tools.allowedTools,
         // Newer models omit thinking text by default; ask for summaries so it can stream.
         thinking: { type: 'adaptive', display: 'summarized' },
-        env: streamEnv(),
+        env: { ...streamEnv(), ...opts.tools.env },
         ...(opts.worktree !== undefined ? { extraArgs: { worktree: opts.worktree || null } } : {}),
         hooks: {
           UserPromptSubmit: [

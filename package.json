@@ -13,6 +13,7 @@
     "@lydell/node-pty": "1.1.0",
     "@xterm/addon-serialize": "^0.14.0",
     "@xterm/headless": "^6.0.0",
+    "modern-screenshot": "^4.7.0",
     "tsx": "^4.23.15",
     "ws": "^8.22.0",
     "zod": "^4.6.5"

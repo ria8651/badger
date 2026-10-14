@@ -86,6 +86,21 @@ export function resultText(content: unknown): string {
   return content == null ? '' : JSON.stringify(content, null, 2)
 }
 
+/** Images in a tool's result, e.g. a screenshot Claude read, as URLs to show. */
+export function resultImages(content: unknown): string[] {
+  if (!Array.isArray(content)) return []
+  return content.flatMap((b) => (b?.type === 'image' && b.source?.type === 'base64' ? [`data:${b.source.media_type};base64,${b.source.data}`] : []))
+}
+
+/** What Claude saw: the images it was shown, small. */
+function ResultImages(props: { urls: string[]; class: string }) {
+  return (
+    <div class="flex flex-wrap gap-2">
+      <For each={props.urls}>{(url) => <img src={url} alt="" class={`w-auto rounded-lg border border-line ${props.class}`} />}</For>
+    </div>
+  )
+}
+
 export interface Question {
   question: string
   header: string
@@ -290,7 +305,10 @@ export function ToolCard(props: ToolProps) {
           }
           // One in the background can run for a long while alongside everything else, so it stays folded; its panel shows it.
           live={status() === 'running' && !props.task?.background}
-          peek={live() && !props.task?.background && <LiveOutput text={live()!} class="max-h-40" />}
+          peek={
+            (live() && !props.task?.background && <LiveOutput text={live()!} class="max-h-40" />) ||
+            (props.result && resultImages(props.result.content).length > 0 && <ResultImages urls={resultImages(props.result.content)} class="max-h-40" />)
+          }
         >
           <ToolBody {...props} />
         </Disclosure>
@@ -328,7 +346,20 @@ export function ToolBody(props: ToolProps & { /** Fill the space given rather th
         when={shell() && props.task}
         fallback={
           <Show when={props.result}>
-            {(r) => <Pre text={resultText(r().content) || '(no output)'} class={r().isError ? 'text-danger' : ''} fill={props.fill} />}
+            {(r) => {
+              const images = () => resultImages(r().content)
+              const text = () => (images().length ? resultText(r().content).replace(/^\[image\]$/gm, '').trim() : resultText(r().content))
+              return (
+                <>
+                  <Show when={text() || !images().length}>
+                    <Pre text={text() || '(no output)'} class={r().isError ? 'text-danger' : ''} fill={props.fill} />
+                  </Show>
+                  <Show when={images().length}>
+                    <ResultImages urls={images()} class="max-h-[32rem] max-w-full" />
+                  </Show>
+                </>
+              )
+            }}
           </Show>
         }
       >

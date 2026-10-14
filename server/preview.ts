@@ -1,6 +1,7 @@
 import { request, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from 'node:http'
 import { connect, type LookupFunction } from 'node:net'
 import type { Duplex } from 'node:stream'
+import { BRIDGE_PATH, allowBridge, injectBridge, serveBridgeFile } from './bridge.ts'
 
 /**
  * Previews: `<port>.<Badger's host>` is whatever listens on that port on this
@@ -68,23 +69,49 @@ function inward(headers: IncomingHttpHeaders, o: { outside: string; inside: stri
   return out
 }
 
+/**
+ * Whether a request is for a page, the preview's own or a frame's, which gets
+ * the bridge. Sec-Fetch-Dest isn't sent to plain-http hosts other than
+ * localhost, so there it's whatever asks for HTML.
+ */
+function isPage(req: IncomingMessage): boolean {
+  if (req.method !== 'GET') return false
+  const dest = req.headers['sec-fetch-dest']
+  return dest ? dest === 'document' || dest === 'iframe' : /\btext\/html\b/.test(req.headers.accept ?? '')
+}
+
 export function proxyPreview(req: IncomingMessage, res: ServerResponse, port: number): void {
+  if (req.url?.startsWith(BRIDGE_PATH) && serveBridgeFile(req.url.split('?')[0], res)) return
   const o = origins(req, port)
   const headers = inward(req.headers, o, port)
   for (const h of HOP_BY_HOP) delete headers[h]
+  const page = isPage(req)
+  // Uncompressed, so the bridge's script tag can go in.
+  if (page) headers['accept-encoding'] = 'identity'
   const upstream = request({ ...LOOPBACK, port, method: req.method, path: req.url, headers }, (up) => {
     const out = { ...up.headers }
     for (const h of HOP_BY_HOP) delete out[h]
-    // Badger shows previews in a frame, so the page's own rules on framing give way to one: only Badger's page may.
+    // Badger shows previews in a frame, so the page's own rules on framing give way to one: only Badger's page, and the page's own, may.
     delete out['x-frame-options']
     const csp = [out['content-security-policy'] ?? []].flat().map((p) => p.replace(/(^|;)\s*frame-ancestors[^;]*/gi, '$1').replace(/^;\s*|;\s*$/g, ''))
-    out['content-security-policy'] = [...csp.filter(Boolean), `frame-ancestors ${o.badger}`]
+    out['content-security-policy'] = [...csp.filter(Boolean).map((p) => allowBridge(p, o.outside)), `frame-ancestors 'self' ${o.badger}`]
     for (const local of [o.inside, `http://127.0.0.1:${port}`, `http://[::1]:${port}`]) {
       const at = out.location?.[local.length]
       if (out.location?.startsWith(local) && (at === undefined || '/?#'.includes(at))) out.location = o.outside + out.location.slice(local.length)
     }
-    res.writeHead(up.statusCode ?? 502, up.statusMessage, out)
-    up.pipe(res)
+    const encoded = out['content-encoding'] && out['content-encoding'] !== 'identity'
+    if (!page || encoded || !/^text\/html\b/i.test(out['content-type'] ?? '')) {
+      res.writeHead(up.statusCode ?? 502, up.statusMessage, out)
+      return void up.pipe(res)
+    }
+    const chunks: Buffer[] = []
+    up.on('data', (c: Buffer) => chunks.push(c))
+    up.on('end', () => {
+      // Byte for byte whatever the page's encoding: the tag is ASCII, and latin1 maps each byte to one character and back.
+      const body = Buffer.from(injectBridge(Buffer.concat(chunks).toString('latin1')), 'latin1')
+      res.writeHead(up.statusCode ?? 502, up.statusMessage, { ...out, 'content-length': String(body.length) })
+      res.end(body)
+    })
   })
   // A browser that goes away mid-response (a reload, an event stream) lets go of the dev server's connection too.
   res.on('close', () => upstream.destroy())

@@ -13,16 +13,19 @@ RUN pnpm build
 # ── Runtime ──
 # This image is also the machine Claude Code and the terminals work on, so it
 # carries the tools they'll reach for. Add your projects' toolchains here.
+# Chromium (with fonts, or pages render without text) and Playwright are
+# for Claude to check pages itself, headless.
 FROM node:26-slim
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     tini bash git openssh-client ca-certificates curl procps less ripgrep jq \
+    chromium fonts-liberation fonts-noto-core fonts-noto-color-emoji \
   && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
   && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
   && apt-get update \
   && apt-get install -y --no-install-recommends gh \
   && rm -rf /var/lib/apt/lists/*
-RUN npm install -g pnpm@11.21.0
+RUN npm install -g pnpm@11.21.0 playwright-core@1.64.0
 
 WORKDIR /app
 # Only the server's dependencies; the client is already bundled into dist.
@@ -49,7 +52,9 @@ ENV NODE_ENV=production \
     SHELL=/bin/bash \
     DATA_DIR=/badger/data \
     SCRATCH_DIR=/badger/scratch \
-    WORKSPACE_DIR=/badger/code
+    WORKSPACE_DIR=/badger/code \
+    BADGER_CHROMIUM=/usr/bin/chromium \
+    NODE_PATH=/usr/local/lib/node_modules
 USER node
 VOLUME /badger
 EXPOSE 3001

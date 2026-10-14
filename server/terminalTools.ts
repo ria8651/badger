@@ -145,6 +145,12 @@ export function terminalServer(terminals: Terminals, sessionId: string, chatCwd:
       'For anything long-running (dev servers, watchers, tails), use start_terminal rather than a background Bash command, so the user can see it and it outlives this chat. Check list_terminals first: if what you need is already running, read or restart that terminal instead of starting a second copy.',
       'Shell terminals the user opened can be driven with send_input, but they may be in the middle of something; prefer reading them.',
       "To show the user a web page a dev server serves, use open_preview: it opens in a panel beside this chat. The user may be on another computer or a phone, so give them preview URLs, never localhost ones.",
+      "To look at or drive a preview the user has open (when they say something's broken there, or to set up a state for them to try): the `preview` command in Bash runs JavaScript in their actual page, reads its console, and renders it to an image. Run `preview --help` first.",
+      ...(process.env.BADGER_CHROMIUM
+        ? [
+            `To check a page yourself, with nobody watching, Playwright and a headless Chromium are installed: \`require('playwright-core').chromium.launch({ executablePath: '${process.env.BADGER_CHROMIUM}', args: ['--no-sandbox'] })\` in a node script. Dev servers are at http://localhost:<port>. Save screenshots to files and Read them; the user sees them too. It has its own cookies and state, not the user's: for their page, use \`preview\`.`,
+          ]
+        : []),
     ].join('\n'),
     tools: [
       tool(

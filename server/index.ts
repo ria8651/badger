@@ -6,6 +6,7 @@ import { getSessionInfo, listSessions, renameSession } from '@anthropic-ai/claud
 import { WebSocketServer, type WebSocket } from 'ws'
 import { IMAGE_TYPES, type AnswerDraft, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
 import { Attention } from './attention.ts'
+import { BRIDGE_PATH, Bridges, NotOpen } from './bridge.ts'
 import { BOARD_AUTO_ALLOWED, BOARD_SERVER, boardServer, cardContext } from './boardTools.ts'
 import { Children } from './children.ts'
 import { type Actor, BadRequest, type Draft, Store } from './db.ts'
@@ -79,6 +80,15 @@ const store = new Store(DATA_DIR, () => broadcast({ type: 'sessions_changed' }))
 /** Changes made through the REST API and WebSocket, i.e. by someone in the browser. */
 const UI: Actor = { source: 'ui' }
 const terminals = new Terminals(DATA_DIR, startEnv)
+const bridges = new Bridges()
+/**
+ * What Claude's commands get besides Claude Code's own: the `preview` command
+ * on PATH, and where it reaches this server from this machine.
+ */
+const sessionEnv = {
+  PATH: [resolve('bin'), process.env.PATH].filter(Boolean).join(':'),
+  BADGER_URL: `http://${['0.0.0.0', '::'].includes(HOST) ? 'localhost' : HOST.includes(':') ? `[${HOST}]` : HOST}:${PORT}`,
+}
 const cardsChanged = () => broadcast({ type: 'cards_changed' })
 // Merging only starts a chat in the main checkout, and that chat asks for anything risky itself.
 const MERGE_TOOL_NAME = `mcp__${BOARD_SERVER}__${MERGE_TOOL}`
@@ -110,6 +120,7 @@ const manager: SessionManager = new SessionManager(
       [TERMINAL_SERVER]: terminalServer(terminals, sessionId, cwd, previews),
     },
     allowedTools: [...BOARD_AUTO_ALLOWED, MERGE_TOOL_NAME, ...TERMINAL_AUTO_ALLOWED],
+    env: sessionEnv,
     turnContext: () => cardContext(store, sessionId),
   }),
   (sessionId) => {
@@ -460,6 +471,25 @@ async function terminalsApi(method: string, path: string, req: IncomingMessage):
   return undefined
 }
 
+/**
+ * The bridge into previews the user has open, for the `preview` command. A
+ * request can take a while (a screenshot, code that waits); the command says
+ * how long to wait for it.
+ */
+async function previewApi(method: string, path: string, req: IncomingMessage): Promise<[number, unknown] | undefined> {
+  if (path === '/api/preview' && method === 'GET') return [200, bridges.list()]
+  const m = path.match(/^\/api\/preview\/(\d+)$/)
+  if (!m || method !== 'POST') return undefined
+  const { timeout, ...request } = await readJson(req)
+  if (!['run', 'logs', 'clear_logs', 'screenshot', 'goto'].includes(request.op)) throw new BadRequest('op must be run, logs, clear_logs, screenshot or goto')
+  const ms = Math.min(Math.max(Number(timeout) || 30, 1), 600) * 1000
+  try {
+    return [200, await bridges.call(Number(m[1]), request, ms)]
+  } catch (err) {
+    return [err instanceof NotOpen ? 404 : 422, { error: err instanceof Error ? err.message : String(err) }]
+  }
+}
+
 const badRequest = (err: Error): never => {
   throw new BadRequest(err.message)
 }
@@ -544,6 +574,8 @@ const server = createServer(async (req, res) => {
       if (terms) return json(...terms)
       const cards = await cardsApi(req.method ?? 'GET', url.pathname, req)
       if (cards) return json(...cards)
+      const bridged = await previewApi(req.method ?? 'GET', url.pathname, req)
+      if (bridged) return json(...bridged)
       return json(404, { error: 'Not found' })
     }
     // Production: serve the built client, falling back to index.html for client routes.
@@ -562,7 +594,10 @@ const wss = new WebSocketServer({ noServer: true })
 
 server.on('upgrade', (req, socket, head) => {
   const preview = previewPort(req.headers.host, PREVIEW_HOSTS)
-  if (preview) return proxyPreviewUpgrade(req, socket, head, preview)
+  if (preview) {
+    if (req.url === `${BRIDGE_PATH}bridge`) return bridges.upgrade(req, socket, head, preview)
+    return proxyPreviewUpgrade(req, socket, head, preview)
+  }
   const url = new URL(req.url ?? '/', 'http://x')
   if (url.pathname !== '/ws' || !sameOrigin(req)) {
     socket.write(url.pathname !== '/ws' ? 'HTTP/1.1 404 Not Found\r\n\r\n' : 'HTTP/1.1 403 Forbidden\r\n\r\n')
