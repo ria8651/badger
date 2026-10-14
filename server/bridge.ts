@@ -9,7 +9,7 @@ import { WebSocketServer, type WebSocket } from 'ws'
  * connects back here so Claude can work with the page the user actually has
  * open, with their login and whatever state they've got it into. It runs
  * code in the page, reads its console and renders it to an image. Claude
- * uses it through the `preview` command (bin/preview).
+ * uses it through the preview_* operations (server/previewTools.ts).
  */
 
 /** Where the bridge's files and socket live on every preview's origin. */

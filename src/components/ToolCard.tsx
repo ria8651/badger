@@ -70,7 +70,9 @@ export function toolSummary(name: string, input: Input, cwd?: string): string {
       return 'Update todos'
     default: {
       const first = Object.values(input).find((v) => typeof v === 'string')
-      return typeof first === 'string' ? first : ''
+      // Preview tools say which page.
+      const port = typeof input.port === 'number' ? `:${input.port}` : ''
+      return [port, typeof first === 'string' ? first : ''].filter(Boolean).join(' ')
     }
   }
 }

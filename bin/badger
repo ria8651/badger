@@ -1,0 +1,157 @@
+#!/usr/bin/env node
+// Runs a JavaScript script with Badger's operations as functions (server/ops.ts).
+
+import { existsSync, readFileSync } from 'node:fs'
+import { request } from 'node:http'
+
+const base = new URL(process.env.BADGER_URL || 'http://localhost:3001')
+
+const USAGE = `Runs JavaScript with Badger's tools as functions: the same operations as its
+MCP tools, taking the same input, but returning data instead of text.
+
+  badger '<code>'              run code given as an argument
+  badger <<'EOF' ... EOF       run code from stdin
+  badger script.js             run code from a file (when quoting gets awkward)
+  badger <name> ['<json>']     call one function, e.g. badger cards.get '{"id": 9}'
+  badger --help [name]         list the functions, or describe one in full
+
+The code runs as an async function: an expression gives its value, a body can
+\`return\` one, and \`await\` works. The result is printed (as JSON unless it's a
+string); console.log works too. A failed call throws, with the reason.
+
+  const cards = await badger.cards.list({ status: 'review' })
+  for (const c of cards) await badger.cards.update({ id: c.id, status: 'done' })
+  return cards.map((c) => c.title)
+
+preview.run takes a function as its code, which runs in the page:
+  await badger.preview.run({ port: 5173, code: () => text('h1') })`
+
+/** One HTTP request; no timeout of its own, since some operations wait (a terminal's output, a page). */
+function call(method, path, body) {
+  return new Promise((resolve, reject) => {
+    const req = request(
+      {
+        host: base.hostname.replace(/^\[|\]$/g, ''),
+        port: base.port || 80,
+        method,
+        path,
+        headers: {
+          'content-type': 'application/json',
+          'x-badger-session': process.env.CLAUDE_CODE_SESSION_ID ?? '',
+          'x-badger-cwd': process.cwd(),
+        },
+      },
+      (res) => {
+        let text = ''
+        res.setEncoding('utf8')
+        res.on('data', (c) => (text += c))
+        res.on('end', () => {
+          let data
+          try {
+            data = JSON.parse(text)
+          } catch {
+            return reject(new Error(`Badger answered ${res.statusCode}: ${text.slice(0, 200)}`))
+          }
+          if (res.statusCode >= 400) reject(new Error(data.error ?? `${res.statusCode}`))
+          else resolve(data)
+        })
+      },
+    )
+    req.on('error', (err) => reject(new Error(`Can't reach Badger at ${base.origin}: ${err.message}`)))
+    req.end(body === undefined ? undefined : JSON.stringify(body))
+  })
+}
+
+/** `badger.cards.list(input)` calls the operation cards.list. */
+function client(path = []) {
+  const fn = async (input = {}) => {
+    // Code for the page can be a function: its source goes over, and it's called there.
+    if (typeof input?.code === 'function') input = { ...input, code: `(${input.code})()` }
+    return (await call('POST', `/api/ops/${path.join('.')}`, input)).value
+  }
+  return new Proxy(fn, { get: (_, key) => (typeof key === 'string' && key !== 'then' ? client([...path, key]) : undefined) })
+}
+
+// ── Help, from the server's own list ──
+
+function type(s) {
+  if (!s || typeof s !== 'object') return 'any'
+  if (s.enum) return s.enum.map((v) => JSON.stringify(v)).join(' | ')
+  if (s.anyOf) return s.anyOf.map(type).join(' | ')
+  if (s.type === 'integer') return 'number'
+  if (s.type === 'array') return `${type(s.items)}[]`
+  return s.type ?? 'any'
+}
+
+function signature(o) {
+  const props = Object.entries(o.input.properties ?? {})
+  const required = new Set(o.input.required ?? [])
+  const args = props.map(([name, s]) => `${name}${required.has(name) ? '' : '?'}: ${type(s)}`).join(', ')
+  return `badger.${o.name}(${args ? `{ ${args} }` : ''})`
+}
+
+async function help(name) {
+  const list = await call('GET', '/api/ops')
+  if (!name) {
+    // The first sentence; "e.g. a dev server" doesn't end one.
+    const lines = list.map((o) => `${signature(o)}\n    ${o.description.split(/(?<=\.)\s+(?=[A-Z])/)[0]}`)
+    return `${USAGE}\n\nFunctions (badger --help <name> for one in full):\n\n${lines.join('\n')}`
+  }
+  const o = list.find((o) => o.name === name.replace(/^badger\./, ''))
+  if (!o) throw new Error(`No badger.${name}`)
+  const params = Object.entries(o.input.properties ?? {}).filter(([, s]) => s.description)
+  return [
+    signature(o),
+    '',
+    o.description,
+    '',
+    `Returns: ${o.returns}`,
+    ...(params.length ? ['', ...params.map(([n, s]) => `  ${n}: ${s.description}`)] : []),
+    '',
+    `As a tool: ${o.tool}`,
+  ].join('\n')
+}
+
+// ── Running a script ──
+
+const AsyncFunction = (async () => {}).constructor
+
+function compile(code) {
+  try {
+    // An expression gives its value; anything else runs as a function body, so it can return one.
+    return new AsyncFunction('badger', `return (${code}\n)`)
+  } catch {
+    return new AsyncFunction('badger', code)
+  }
+}
+
+function parseInput(json) {
+  try {
+    return JSON.parse(json)
+  } catch {
+    throw new Error(`The input after a function's name must be JSON, e.g. '{"id": 9}'`)
+  }
+}
+
+const args = process.argv.slice(2)
+try {
+  if (args[0] === '--help' || args[0] === '-h' || args[0] === 'help') {
+    console.log(await help(args[1]))
+  } else {
+    const file = args.length === 1 && /\.[cm]?js$/.test(args[0]) && existsSync(args[0]) ? args[0] : undefined
+    const code = file ? readFileSync(file, 'utf8') : args.length ? args.join(' ') : process.stdin.isTTY ? '' : readFileSync(0, 'utf8')
+    if (!code.trim()) {
+      console.log(USAGE)
+      process.exit(1)
+    }
+    // A function's name on its own calls it, with JSON input if any follows.
+    const named = !file && /^(badger\.)?[a-z]+\.[a-z]+$/i.test(args[0] ?? '') && args.length <= 2
+    const result = named
+      ? await client(args[0].replace(/^badger\./, '').split('.'))(args[1] ? parseInput(args[1]) : {})
+      : await compile(code)(client())
+    if (result !== undefined) console.log(typeof result === 'string' ? result : JSON.stringify(result, null, 2))
+  }
+} catch (err) {
+  console.error(err instanceof Error ? err.message : String(err))
+  process.exit(1)
+}

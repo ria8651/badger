@@ -94,10 +94,14 @@
     }
   }
 
+  /** A result as text for Claude to read, and as data for a script; too big for either, it's cut to text. */
   function render(value) {
-    const p = plain(value)
-    const text = typeof p === 'string' ? p : JSON.stringify(p, null, 2)
-    return text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT)}\n[cut: ${text.length} characters in all]` : text
+    if (value === undefined) return { text: '(no value)', data: null }
+    const data = plain(value)
+    const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2)
+    if (text.length <= MAX_TEXT) return { text, data }
+    const cut = `${text.slice(0, MAX_TEXT)}\n[cut: ${text.length} characters in all]`
+    return { text: cut, data: cut }
   }
 
   // ── Helpers for code Claude runs ──

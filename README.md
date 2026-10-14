@@ -20,6 +20,7 @@ Badger is a web UI for [Claude Code](https://claude.com/claude-code) that runs o
 - **Terminals beside the chat.** Tiled around the conversation. Claude can start, read and restart them, and wait for a dev server to come up.
 - **Previews.** Anything listening on a port opens in a panel at `<port>.your-host`, hot reload included. Claude can look into the page you have open, run code in it, read its console and screenshot it, so "this bit's broken" is enough to go on. It can also check pages itself in a headless Chromium (in the Docker image).
 - **A project board.** Cards hold chats from any repo. Claude can read and update the board, and the radar shows what needs you across every project.
+- **Tools and scripts.** Everything Claude can do in Badger is both a tool and a function it can script: `badger 'await badger.cards.list({ status: "review" })'`, so bulk changes are one loop instead of dozens of calls.
 - **Worktrees.** Run several chats on one repo side by side, each in its own git worktree, and merge one back with a button.
 - **Subagents and background tasks.** See what each agent is doing as it happens, and stop or background them.
 - **Permissions in the browser.** Approve tool calls, answer Claude's questions and review plans from any tab or your phone, with notifications when something's waiting.
