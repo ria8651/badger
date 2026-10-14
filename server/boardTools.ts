@@ -19,21 +19,22 @@ const status = z.enum(CARD_STATUSES)
  * The chat's card as context for the next turn, or undefined when Claude has
  * already seen this exact state. Appended to the turn rather than the system
  * prompt, so it never invalidates the prompt cache; it lands in the transcript
- * and survives resumes, and the stored hash stops it being repeated.
+ * and survives resumes, and the stored hash stops it being repeated. A peek
+ * leaves the hash alone, for showing what's about to go in.
  */
-export function cardContext(store: Store, sessionId: string): string | undefined {
+export function cardContext(store: Store, sessionId: string, peek = false): string | undefined {
   const cards = store.cards()
   const card = cards.find((c) => c.sessionIds.includes(sessionId))
   const last = store.contextHash(sessionId)
   if (!card) {
     if (last === undefined) return undefined
-    store.setContextHash(sessionId, null)
+    if (!peek) store.setContextHash(sessionId, null)
     return NO_CARD_CONTEXT
   }
   const rendered = renderCardContext(card, ancestors(cards, card.id))
   const hash = hashOf(rendered)
   if (hash === last) return undefined
-  store.setContextHash(sessionId, hash)
+  if (!peek) store.setContextHash(sessionId, hash)
   return rendered
 }
 

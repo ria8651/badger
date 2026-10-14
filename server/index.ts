@@ -110,7 +110,7 @@ const manager: SessionManager = new SessionManager(
       [TERMINAL_SERVER]: terminalServer(terminals, sessionId, cwd, previews),
     },
     allowedTools: [...BOARD_AUTO_ALLOWED, MERGE_TOOL_NAME, ...TERMINAL_AUTO_ALLOWED],
-    turnContext: () => cardContext(store, sessionId),
+    turnContext: (peek) => cardContext(store, sessionId, peek),
   }),
   (sessionId) => {
     sendContext(sessionId)

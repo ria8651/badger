@@ -16,6 +16,8 @@ export interface ChatState {
   messages: WireMessage[]
   partial: Partial | null
   running: boolean
+  /** Claude Code is still making the worktree it was started in, so nothing's happening yet. */
+  makingWorktree: boolean
   mode: PermissionMode
   /** Absent for a chat that hasn't run yet. */
   model?: string
@@ -45,6 +47,7 @@ function apply(state: ChatState, event: ServerEvent): void {
       state.loaded = true
       state.messages = event.messages
       state.running = event.running
+      state.makingWorktree = !!event.makingWorktree
       state.mode = event.mode
       state.model = event.model
       state.cwd = event.cwd
@@ -70,6 +73,7 @@ function apply(state: ChatState, event: ServerEvent): void {
       break
     case 'status':
       state.running = event.running
+      state.makingWorktree = event.makingWorktree
       state.mode = event.mode
       if (event.model) state.model = event.model
       state.cwd = event.cwd
@@ -145,6 +149,7 @@ export function createChat(sessionId: string) {
     messages: [],
     partial: null,
     running: false,
+    makingWorktree: false,
     mode: 'auto',
     gone: false,
     permissions: [],

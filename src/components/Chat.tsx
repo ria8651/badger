@@ -85,10 +85,13 @@ export function Chat(props: {
   let pinned = true
   let lastTop = 0
   const cwd = () => state.cwd ?? props.draftCwd
-  const root = () => {
+  // Holds the last one while a new folder's is looked up, so moving into a worktree doesn't drop the terminals button for a moment.
+  const root = createMemo<string | undefined>((last) => {
     const dir = cwd()
-    return dir ? workspaceOf(dir)() : undefined
-  }
+    return dir ? (workspaceOf(dir)() ?? last) : undefined
+  })
+  /** Running, and not just waiting on Claude Code to make its worktree. */
+  const working = () => state.running && !state.makingWorktree
   const where = () => (isScratch(cwd()) ? 'No folder' : (cwd() ?? ''))
 
   // Shared by the transcript and the task tray, so both read the chat's messages once.
@@ -353,12 +356,18 @@ export function Chat(props: {
                       messages={state.messages}
                       partial={state.partial}
                       bashOutput={state.bashOutput}
-                      running={state.running}
-                      working={state.running && state.permissions.length === 0 && childPrompts().length === 0}
+                      running={working()}
+                      working={working() && state.permissions.length === 0 && childPrompts().length === 0}
                       cwd={cwd()}
                       children={state.children}
                     />
                   </ChildChats.Provider>
+                  <Show when={state.makingWorktree}>
+                    <div class="mt-4 flex h-6 items-center gap-2 text-[13px] text-fg-3">
+                      <GitBranch class="size-3.5 shrink-0 animate-pulse" /> Making worktree
+                      <Show when={worktreeName()}>{(name) => <span class="min-w-0 truncate font-mono text-xs">{name()}</span>}</Show>
+                    </div>
+                  </Show>
                 </Show>
               </Show>
             </div>
@@ -481,7 +490,7 @@ export function Chat(props: {
                         e.preventDefault()
                         submit()
                       }
-                      if (e.key === 'Escape' && state.running) interrupt()
+                      if (e.key === 'Escape' && working()) interrupt()
                       // Each subagent and command has its own button; this sends every one at once.
                       if (e.key === 'b' && e.ctrlKey && !e.metaKey && state.running && waitingOnTask(index())) {
                         e.preventDefault()
@@ -560,7 +569,7 @@ export function Chat(props: {
                       <Show when={state.context}>{(u) => <ContextMeter usage={u()} />}</Show>
                       {/* One slot: stop while running with nothing typed, otherwise send. */}
                       <Show
-                        when={state.running && !hasInput()}
+                        when={working() && !hasInput()}
                         fallback={
                           <IconButton onClick={submit} disabled={!hasInput()} title="Send (Enter)">
                             <ArrowUp class="size-4" />
