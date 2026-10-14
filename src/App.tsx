@@ -605,7 +605,6 @@ export function App() {
                   <Chat
                     sessionId={id}
                     draftCwd={drafts()[id] ?? defaultCwd()}
-                    projects={projects()}
                     worktree={worktreeDrafts()[id]}
                     onPickCwd={(cwd) => setDrafts((d) => ({ ...d, [id]: cwd }))}
                     onPickWorktree={(on) => setWorktreeDrafts((w) => ({ ...w, [id]: on }))}

@@ -4,6 +4,9 @@ import { createSignal } from 'solid-js'
 const [scratch, setScratch] = createSignal<string>()
 export { setScratch }
 
+/** Where folderless chats run. */
+export const scratchDir = scratch
+
 export const isScratch = (cwd?: string) => !!cwd && cwd === scratch()
 
 export const basename = (path: string) => path.split('/').filter(Boolean).pop() ?? path
@@ -31,13 +34,6 @@ export function cardWorktreeName(card: { id: number; title: string }): string {
   }
   return slug ? `${card.id}-${slug}` : `card-${card.id}`
 }
-
-/** For directory pickers: scratch gets a description instead of its path. */
-export const folderItem = (cwd: string) => ({
-  label: folderLabel(cwd),
-  description: isScratch(cwd) ? 'Quick questions, not tied to a repo' : cwd,
-  mono: !isScratch(cwd),
-})
 
 /** Where a new chat should start: the repo of the most recent of these chats that ran in one, and whether that was a worktree. */
 export function lastWorkedIn(sessions: { cwd?: string; gone?: boolean; lastModified: number }[]): { cwd: string; worktree: boolean } | undefined {

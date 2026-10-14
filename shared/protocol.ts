@@ -106,6 +106,52 @@ export interface ChangesStatus {
   ahead: number
 }
 
+/** A folder new chats can start in. A git repo's is its main checkout, with its worktrees alongside. */
+export interface Folder {
+  path: string
+  /** Added in the file browser, rather than found from chats that ran there. */
+  added: boolean
+  /** The latest chat in it or any of its worktrees, or when it was added, ms since epoch. */
+  lastUsed: number
+  /** The main checkout first, then linked worktrees, newest commit first. Absent outside a git repo. */
+  checkouts?: Checkout[]
+}
+
+/** One working tree of a repo. */
+export interface Checkout {
+  path: string
+  /** Empty when HEAD is detached. */
+  branch: string
+  main: boolean
+  /** Files with uncommitted changes, untracked ones included. */
+  changes: number
+  /** Commits on HEAD that no remote has. Null when the repo has no remotes. */
+  unpushed: number | null
+  /** Commits on HEAD that the main checkout's HEAD doesn't have; 0 for the main checkout. */
+  unmerged: number
+  /** The last commit, ms since epoch; 0 before the first. */
+  committedAt: number
+}
+
+/** One entry in the file browser. */
+export interface FileEntry {
+  name: string
+  dir: boolean
+  /** Bytes, for files. */
+  size?: number
+  /** A folder with a .git in it. */
+  git?: boolean
+}
+
+export interface Listing {
+  path: string
+  /** Null at the root. */
+  parent: string | null
+  entries: FileEntry[]
+  /** More than were sent. */
+  truncated: boolean
+}
+
 export const CARD_STATUSES = ['backlog', 'todo', 'in_progress', 'review', 'done'] as const
 export type CardStatus = (typeof CARD_STATUSES)[number]
 
@@ -159,7 +205,15 @@ export interface TerminalInfo {
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const
 
 /** A pasted or dropped image, base64 encoded, sent to Claude as an image block. */
-export type ImageAttachment = { mediaType: (typeof IMAGE_TYPES)[number]; data: string }
+/** File extensions for each image type, for picking images off disk. */
+export const IMAGE_EXTENSIONS: Record<(typeof IMAGE_TYPES)[number], string[]> = {
+  'image/png': ['.png'],
+  'image/jpeg': ['.jpg', '.jpeg'],
+  'image/gif': ['.gif'],
+  'image/webp': ['.webp'],
+}
+
+export type ImageAttachment ={ mediaType: (typeof IMAGE_TYPES)[number]; data: string }
 
 /** Big pastes and images waiting in the composer to be sent. */
 export type DraftAttachments = { pastes: string[]; images: ImageAttachment[] }
