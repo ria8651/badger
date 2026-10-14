@@ -388,7 +388,16 @@ export function Workspace(props: {
     return (
       <div class="absolute flex flex-col bg-bg" style={box(rect(g().id)!)} onPointerDown={() => focusLeaf(g().id)}>
         <div class="flex shrink-0 items-center gap-0.5 px-1.5" style={{ height: `${BAR}px` }}>
-          <div class="flex min-w-0 items-center gap-0.5 overflow-x-auto [scrollbar-width:none]">
+          {/* A mouse wheel only scrolls vertically, so turn that into scrolling along the tabs. */}
+          <div
+            class="flex min-w-0 items-center gap-0.5 overflow-x-auto [scrollbar-width:none]"
+            onWheel={(e) => {
+              const el = e.currentTarget
+              if (Math.abs(e.deltaY) <= Math.abs(e.deltaX) || el.scrollWidth <= el.clientWidth) return
+              e.preventDefault()
+              el.scrollLeft += e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY
+            }}
+          >
             <For each={g().views.map(viewKey)}>
               {(key) => {
                 const v = () => viewOf(key)
