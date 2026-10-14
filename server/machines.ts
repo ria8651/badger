@@ -33,7 +33,10 @@ interface MachineRow {
 }
 
 export interface MachineEvents {
-  /** A runner said hello or went away, or a machine was added, renamed or turned away. Anything a runner had live is gone with it. */
+  /**
+   * A runner said hello or went away, or a machine was added, renamed or turned away. `machine` is given only when its
+   * runner has just said hello. Anything a runner had live is gone with it when it goes.
+   */
   onChange: (machine: Connection | undefined, id: string) => void
   onEvent: (machine: Connection, event: RunnerEvent) => void
 }
@@ -133,7 +136,7 @@ export class Machines {
     }
     const live = this.connections.get(id)
     if (live) live.name = clean
-    this.events.onChange(live, id)
+    this.events.onChange(undefined, id)
     return this.list().find((m) => m.id === id)!
   }
 
@@ -247,8 +250,7 @@ export class Machines {
           connection.live = live
         }
         if (event.type === 'terminals') {
-          // A terminal says which chat started it; only one of this machine's.
-          connection.terminals = event.terminals.map((t) => (t.sessionId && !this.owns(id, t.sessionId) ? { ...t, sessionId: undefined } : t))
+          connection.terminals = event.terminals.map((t) => this.ownTerminal(id, t))
           connection.terminalsKnown = true
         }
         this.events.onEvent(connection, event)
@@ -324,6 +326,11 @@ export class Machines {
     return [...this.connections.values()].every((c) => c.terminalsKnown)
   }
 
+  /** A terminal says which chat started it; only one of its own machine's. */
+  private ownTerminal(machine: string, t: TerminalInfo): TerminalInfo {
+    return t.sessionId && !this.owns(machine, t.sessionId) ? { ...t, sessionId: undefined } : t
+  }
+
   /** A browser's terminal id, split into the machine's runner and its own id. */
   terminal(globalId: string): { machine: Connection; id: string } | undefined {
     const dot = globalId.lastIndexOf('.')
@@ -336,7 +343,8 @@ export class Machines {
    * runner's own list broadcasts are throttled; this way the browser can open
    * it straight away. Returns it with the browser's id.
    */
-  upsertTerminal(machine: Connection, info: TerminalInfo): TerminalInfo {
+  upsertTerminal(machine: Connection, reply: TerminalInfo): TerminalInfo {
+    const info = this.ownTerminal(machine.id, reply)
     const i = machine.terminals.findIndex((t) => t.id === info.id)
     machine.terminals = i < 0 ? [...machine.terminals, info] : machine.terminals.with(i, info)
     return { ...info, id: `${machine.id}.${info.id}`, machine: machine.id }

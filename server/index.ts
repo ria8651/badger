@@ -346,7 +346,8 @@ const broadcastTerminals = debounced(() => {
   if (!machines.terminalsKnown()) return
   const list = machines.terminals()
   broadcast({ type: 'terminals', terminals: list })
-  for (const id of termViewers.keys()) if (!list.some((t) => t.id === id)) termViewers.delete(id)
+  // An offline machine's terminals aren't listed but haven't closed: their viewers pick up again when it's back.
+  for (const id of termViewers.keys()) if (machines.terminal(id) && !list.some((t) => t.id === id)) termViewers.delete(id)
 })
 
 /** Every subscribe gets a fresh snapshot, which also resets any view of it the socket already has. */
@@ -420,7 +421,8 @@ async function sendSnapshot(ws: WebSocket, sessionId: string): Promise<void> {
     // History holds earlier processes' turns; the live list holds this process's, in order.
     const seen = new Set(live.messages.map((m) => m.uuid))
     const messages = [...history.filter((m) => !seen.has(m.uuid) && !seen.has(m.after_uuid as string)), ...live.messages]
-    send(ws, { ...base, ...live, messages })
+    // The runner's answer goes first, so it can't say which chat this is.
+    send(ws, { ...live, ...base, messages })
   }
   if (!runner) return done(null, false)
   const gone = info?.cwd ? (await runner.peer.within(QUICK_TIMEOUT_MS).inaccessible([info.cwd]).catch(() => [])).length > 0 : false
