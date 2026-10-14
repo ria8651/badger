@@ -541,9 +541,9 @@ export function App() {
               <ChevronRight class={`size-3 transition-transform ${showArchived() ? 'rotate-90' : ''}`} />
               Archived ({archived().length})
             </button>
-            <Show when={showArchived()}>
-              <For each={archived()}>{(s) => <SessionRow session={s} />}</For>
-            </Show>
+            <For each={showArchived() ? archived() : archived().filter((s) => s.id === current())}>
+              {(s) => <SessionRow session={s} />}
+            </For>
           </Show>
         </nav>
         <Show when={accountUsage()}>{(u) => <AccountLimits usage={u()} />}</Show>
