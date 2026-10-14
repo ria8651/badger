@@ -21,6 +21,13 @@ export function chatActions(ctx: { worktree?: WorktreeStatus }): ChatAction[] {
     // Uncommitted work counts: Claude commits it before merging.
     const pending = [wt.unmerged && plural(wt.unmerged, 'commit'), wt.changes && plural(wt.changes, 'uncommitted change')].filter(Boolean)
     actions.push({
+      label: 'Review changes',
+      description: pending.length
+        ? `${pending.join(', ')}. A fresh chat reviews them and reports back here.`
+        : `Nothing to review: everything here is already on ${wt.base}.`,
+      prompt: 'Have the changes in this worktree reviewed.',
+    })
+    actions.push({
       label: `Merge into ${wt.base}`,
       description: pending.length
         ? `${pending.join(', ')}. A chat in the main checkout merges it, then the worktree goes.`

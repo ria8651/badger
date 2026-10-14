@@ -11,6 +11,7 @@ import { Children } from './children.ts'
 import { type Actor, BadRequest, type Draft, Store } from './db.ts'
 import { MERGE_TOOL, mergeTool } from './merge.ts'
 import { proxyPreview, proxyPreviewUpgrade, previewPort } from './preview.ts'
+import { REVIEW_TOOL, reviewTool } from './review.ts'
 import { SessionManager, diskTranscript, listModels, transcriptModel } from './session.ts'
 import { TERMINAL_AUTO_ALLOWED, TERMINAL_SERVER, terminalServer, type Previews } from './terminalTools.ts'
 import { Terminals, shellEnv } from './terminals.ts'
@@ -82,6 +83,8 @@ const terminals = new Terminals(DATA_DIR, startEnv)
 const cardsChanged = () => broadcast({ type: 'cards_changed' })
 // Merging only starts a chat in the main checkout, and that chat asks for anything risky itself.
 const MERGE_TOOL_NAME = `mcp__${BOARD_SERVER}__${MERGE_TOOL}`
+// Reviewing only starts a chat that's told to report, not change anything.
+const REVIEW_TOOL_NAME = `mcp__${BOARD_SERVER}__${REVIEW_TOOL}`
 const manager: SessionManager = new SessionManager(
   () => {
     broadcast({ type: 'sessions_changed' })
@@ -106,10 +109,11 @@ const manager: SessionManager = new SessionManager(
           cwd,
           MERGE_TOOL_NAME,
         ),
+        reviewTool({ store, manager, children }, sessionId, cwd, REVIEW_TOOL_NAME),
       ]),
       [TERMINAL_SERVER]: terminalServer(terminals, sessionId, cwd, previews),
     },
-    allowedTools: [...BOARD_AUTO_ALLOWED, MERGE_TOOL_NAME, ...TERMINAL_AUTO_ALLOWED],
+    allowedTools: [...BOARD_AUTO_ALLOWED, MERGE_TOOL_NAME, REVIEW_TOOL_NAME, ...TERMINAL_AUTO_ALLOWED],
     turnContext: (peek) => cardContext(store, sessionId, peek),
   }),
   (sessionId) => {
