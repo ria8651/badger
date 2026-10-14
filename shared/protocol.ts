@@ -216,6 +216,8 @@ export type ServerEvent =
       sessionId: string
       messages: WireMessage[]
       running: boolean
+      /** Claude Code is still making the worktree it was started in, so nothing's happening yet. */
+      makingWorktree?: boolean
       mode: PermissionMode
       /** A ModelOption value, or a model id from the transcript. Absent until the chat has run. */
       model?: string
@@ -239,7 +241,7 @@ export type ServerEvent =
   /** Live output from a running Bash command; the tool_result still carries the final output. */
   | { type: 'bash_output'; sessionId: string; toolUseId: string; chunk: string }
   /** cwd changes when the chat moves into a worktree. */
-  | { type: 'status'; sessionId: string; running: boolean; mode: PermissionMode; model?: string; cwd: string }
+  | { type: 'status'; sessionId: string; running: boolean; makingWorktree: boolean; mode: PermissionMode; model?: string; cwd: string }
   /** Messages Claude Code is holding for its next break; replaces the previous list. */
   | { type: 'queued'; sessionId: string; messages: QueuedMessage[] }
   /** The background tasks running now; replaces the previous set. */

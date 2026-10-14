@@ -31,8 +31,8 @@ type Listener = (event: ServerEvent) => void
 export interface SessionTools {
   mcpServers: Record<string, McpServerConfig>
   allowedTools: string[]
-  /** Text to add to the conversation alongside the user's next message, if any. */
-  turnContext?: () => string | undefined
+  /** Text to add to the conversation alongside the user's next message, if any. A peek doesn't count it as added. */
+  turnContext?: (peek?: boolean) => string | undefined
 }
 
 /** A queued message, with what was sent to Claude Code so it can join the transcript once taken in. */
@@ -57,6 +57,8 @@ export class LiveSession {
   /** What the chat was started with or switched to; otherwise what Claude Code reports it's using. */
   model?: string
   running = false
+  /** Started with --worktree and Claude Code hasn't come up in it yet, e.g. a WorktreeCreate hook is still copying files. */
+  makingWorktree: boolean
 
   private queue = new MessageQueue()
   private agent: Query
@@ -81,6 +83,9 @@ export class LiveSession {
   private queued: Held[] = []
   /** Any background work is running, the subagents' own included; closing the process would kill it. */
   busy = false
+  private turnContext?: (peek?: boolean) => string | undefined
+  /** Context already shown with a message that Claude Code hasn't taken in yet, so it isn't shown twice. */
+  private shownContext?: string
 
   constructor(opts: {
     id: string
@@ -99,6 +104,8 @@ export class LiveSession {
     this.cwd = opts.cwd
     this.mode = opts.mode
     this.model = opts.model
+    this.makingWorktree = opts.worktree !== undefined && !opts.resume
+    this.turnContext = opts.tools.turnContext
     this.onClose = opts.onClose
     this.onChange = opts.onChange
     this.onTurnEnd = opts.onTurnEnd
@@ -133,9 +140,11 @@ export class LiveSession {
             {
               hooks: [
                 async () => {
-                  const additionalContext = opts.tools.turnContext?.()
+                  const additionalContext = this.turnContext?.()
+                  const shown = this.shownContext
+                  this.shownContext = undefined
                   if (!additionalContext) return { continue: true }
-                  this.record({ type: 'hook_context', uuid: randomUUID(), text: additionalContext })
+                  if (additionalContext !== shown) this.record({ type: 'hook_context', uuid: randomUUID(), text: additionalContext })
                   return { continue: true, hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } }
                 },
               ],
@@ -205,6 +214,7 @@ export class LiveSession {
       sessionId: this.id,
       messages,
       running: this.running,
+      makingWorktree: this.makingWorktree,
       mode: this.mode,
       model: this.model,
       cwd: this.cwd,
@@ -236,6 +246,9 @@ export class LiveSession {
     } else {
       // Echo immediately so every tab shows the message before the SDK replays it.
       this.record({ ...message, timestamp: new Date().toISOString() } as unknown as WireMessage)
+      // Shown with the message now rather than when Claude Code takes it in, which can be a while for a new worktree.
+      this.shownContext = this.turnContext?.(true)
+      if (this.shownContext) this.record({ type: 'hook_context', uuid: randomUUID(), text: this.shownContext })
       this.setRunning(true)
     }
     return true
@@ -374,6 +387,7 @@ export class LiveSession {
       this.emit({ type: 'error', sessionId: this.id, error: err instanceof Error ? err.message : String(err) })
     } finally {
       this.queue.close()
+      this.makingWorktree = false
       this.setRunning(false)
       this.onClose()
     }
@@ -398,6 +412,10 @@ export class LiveSession {
     }
     // With --worktree, Claude Code reports where it actually ended up.
     if (msg.type === 'system' && msg.subtype === 'init') {
+      if (this.makingWorktree) {
+        this.makingWorktree = false
+        this.emitStatus()
+      }
       this.setCwd(msg.cwd)
       if (!this.model && msg.model) {
         this.model = msg.model
@@ -488,7 +506,7 @@ export class LiveSession {
   }
 
   private emitStatus(): void {
-    this.emit({ type: 'status', sessionId: this.id, running: this.running, mode: this.mode, model: this.model, cwd: this.cwd })
+    this.emit({ type: 'status', sessionId: this.id, running: this.running, makingWorktree: this.makingWorktree, mode: this.mode, model: this.model, cwd: this.cwd })
   }
 
   private emit(event: ServerEvent): void {
