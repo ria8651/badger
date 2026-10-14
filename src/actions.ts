@@ -28,5 +28,10 @@ export function chatActions(ctx: { worktree?: WorktreeStatus }): ChatAction[] {
       prompt: `Merge this worktree into ${wt.base}.`,
     })
   }
+  actions.push({
+    label: 'Preview',
+    description: 'Start the dev server, or reuse a running one, and show it beside the chat.',
+    prompt: 'Start a preview of this app.',
+  })
   return actions
 }
