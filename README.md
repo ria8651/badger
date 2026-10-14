@@ -18,8 +18,9 @@ Badger is a web UI for [Claude Code](https://claude.com/claude-code) that runs o
 
 - **The full Claude Code.** Driven through the [Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk), not a reimplementation. Plan mode, auto mode, model picker, images, queued messages.
 - **Terminals beside the chat.** Tiled around the conversation. Claude can start, read and restart them, and wait for a dev server to come up.
-- **Previews.** Anything listening on a port opens in a panel at `<port>.your-host`, hot reload included.
+- **Previews.** Anything listening on a port opens in a panel at `<port>.your-host`, hot reload included. Claude can look into the page you have open, run code in it, read its console and screenshot it, so "this bit's broken" is enough to go on. It can also check pages itself in a headless Chromium (in the Docker image).
 - **A project board.** Cards hold chats from any repo. Claude can read and update the board, and the radar shows what needs you across every project.
+- **Tools and scripts.** Everything Claude can do in Badger is both a tool and a function it can script: `badger 'await badger.cards.list({ status: "review" })'`, so bulk changes are one loop instead of dozens of calls.
 - **Worktrees.** Run several chats on one repo side by side, each in its own git worktree, and merge one back with a button.
 - **Subagents and background tasks.** See what each agent is doing as it happens, and stop or background them.
 - **Permissions in the browser.** Approve tool calls, answer Claude's questions and review plans from any tab or your phone, with notifications when something's waiting.
@@ -64,7 +65,7 @@ Production: `pnpm build && pnpm start`. Claude auth comes from `ANTHROPIC_API_KE
 <summary>Self-hosting notes</summary>
 
 - Proxies must pass WebSocket upgrades on `/ws` and keep the `Host` header.
-- For previews, also send `*.<Badger's host>` to it (a wildcard DNS record, certificate and proxy route, behind the same auth), with WebSocket upgrades on any path. Previews only work when the browser reaches Badger by host name, not by IP address.
+- For previews, also send `*.<Badger's host>` to it (a wildcard DNS record, certificate and proxy route, behind the same auth), with WebSocket upgrades on any path. Previews only work when the browser reaches Badger by host name, not by IP address. Badger adds a small script to preview pages (served from `/__badger/`) so Claude can reach them; it loosens the page's Content-Security-Policy just enough for that.
 - `latest` follows `spike`, and `v*` tags publish versions. `docker compose up -d --build` builds from your checkout instead, e.g. after adding tools to the `Dockerfile`.
 - `BADGER_DIR` (default `./badger`) is mounted at `/badger` and used as the container's `HOME`. Any `user:` works as long as it can write the folder.
 - Use git over HTTPS (`gh auth login` sets it up). `ssh` refuses to run as a uid with no passwd entry, which a custom `user:` is.

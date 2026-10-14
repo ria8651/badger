@@ -7,14 +7,17 @@ import { getSessionInfo, listSessions, renameSession } from '@anthropic-ai/claud
 import { WebSocketServer, type WebSocket } from 'ws'
 import { IMAGE_EXTENSIONS, IMAGE_TYPES, type AnswerDraft, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
 import { Attention } from './attention.ts'
-import { BOARD_AUTO_ALLOWED, BOARD_SERVER, boardServer, cardContext } from './boardTools.ts'
+import { BRIDGE_PATH, Bridges } from './bridge.ts'
+import { BOARD_INSTRUCTIONS, BOARD_SERVER, boardOps, cardContext } from './boardTools.ts'
 import { Children } from './children.ts'
 import { type Actor, BadRequest, type Draft, Store } from './db.ts'
 import { MERGE_TOOL, mergeTool } from './merge.ts'
 import { proxyPreview, proxyPreviewUpgrade, previewPort } from './preview.ts'
 import { REVIEW_TOOL, reviewTool } from './review.ts'
 import { SessionManager, diskTranscript, listModels, transcriptModel } from './session.ts'
-import { TERMINAL_AUTO_ALLOWED, TERMINAL_SERVER, terminalServer, type Previews } from './terminalTools.ts'
+import { type Op, OpError, catalog, mcpServer, message, runForScript, toolName } from './ops.ts'
+import { PREVIEW_INSTRUCTIONS, previewOps, type Previews } from './previewTools.ts'
+import { TERMINAL_INSTRUCTIONS, TERMINAL_SERVER, terminalOps } from './terminalTools.ts'
 import { Terminals, shellEnv } from './terminals.ts'
 import { suggestTitle } from './titles.ts'
 import { Usage } from './usage.ts'
@@ -82,7 +85,18 @@ const store = new Store(DATA_DIR, () => broadcast({ type: 'sessions_changed' }))
 /** Changes made through the REST API and WebSocket, i.e. by someone in the browser. */
 const UI: Actor = { source: 'ui' }
 const terminals = new Terminals(DATA_DIR, startEnv)
+const bridges = new Bridges()
+/**
+ * What Claude's commands get besides Claude Code's own: the `badger` command
+ * on PATH, and where it reaches this server from this machine.
+ */
+const sessionEnv = {
+  PATH: [resolve('bin'), process.env.PATH].filter(Boolean).join(':'),
+  BADGER_URL: `http://${['0.0.0.0', '::'].includes(HOST) ? 'localhost' : HOST.includes(':') ? `[${HOST}]` : HOST}:${PORT}`,
+}
 const cardsChanged = () => broadcast({ type: 'cards_changed' })
+/** Every operation Claude has, as tools and from scripts. */
+const ops: Op[] = [...boardOps(store, cardsChanged), ...terminalOps(terminals), ...previewOps(previews, bridges)]
 // Merging only starts a chat in the main checkout, and that chat asks for anything risky itself.
 const MERGE_TOOL_NAME = `mcp__${BOARD_SERVER}__${MERGE_TOOL}`
 // Reviewing only starts a chat that's told to report, not change anything.
@@ -95,7 +109,8 @@ const manager: SessionManager = new SessionManager(
   },
   (sessionId, cwd) => ({
     mcpServers: {
-      [BOARD_SERVER]: boardServer(store, sessionId, cardsChanged, [
+      [BOARD_SERVER]: mcpServer(BOARD_SERVER, BOARD_INSTRUCTIONS, ops, { sessionId, cwd }, [
+        // Only as a tool: the merge shows inside its own call.
         mergeTool(
           {
             store,
@@ -113,9 +128,10 @@ const manager: SessionManager = new SessionManager(
         ),
         reviewTool({ store, manager, children }, sessionId, cwd, REVIEW_TOOL_NAME),
       ]),
-      [TERMINAL_SERVER]: terminalServer(terminals, sessionId, cwd, previews),
+      [TERMINAL_SERVER]: mcpServer(TERMINAL_SERVER, [...TERMINAL_INSTRUCTIONS, ...PREVIEW_INSTRUCTIONS].join('\n'), ops, { sessionId, cwd }),
     },
-    allowedTools: [...BOARD_AUTO_ALLOWED, MERGE_TOOL_NAME, REVIEW_TOOL_NAME, ...TERMINAL_AUTO_ALLOWED],
+    allowedTools: [...ops.filter((o) => o.autoAllow).map(toolName), MERGE_TOOL_NAME, REVIEW_TOOL_NAME],
+    env: sessionEnv,
     turnContext: (peek) => cardContext(store, sessionId, peek),
   }),
   (sessionId) => {
@@ -521,6 +537,29 @@ async function terminalsApi(method: string, path: string, req: IncomingMessage):
   return undefined
 }
 
+/**
+ * Operations for the `badger` command's scripts. They run as the chat whose
+ * script it is (its id comes from Claude Code's environment), from the
+ * script's directory. Some take a while: a terminal's wait_for, a page.
+ */
+async function opsApi(method: string, path: string, req: IncomingMessage): Promise<[number, unknown] | undefined> {
+  if (path === '/api/ops' && method === 'GET') return [200, catalog(ops)]
+  const m = path.match(/^\/api\/ops\/([\w.]+)$/)
+  if (!m || method !== 'POST') return undefined
+  const o = ops.find((o) => o.script === m[1])
+  if (!o) return [404, { error: `No badger.${m[1]}; badger --help lists them.` }]
+  const header = (name: string) => [req.headers[name]].flat()[0] ?? ''
+  const sessionId = /^[0-9a-f-]{36}$/.test(header('x-badger-session')) ? header('x-badger-session') : ''
+  const dir = isAbsolute(header('x-badger-cwd')) ? header('x-badger-cwd') : (manager.get(sessionId)?.cwd ?? WORKSPACE_DIR)
+  const input = await readJson(req)
+  try {
+    return [200, { value: await runForScript(o, input, { sessionId, cwd: () => dir }) }]
+  } catch (err) {
+    if (!(err instanceof OpError)) console.error(`badger.${o.script} failed:`, err)
+    return [422, { error: message(err) }]
+  }
+}
+
 const badRequest = (err: Error): never => {
   throw new BadRequest(err.message)
 }
@@ -621,6 +660,8 @@ const server = createServer(async (req, res) => {
         res.writeHead(200, { 'content-type': type ?? 'application/octet-stream', 'x-content-type-options': 'nosniff', 'content-disposition': 'attachment' })
         return void createReadStream(file).pipe(res)
       }
+      const scripted = await opsApi(req.method ?? 'GET', url.pathname, req)
+      if (scripted) return json(...scripted)
       return json(404, { error: 'Not found' })
     }
     // Production: serve the built client, falling back to index.html for client routes.
@@ -639,7 +680,10 @@ const wss = new WebSocketServer({ noServer: true })
 
 server.on('upgrade', (req, socket, head) => {
   const preview = previewPort(req.headers.host, PREVIEW_HOSTS)
-  if (preview) return proxyPreviewUpgrade(req, socket, head, preview)
+  if (preview) {
+    if (req.url === `${BRIDGE_PATH}bridge`) return bridges.upgrade(req, socket, head, preview)
+    return proxyPreviewUpgrade(req, socket, head, preview)
+  }
   const url = new URL(req.url ?? '/', 'http://x')
   if (url.pathname !== '/ws' || !sameOrigin(req)) {
     socket.write(url.pathname !== '/ws' ? 'HTTP/1.1 404 Not Found\r\n\r\n' : 'HTTP/1.1 403 Forbidden\r\n\r\n')
