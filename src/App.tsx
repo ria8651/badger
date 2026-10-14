@@ -73,13 +73,23 @@ export function App() {
   const cards = () => cardStore
   const setCards = (next: Card[]) => setCardStore(reconcile(next, { key: 'id' }))
   const [route, setRoute] = createSignal<Route>(routeFromPath())
-  const [drafts, setDrafts] = createSignal<Record<string, string>>({})
+  const [drafts, setDrafts] = createSignal<Record<string, string>>(loadRecord(DRAFTS_KEY))
   /** Blank chats that should start with "In a worktree" ticked, e.g. a card whose work is already in one. */
-  const [worktreeDrafts, setWorktreeDrafts] = createSignal<Record<string, boolean>>({})
+  const [worktreeDrafts, setWorktreeDrafts] = createSignal<Record<string, boolean>>(loadRecord(WORKTREES_KEY))
+  /** Each card's blank chat, kept like the home chat until its first message so leaving it doesn't lose what's typed there. */
+  const [blanks, setBlanks] = createSignal<Record<number, string>>(loadRecord(BLANKS_KEY))
   // Home is a blank chat; it gets a real URL once its first message is sent.
   // Its id is kept until then so a draft typed there survives reloads.
   const [homeId, setHomeId] = createSignal(localStorage.getItem(HOME_KEY) ?? uuid())
   createEffect(() => localStorage.setItem(HOME_KEY, homeId()))
+  // Only blank chats' folder and worktree picks are kept; once a chat starts, the server has them.
+  createEffect(() => {
+    const blank = new Set([homeId(), ...Object.values(blanks())])
+    const keep = <T,>(all: Record<string, T>) => Object.fromEntries(Object.entries(all).filter(([id]) => blank.has(id)))
+    localStorage.setItem(BLANKS_KEY, JSON.stringify(blanks()))
+    localStorage.setItem(DRAFTS_KEY, JSON.stringify(keep(drafts())))
+    localStorage.setItem(WORKTREES_KEY, JSON.stringify(keep(worktreeDrafts())))
+  })
 
   const [loaded, setLoaded] = createSignal(false)
   const refresh = () => {
@@ -341,16 +351,25 @@ export function App() {
     if (loaded() && !untrack(drafts)[id]) setDrafts((d) => ({ ...d, [id]: untrack(defaultCwd) }))
   })
 
+  /** A card's new chat is its blank one if it has one, so a draft left there is still there. */
   const newChat = (from: { cwd: string; worktree: boolean } | undefined, cardId?: number) => {
+    const kept = cardId === undefined ? undefined : untrack(blanks)[cardId]
+    if (kept) return go({ kind: 'chat', id: kept })
     const id = uuid()
     setDrafts((d) => ({ ...d, [id]: from?.cwd ?? untrack(defaultCwd) }))
     if (from?.worktree) setWorktreeDrafts((w) => ({ ...w, [id]: true }))
-    if (cardId !== undefined) api.linkSession(cardId, id)
+    if (cardId !== undefined) {
+      setBlanks((b) => ({ ...b, [cardId]: id }))
+      api.linkSession(cardId, id)
+    }
     go({ kind: 'chat', id })
   }
-  // Another tab may have started the blank chat both were showing.
+  // Blank chats that have started, here or in another tab, make way for fresh ones.
   createEffect(() => {
-    if (sessions().some((s) => s.id === untrack(homeId))) setHomeId(uuid())
+    const started = new Set(sessions().map((s) => s.id))
+    if (started.has(untrack(homeId))) setHomeId(uuid())
+    const left = Object.entries(untrack(blanks)).filter(([, id]) => !started.has(id))
+    if (left.length < Object.keys(untrack(blanks)).length) setBlanks(Object.fromEntries(left))
   })
 
   /** In a project, a new chat goes on the project's card and starts where its work last happened; otherwise it's the blank home chat. */
@@ -589,6 +608,7 @@ export function App() {
                     projects={projects()}
                     worktree={worktreeDrafts()[id]}
                     onPickCwd={(cwd) => setDrafts((d) => ({ ...d, [id]: cwd }))}
+                    onPickWorktree={(on) => setWorktreeDrafts((w) => ({ ...w, [id]: on }))}
                     card={cardOf().get(id)}
                     onStart={() => home() && startHomeChat(id, drafts()[id] ?? defaultCwd())}
                     onOpenTerminal={(tid) => go({ kind: 'terminal', id: tid })}
@@ -635,8 +655,20 @@ export function App() {
 }
 
 const HOME_KEY = 'badger.homeId'
+const BLANKS_KEY = 'badger.blankChats'
+const DRAFTS_KEY = 'badger.draftCwds'
+const WORKTREES_KEY = 'badger.draftWorktrees'
 const FOCUS_KEY = 'badger.focus'
 const SIDEBAR_KEY = 'badger.sidebarWidth'
 const SIDEBAR_DEFAULT = 256
+
+/** A JSON record from localStorage, or an empty one. */
+function loadRecord<T>(key: string): T {
+  try {
+    return JSON.parse(localStorage.getItem(key) ?? '{}')
+  } catch {
+    return {} as T
+  }
+}
 
 const TEMP = /^\/(private\/)?(tmp|var\/folders)\//

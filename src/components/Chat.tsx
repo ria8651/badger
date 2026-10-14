@@ -41,6 +41,7 @@ export function Chat(props: {
   card?: Card
   /** Start with "In a worktree" ticked. */
   worktree?: boolean
+  onPickWorktree?: (worktree: boolean) => void
   /** Called once, when the first message is sent. */
   onStart?: () => void
   onOpenTerminal: (id: string) => void
@@ -344,7 +345,7 @@ export function Chat(props: {
                         <FolderPicker folders={props.projects!} selected={cwd()} onPick={props.onPickCwd!} />
                       </Show>
                       <Show when={canWorktree()}>
-                        <WorktreeOption checked={inWorktree()} onChange={setInWorktree} name={worktreeName()} />
+                        <WorktreeOption checked={inWorktree()} onChange={(on) => (setInWorktree(on), props.onPickWorktree?.(on))} name={worktreeName()} />
                       </Show>
                     </div>
                   }
