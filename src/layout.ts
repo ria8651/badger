@@ -8,17 +8,23 @@ import { api } from './api.ts'
  */
 
 /**
- * Something a panel shows: a terminal, a port's preview, or a subagent or
- * background task of a chat, by the tool call that started it. A task is its
- * chat's own, so it only shows beside that chat.
+ * Something a panel shows: a terminal, a port's preview, a subagent or
+ * background task of a chat, by the tool call that started it, or a chat's
+ * plan. Tasks and plans are their chat's own, so they only show beside it.
  */
-export type View = { kind: 'terminal'; id: string } | PreviewView | { kind: 'task'; session: string; id: string }
+export type View = { kind: 'terminal'; id: string } | PreviewView | { kind: 'task'; session: string; id: string } | PlanView
 /**
  * What a port serves, in a frame; id is the port. Opening it again changes
  * path, and bumps nav, which reloads it.
  */
 export type PreviewView = { kind: 'preview'; id: string; name?: string; path?: string; nav?: number }
-export const viewKey = (v: View) => (v.kind === 'task' ? `task:${v.session}:${v.id}` : `${v.kind}:${v.id}`)
+/** The plan a chat is proposing, or last proposed. One per chat, so a revised plan takes the old one's place. */
+export type PlanView = { kind: 'plan'; session: string }
+export const planView = (session: string): PlanView => ({ kind: 'plan', session })
+export const viewKey = (v: View) =>
+  v.kind === 'task' ? `task:${v.session}:${v.id}` : v.kind === 'plan' ? `plan:${v.session}` : `${v.kind}:${v.id}`
+/** The chat a view belongs to, if it only shows beside one. */
+export const sessionOf = (v: View) => (v.kind === 'task' || v.kind === 'plan' ? v.session : undefined)
 
 export type Group = { type: 'group'; id: string; views: View[]; active?: string }
 export type Leaf = { type: 'chat' } | Group
@@ -34,6 +40,12 @@ export interface Layout {
   /** On narrow screens every panel shares one group under the chat: its share of the height. */
   narrow?: number
 }
+
+const wideQuery = matchMedia('(min-width: 768px)')
+const [wide, setWide] = createSignal(wideQuery.matches)
+wideQuery.addEventListener('change', (e) => setWide(e.matches))
+/** Wide enough to tile panels; narrower, they share one group under the chat. */
+export { wide }
 
 const mac = /Mac|iPhone|iPad/.test(navigator.userAgent)
 /** The chord every layout shortcut starts with: Cmd+K on a Mac, Ctrl+K elsewhere. */
@@ -236,6 +248,13 @@ export function updateLayout(root: string, change: (l: Layout) => Layout): void 
 /** Whether a workspace's panels are on screen. */
 export const panelsShown = (root: string) => !layoutOf(root).hidden && groupsOf(layoutOf(root).tree).length > 0
 
+/** Whether a view is on screen: its group's tab showing, with panels shown. */
+export function viewShown(root: string, key: string): boolean {
+  if (!panelsShown(root)) return false
+  const tree = wide() ? layoutOf(root).tree : narrowTree(layoutOf(root))
+  return groupsOf(tree).some((g) => activeOf(g) === key)
+}
+
 /** The view to focus once it's on screen, e.g. a terminal just opened. */
 const [focusRequest, setFocusRequest] = createSignal<string | undefined>(undefined, { equals: false })
 export { focusRequest, setFocusRequest }
@@ -312,11 +331,11 @@ export function openView(root: string, view: View): void {
   setFocusRequest(key)
 }
 
-/** Takes other chats' tasks out of a workspace's panels: they only show beside their own chat. */
-export function dropOtherTasks(root: string, session: string): void {
+/** Takes other chats' tasks and plans out of a workspace's panels: they only show beside their own chat. */
+export function dropOtherChats(root: string, session: string): void {
   updateLayout(root, (l) => {
     let tree = l.tree
-    for (const v of viewsOf(tree)) if (v.kind === 'task' && v.session !== session) tree = removeView(tree, viewKey(v))
+    for (const v of viewsOf(tree)) if (sessionOf(v) && sessionOf(v) !== session) tree = removeView(tree, viewKey(v))
     return tree === l.tree ? l : { ...l, tree }
   })
 }

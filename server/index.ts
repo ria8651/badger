@@ -312,6 +312,13 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       for (const other of viewers.get(event.sessionId) ?? []) if (other !== ws) send(other, update)
       return
     }
+    case 'plan_draft': {
+      if (typeof event.plan !== 'string') throw new BadRequest('plan must be a string')
+      if (!manager.get(event.sessionId)?.draftPlan(event.requestId, event.plan)) return
+      const update: ServerEvent = { type: 'plan_draft', sessionId: event.sessionId, requestId: event.requestId, plan: event.plan }
+      for (const other of viewers.get(event.sessionId) ?? []) if (other !== ws) send(other, update)
+      return
+    }
     case 'seen':
       attention.mark(event.sessionId, false)
       return

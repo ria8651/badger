@@ -27,6 +27,8 @@ export interface PendingPermission {
   agent?: string
   /** AskUserQuestion answers picked so far but not sent. */
   answers?: AnswerDraft
+  /** ExitPlanMode's plan as edited so far, not yet sent. */
+  plan?: string
 }
 
 /** Half-finished AskUserQuestion answers, by question text. */
@@ -201,6 +203,8 @@ export type ClientEvent =
     }
   /** Answers picked so far in a pending AskUserQuestion; replaces what's saved. */
   | { type: 'answer_draft'; sessionId: string; requestId: string; answers: AnswerDraft }
+  /** The plan in a pending ExitPlanMode as edited so far; replaces what's saved. */
+  | { type: 'plan_draft'; sessionId: string; requestId: string; plan: string }
   /** The user is looking at this chat, so it's no longer unread. */
   | { type: 'seen'; sessionId: string }
   | { type: 'term_subscribe'; id: string }
@@ -251,6 +255,8 @@ export type ServerEvent =
   | { type: 'permission_request'; sessionId: string; permission: PendingPermission }
   /** Another viewer changed the answers picked in a pending AskUserQuestion. */
   | { type: 'answer_draft'; sessionId: string; requestId: string; answers: AnswerDraft }
+  /** Another viewer edited the plan in a pending ExitPlanMode. */
+  | { type: 'plan_draft'; sessionId: string; requestId: string; plan: string }
   | { type: 'permission_resolved'; sessionId: string; requestId: string }
   /** The chat started a child chat from a tool call; it's shown inside that call. */
   | { type: 'child_started'; sessionId: string; toolUseId: string; childId: string }

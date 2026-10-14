@@ -49,6 +49,8 @@ export function MarkdownEditor(props: {
   value: string
   /** Called a moment after typing stops, and on blur. Only ever with text that was edited here. */
   onSave: (markdown: string) => void
+  /** How long typing has to stop for before onSave; 0 calls it after every edit. */
+  saveDelay?: number
   placeholder?: string
   class?: string
 }) {
@@ -100,7 +102,7 @@ export function MarkdownEditor(props: {
       onUpdate: () => {
         dirty = true
         clearTimeout(timer)
-        timer = setTimeout(flush, SAVE_DELAY)
+        timer = setTimeout(flush, props.saveDelay ?? SAVE_DELAY)
       },
       onBlur: flush,
     })

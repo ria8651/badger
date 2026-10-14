@@ -310,6 +310,14 @@ export class LiveSession {
     return true
   }
 
+  /** Keeps the plan as edited so far with the pending ExitPlanMode. False if it's no longer pending. */
+  draftPlan(requestId: string, plan: string): boolean {
+    const p = this.pending.get(requestId)
+    if (!p || p.toolName !== 'ExitPlanMode') return false
+    p.plan = plan
+    return true
+  }
+
   /**
    * The tool_use_id of the call to this tool that's running now. Called from
    * the tool's own handler; MCP doesn't pass it, so it comes from PreToolUse.

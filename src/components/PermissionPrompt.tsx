@@ -1,9 +1,10 @@
 import { For, Match, Show, Switch, createEffect, createSignal, on, onCleanup, type JSX } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
 import { Check, ChevronDown } from 'lucide-solid'
-import type { AnswerDraft, PendingPermission, PermissionMode } from '../../shared/protocol.ts'
+import type { AnswerDraft, PendingPermission } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
 import { Markdown } from './Markdown.tsx'
+import { PlanActions, PlanEditor, planText, planTitle } from './Plan.tsx'
 import { ToolInput, relPath, toolLabel, toolSummary, type Question } from './ToolCard.tsx'
 import { Button, inputClass } from './ui.tsx'
 
@@ -13,6 +14,10 @@ export function PermissionPrompt(props: {
   cwd?: string
   /** Set when the prompt is from a chat this one started, e.g. "Merge worktree". */
   from?: string
+  /** Opens a plan in a panel beside the chat, where there are panels. */
+  onOpenPlan?: () => void
+  /** The plan is on screen in a panel, so the prompt needn't show it too. */
+  planShown?: boolean
 }) {
   const [feedback, setFeedback] = createSignal('')
   const p = () => props.permission
@@ -26,11 +31,6 @@ export function PermissionPrompt(props: {
       message: feedback() || undefined,
       updatedInput,
     })
-
-  const approvePlan = (mode: PermissionMode) => {
-    respond('allow')
-    socket.send({ type: 'set_mode', sessionId: props.sessionId, mode })
-  }
 
   return (
     <Switch
@@ -78,21 +78,14 @@ export function PermissionPrompt(props: {
           id={p().requestId}
           from={props.from}
           title="Ready to leave plan mode?"
-          actions={
-            <>
-              <FeedbackInput value={feedback()} onChange={setFeedback} placeholder="Tell Claude what to change (optional)" />
-              <div class="flex flex-wrap gap-2 pt-1">
-                <Button primary onClick={() => approvePlan('auto')}>Approve, auto mode</Button>
-                <Button onClick={() => approvePlan('acceptEdits')}>Approve, auto-accept edits</Button>
-                <Button onClick={() => approvePlan('default')}>Approve, ask before edits</Button>
-                <Button onClick={() => respond('deny')}>Keep planning</Button>
-              </div>
-            </>
-          }
+          subtitle={planTitle(planText(p()))}
+          actions={<PlanActions sessionId={props.sessionId} permission={p()} onOpen={props.planShown ? undefined : props.onOpenPlan} />}
         >
-          <div class="border border-line px-4 py-3 rounded-lg">
-            <Markdown text={String(p().input.plan ?? '')} />
-          </div>
+          <Show when={!props.planShown} fallback={<p class="text-xs text-fg-3">The plan is open beside the chat.</p>}>
+            <div class="border border-line px-4 py-3 rounded-lg">
+              <PlanEditor sessionId={props.sessionId} permission={p()} />
+            </div>
+          </Show>
         </Shell>
       </Match>
     </Switch>

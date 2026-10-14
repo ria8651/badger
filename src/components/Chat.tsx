@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createResource, createSignal, mapArray, on, onCleanup, onMount, type JSX } from 'solid-js'
+import { For, Show, createEffect, createMemo, createResource, createSignal, mapArray, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
 import { ArrowUp, Check, FolderX, GitBranch, ImagePlus, Pencil, ListChevronsDownUp, ListChevronsUpDown, SlidersHorizontal, Square, SquareTerminal, WifiOff, X, Zap } from 'lucide-solid'
 import { isLongPaste } from '../../shared/pastes.ts'
 import type { Card, DraftAttachments, PermissionMode, QueuedMessage } from '../../shared/protocol.ts'
@@ -7,17 +7,18 @@ import { api, connected, socket } from '../api.ts'
 import { readImage } from '../images.ts'
 import { lastModel, modelValue, models, setLastModel } from '../models.ts'
 import { cardWorktreeName, folderItem, isScratch, worktreeOf } from '../folders.ts'
-import { openView, panelsShown, togglePanels } from '../layout.ts'
+import { openView, panelsShown, planView, togglePanels, viewKey, viewShown, wide } from '../layout.ts'
 import { terminals, workspaceOf } from '../terminals.ts'
 import { ChildChats, createChat } from '../useChat.ts'
 import { Attachments } from './Attachments.tsx'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
+import { PlanPane, latestPlan } from './Plan.tsx'
 import { TerminalButton } from './Terminals.tsx'
 import { TaskTray, trayItems, waitingOnTask } from './TaskTray.tsx'
 import { reveal, revealed, toolLabel } from './ToolCard.tsx'
 import { TaskPane, Transcript, UserMessage, createIndex, detail, runInBackground, setDetail } from './Transcript.tsx'
 import { ContextMeter } from './Usage.tsx'
-import { Workspace, type TaskPanes } from './Workspace.tsx'
+import { Workspace, type ChatPanes } from './Workspace.tsx'
 import { IconButton, Loading, Menu, Select, ltr, touch, type Option } from './ui.tsx'
 
 const MODES: Option<PermissionMode>[] = [
@@ -110,7 +111,25 @@ export function Chat(props: {
     if (r) openView(r, { kind: 'task', session: props.sessionId, id: toolUseId })
     else jump(toolUseId)
   }
-  const taskPanes: TaskPanes = {
+  /** The plan waiting on the user, if Claude has proposed one. */
+  const planPrompt = () => state.permissions.find((p) => p.toolName === 'ExitPlanMode')
+  const openPlan = () => {
+    const r = root()
+    if (r) openView(r, planView(props.sessionId))
+  }
+  const planShown = () => !!root() && viewShown(root()!, viewKey(planView(props.sessionId)))
+  // A plan arriving while the chat is open gets room beside it, on screens wide enough. Ones
+  // already waiting when the chat opened don't, so closing the panel and coming back keeps it closed.
+  let known: Set<string> | undefined
+  createEffect(() => {
+    if (!state.loaded) return
+    const ids = state.permissions.filter((p) => p.toolName === 'ExitPlanMode').map((p) => p.requestId)
+    const fresh = known ? ids.filter((id) => !known!.has(id)) : []
+    known = new Set(ids)
+    if (fresh.length && wide()) untrack(openPlan)
+  })
+
+  const panes: ChatPanes = {
     label: (id) => {
       const t = tasks().find((t) => t.toolUseId === id)
       return t?.description || t?.label || 'Task'
@@ -126,6 +145,10 @@ export function Chat(props: {
         onShowInChat={() => jump(id)}
         onReady={onReady}
       />
+    ),
+    planWaiting: () => !!planPrompt(),
+    renderPlan: (onReady) => (
+      <PlanPane sessionId={props.sessionId} permission={planPrompt()} past={latestPlan(index())} onReady={onReady} />
     ),
   }
 
@@ -288,7 +311,7 @@ export function Chat(props: {
       root={root()}
       cwd={cwd()}
       sessionId={props.sessionId}
-      tasks={taskPanes}
+      panes={panes}
       onFocusChat={() => input.focus()}
       onOpenPage={props.onOpenTerminal}
     >
@@ -353,7 +376,16 @@ export function Chat(props: {
               {/* Everything here hangs out as far as the composer, so prompts and notices read as part of it, not the transcript. */}
               <div class="-mx-[calc(1rem+1px)] flex min-h-0 flex-col gap-2">
                 <For each={state.permissions}>
-                  {(p) => <PermissionPrompt sessionId={props.sessionId} permission={p} cwd={cwd()} from={p.agent} />}
+                  {(p) => (
+                    <PermissionPrompt
+                      sessionId={props.sessionId}
+                      permission={p}
+                      cwd={cwd()}
+                      from={p.agent}
+                      onOpenPlan={root() ? openPlan : undefined}
+                      planShown={planShown()}
+                    />
+                  )}
                 </For>
                 <For each={childPrompts()}>
                   {({ child, permission }) => (

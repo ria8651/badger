@@ -83,6 +83,11 @@ function apply(state: ChatState, event: ServerEvent): void {
       if (p) p.answers = event.answers
       break
     }
+    case 'plan_draft': {
+      const p = state.permissions.find((p) => p.requestId === event.requestId)
+      if (p) p.plan = event.plan
+      break
+    }
     case 'permission_resolved':
       state.permissions = state.permissions.filter((p) => p.requestId !== event.requestId)
       break
