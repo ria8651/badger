@@ -185,8 +185,22 @@ export function Chat(props: {
     () => state.loaded && worktreeOf(cwd()) && cwd(),
     (dir) => api.worktree(dir).catch(() => undefined),
   )
-  createEffect(on(() => state.running, (running) => !running && refetchWorktree(), { defer: true }))
-  const actions = () => chatActions({ worktree: worktree() })
+  const [changes, { refetch: refetchChanges }] = createResource(
+    () => state.loaded && cwd(),
+    (dir) => api.changes(dir).then((c) => c ?? undefined, () => undefined),
+  )
+  createEffect(
+    on(
+      () => state.running,
+      (running) => {
+        if (running) return
+        refetchWorktree()
+        refetchChanges()
+      },
+      { defer: true },
+    ),
+  )
+  const actions = () => chatActions({ worktree: worktree(), changes: changes() })
 
   // Unsent text and attachments are saved on the server, so they survive leaving
   // the chat or reloading, and every tab on this chat shows the same draft.
