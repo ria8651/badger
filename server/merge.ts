@@ -1,22 +1,27 @@
 import { existsSync } from 'node:fs'
-import { getSessionInfo, tool, type SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk'
+import { tool, type SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import type { Card } from '../shared/protocol.ts'
 import type { Children } from './children.ts'
-import type { Actor, Store } from './db.ts'
+import type { ChatCard } from './runnerProtocol.ts'
 import type { SessionManager } from './session.ts'
 import type { Terminals } from './terminals.ts'
 import { WORKTREE_PATH, mainCheckout, mergeBlocker, removeWorktree, worktreeStatus } from './workspace.ts'
 
 export const MERGE_TOOL = 'merge_worktree'
 
+
+/** The worktree, its chats and its terminals are all on the machine this runs on; the board is the hub's. */
 export interface MergeDeps {
-  store: Store
+  /** This machine's id. */
+  machine: () => string
+  /** A chat's card and its chats, from the hub. */
+  cardOf: (sessionId: string) => Promise<ChatCard | undefined>
+  /** Puts the work away on the board, as the chat that merged it. */
+  finish: (sessionId: string, card?: Card) => Promise<void>
   manager: SessionManager
   terminals: Terminals
   children: Children
-  /** Board data or the chat list changed. */
-  onChange: () => void
 }
 
 /** One merge into a checkout at a time; later ones wait their turn. */
@@ -70,7 +75,7 @@ export function mergeTool(deps: MergeDeps, sessionId: string, cwd: () => string,
         const busy = deps.manager.in(main).filter((s) => s.running)
         if (busy.length) return error(`Another chat is working in the main checkout (${main}). Wait for it to finish, then merge again.`)
 
-        const card = deps.store.cards().find((c) => c.sessionIds.includes(sessionId))
+        const card = await deps.cardOf(sessionId)
         const before = await worktreeStatus(dir)
         const result = await deps.children.run(parent, {
           toolUseId,
@@ -86,7 +91,7 @@ export function mergeTool(deps: MergeDeps, sessionId: string, cwd: () => string,
           return error(`${why} Its report:\n\n${result.text}`)
         }
 
-        const finished = await cardFinished(deps, card, dir)
+        const finished = cardFinished(deps, card, dir)
         parent.afterTurn(() => void cleanUp(deps, { sessionId, dir, card: finished ? card : undefined }))
         const then = finished
           ? `moves card #${card!.id} to done, which archives its chats`
@@ -118,22 +123,22 @@ function mergePrompt(p: { dir: string; branch: string; base: string; unmerged: n
 /**
  * Whether merging this worktree finishes the card: every other chat on it is
  * archived or ran somewhere that's gone. Cards often hold more than one piece
- * of work, so anything else still around keeps the card open.
+ * of work, so anything else still around keeps the card open, including
+ * chats on other machines, whose folders can't be checked from here.
  */
-async function cardFinished(deps: MergeDeps, card: Card | undefined, dir: string): Promise<boolean> {
+function cardFinished(deps: MergeDeps, card: ChatCard | undefined, dir: string): boolean {
   if (!card) return false
-  const archived = deps.store.archivedIds()
-  const others = await Promise.all(
-    card.sessionIds
-      .filter((id) => !archived.has(id))
-      .map(async (id) => deps.manager.get(id)?.cwd ?? (await getSessionInfo(id).catch(() => undefined))?.cwd),
-  )
-  return others.every((cwd) => !cwd || cwd === dir || !existsSync(cwd))
+  return card.chats
+    .filter((c) => !c.archived)
+    .every((c) => {
+      const cwd = deps.manager.get(c.id)?.cwd ?? c.cwd
+      if (c.machine && c.machine !== deps.machine()) return !cwd
+      return !cwd || cwd === dir || !existsSync(cwd)
+    })
 }
 
 /** After the merging chat's turn: the worktree goes, and the chat (or its whole card) is put away. */
 async function cleanUp(deps: MergeDeps, p: { sessionId: string; dir: string; card?: Card }): Promise<void> {
-  const actor: Actor = { source: 'claude', sessionId: p.sessionId }
   try {
     if (deps.manager.in(p.dir).some((s) => s.running)) throw new Error('a chat is still working in it')
     for (const s of deps.manager.in(p.dir)) s.close()
@@ -142,9 +147,7 @@ async function cleanUp(deps: MergeDeps, p: { sessionId: string; dir: string; car
   } catch (err) {
     console.error(`Merged, but couldn't remove worktree ${p.dir}: ${err instanceof Error ? err.message : err}`)
   }
-  if (p.card) deps.store.updateCard(p.card.id, { status: 'done' }, actor)
-  else deps.store.setArchived(p.sessionId, true, actor)
-  deps.onChange()
+  await deps.finish(p.sessionId, p.card).catch((err) => console.error(`Merged, but couldn't put the chat away: ${err instanceof Error ? err.message : err}`))
 }
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`

@@ -1,12 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { readdir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
 import {
   getSessionInfo,
-  getSessionMessages,
-  getSubagentMessages,
-  listSubagents,
   query,
   type CanUseTool,
   type McpServerConfig,
@@ -19,8 +14,16 @@ import {
 import type { AnswerDraft, BackgroundTask, ImageAttachment, ModelOption, PendingPermission, PermissionMode, QueuedMessage, ServerEvent, WireMessage } from '../shared/protocol.ts'
 import { wrapPaste } from '../shared/pastes.ts'
 import { BashStreams, streamEnv } from './bashStream.ts'
+import type { LiveSnapshot } from './runnerProtocol.ts'
 import { inaccessible } from './workspace.ts'
 import { MessageQueue } from './queue.ts'
+
+/**
+ * Claude Code won't start at all with the flag that allows switching to bypass
+ * permissions when it runs as root, unless IS_SANDBOX=1 says it's sandboxed.
+ * Without the flag it refuses bypass itself, with its own message.
+ */
+const CAN_BYPASS = process.getuid?.() !== 0 || process.env.IS_SANDBOX === '1'
 
 /** Close an idle Claude Code process after this long; the next message resumes it. */
 const IDLE_CLOSE_MS = 15 * 60 * 1000
@@ -32,7 +35,7 @@ export interface SessionTools {
   mcpServers: Record<string, McpServerConfig>
   allowedTools: string[]
   /** Text to add to the conversation alongside the user's next message, if any. A peek doesn't count it as added. */
-  turnContext?: (peek?: boolean) => string | undefined
+  turnContext?: (peek: boolean) => Promise<string | undefined>
   /** Environment for Claude Code and the commands it runs, on top of the server's. */
   env?: Record<string, string>
 }
@@ -87,9 +90,9 @@ export class LiveSession {
   private queued: Held[] = []
   /** Any background work is running, the subagents' own included; closing the process would kill it. */
   busy = false
-  private turnContext?: (peek?: boolean) => string | undefined
+  private turnContext?: (peek: boolean) => Promise<string | undefined>
   /** Context already shown with a message that Claude Code hasn't taken in yet, so it isn't shown twice. */
-  private shownContext?: string
+  private shownContext?: Promise<string | undefined>
 
   constructor(opts: {
     id: string
@@ -124,7 +127,8 @@ export class LiveSession {
         ...(opts.resume ? { resume: this.id } : { sessionId: this.id }),
         permissionMode: this.mode,
         ...(opts.model && opts.model !== 'default' ? { model: opts.model } : {}),
-        allowDangerouslySkipPermissions: true,
+        // So the chat can switch to bypass later.
+        allowDangerouslySkipPermissions: CAN_BYPASS,
         includePartialMessages: true,
         // A one-line "what it's doing" for each running subagent, every ~30s.
         agentProgressSummaries: true,
@@ -144,8 +148,8 @@ export class LiveSession {
             {
               hooks: [
                 async () => {
-                  const additionalContext = this.turnContext?.()
-                  const shown = this.shownContext
+                  const additionalContext = await this.context(false)
+                  const shown = await this.shownContext
                   this.shownContext = undefined
                   if (!additionalContext) return { continue: true }
                   if (additionalContext !== shown) this.record({ type: 'hook_context', uuid: randomUUID(), text: additionalContext })
@@ -207,16 +211,10 @@ export class LiveSession {
     return () => this.listeners.delete(listener)
   }
 
-  /** Transcript from disk merged with anything newer that only exists in memory. */
-  async snapshot(): Promise<Omit<Extract<ServerEvent, { type: 'snapshot' }>, 'draft' | 'draftAttachments' | 'children'>> {
-    // Disk holds history from earlier processes; `live` holds this process's turns in order.
-    const disk = await diskTranscript(this.id)
-    const seen = new Set(this.live.map((m) => m.uuid))
-    const messages = [...disk.filter((m) => !seen.has(m.uuid) && !seen.has(m.after_uuid as string)), ...this.live]
+  /** This process's turns in order, and the state only it has. The hub adds the history from earlier processes. */
+  snapshot(): LiveSnapshot {
     return {
-      type: 'snapshot',
-      sessionId: this.id,
-      messages,
+      messages: [...this.live],
       running: this.running,
       makingWorktree: this.makingWorktree,
       mode: this.mode,
@@ -251,8 +249,10 @@ export class LiveSession {
       // Echo immediately so every tab shows the message before the SDK replays it.
       this.record({ ...message, timestamp: new Date().toISOString() } as unknown as WireMessage)
       // Shown with the message now rather than when Claude Code takes it in, which can be a while for a new worktree.
-      this.shownContext = this.turnContext?.(true)
-      if (this.shownContext) this.record({ type: 'hook_context', uuid: randomUUID(), text: this.shownContext })
+      this.shownContext = this.context(true).then((text) => {
+        if (text) this.record({ type: 'hook_context', uuid: randomUUID(), text })
+        return text
+      })
       this.setRunning(true)
     }
     return true
@@ -523,138 +523,22 @@ export class LiveSession {
     this.emit({ type: 'status', sessionId: this.id, running: this.running, makingWorktree: this.makingWorktree, mode: this.mode, model: this.model, cwd: this.cwd })
   }
 
+  /** The card context for the next turn. It comes from the hub, which may not answer, and then there's none. */
+  private context(peek: boolean): Promise<string | undefined> {
+    return (this.turnContext?.(peek) ?? Promise.resolve(undefined)).catch((err) => {
+      console.error(`Card context for ${this.id} failed:`, err instanceof Error ? err.message : err)
+      return undefined
+    })
+  }
+
+  /** Tells this chat's viewers something from outside the process, e.g. that it started a child chat. */
+  emitEvent(event: ServerEvent): void {
+    this.emit(event)
+  }
+
   private emit(event: ServerEvent): void {
     for (const listener of this.listeners) listener(event)
   }
-}
-
-/**
- * A chat's transcript from disk, with what the SDK's reader leaves out put back:
- * turn results, hook context, which messages are meta, and subagents' work.
- * Subagent messages come last; each carries the parent_tool_use_id of the call that started it.
- */
-export async function diskTranscript(id: string): Promise<WireMessage[]> {
-  const [messages, { context, meta }, subagents] = await Promise.all([
-    getSessionMessages(id).catch(() => []) as Promise<unknown> as Promise<WireMessage[]>,
-    fileExtras(id).catch(() => ({ context: new Map<string, string[]>(), meta: new Set<string>() })),
-    subagentMessages(id).catch(() => []),
-  ])
-  return [
-    ...withTurnResults(
-      messages.flatMap((m) => [
-        // e.g. a subagent's report handed back, which would otherwise read as something the user typed.
-        meta.has(m.uuid ?? '') ? { ...m, isMeta: true } : m,
-        ...(context.get(m.uuid ?? '') ?? []).map((text, i) => ({ type: 'hook_context', uuid: `${m.uuid}-context-${i}`, after_uuid: m.uuid, text })),
-      ]),
-    ),
-    ...subagents,
-  ]
-}
-
-async function subagentMessages(id: string): Promise<WireMessage[]> {
-  const agents = await listSubagents(id)
-  const each = await Promise.all(agents.map((agent) => getSubagentMessages(id, agent).catch(() => [])))
-  return each.flat() as unknown as WireMessage[]
-}
-
-const PROJECTS_DIR = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects')
-
-/**
- * What getSessionMessages leaves out, so read the file directly: what
- * UserPromptSubmit hooks added to each turn (attachment entries), by the uuid
- * of the prompt it came with, and the uuids of messages marked meta.
- */
-async function fileExtras(id: string): Promise<{ context: Map<string, string[]>; meta: Set<string> }> {
-  const out = new Map<string, string[]>()
-  const meta = new Set<string>()
-  const file = await transcriptFile(id)
-  if (!file) return { context: out, meta }
-  type Entry = { type?: string; uuid?: string; parentUuid?: string; isMeta?: boolean; attachment?: { type?: string; hookEvent?: string; content?: unknown } }
-  const parents = new Map<string, string>()
-  const hooks: Entry[] = []
-  for (const line of (await readFile(file, 'utf8')).split('\n')) {
-    if (!line.includes('"attachment"') && !line.includes('"isMeta":true')) continue
-    let e: Entry
-    try {
-      e = JSON.parse(line)
-    } catch {
-      continue
-    }
-    if (e.isMeta && e.uuid) meta.add(e.uuid)
-    if (e.type !== 'attachment' || !e.uuid || !e.parentUuid) continue
-    parents.set(e.uuid, e.parentUuid)
-    if (e.attachment?.type === 'hook_additional_context' && e.attachment.hookEvent === 'UserPromptSubmit') hooks.push(e)
-  }
-  for (const e of hooks) {
-    // Attachments chain off each other; the first non-attachment ancestor is the prompt.
-    let anchor = e.parentUuid!
-    while (parents.has(anchor)) anchor = parents.get(anchor)!
-    const content = Array.isArray(e.attachment!.content) ? e.attachment!.content.filter((c): c is string => typeof c === 'string') : []
-    out.set(anchor, [...(out.get(anchor) ?? []), ...content])
-  }
-  return { context: out, meta }
-}
-
-async function transcriptFile(id: string): Promise<string | undefined> {
-  for (const dir of await readdir(PROJECTS_DIR).catch(() => [])) {
-    const file = join(PROJECTS_DIR, dir, `${id}.jsonl`)
-    if (await stat(file).then(() => true, () => false)) return file
-  }
-  return undefined
-}
-
-type Usage = { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
-
-/**
- * The transcript on disk has no result messages (time taken, tokens), so rebuild
- * one after each turn from message timestamps and each API call's usage.
- * Main agent only, like the live results the client shows.
- */
-function withTurnResults(messages: WireMessage[]): WireMessage[] {
-  const out: WireMessage[] = []
-  let start: WireMessage | undefined
-  let last: WireMessage | undefined
-  let calls = new Map<string, Usage>()
-  const close = () => {
-    if (start && last?.uuid) {
-      const usage: Required<Usage> = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
-      for (const u of calls.values()) for (const k of Object.keys(usage) as (keyof Usage)[]) usage[k] += u[k] ?? 0
-      const ended = Date.parse(String(last.timestamp))
-      out.push({
-        type: 'result',
-        subtype: 'success',
-        uuid: `${last.uuid}-result`,
-        after_uuid: last.uuid,
-        duration_ms: ended - Date.parse(String(start.timestamp)),
-        ended_at: ended,
-        usage,
-      })
-    }
-    start = last = undefined
-    calls = new Map()
-  }
-  for (const m of messages) {
-    if (isPrompt(m)) {
-      close()
-      start = m
-    } else if (start && m.type === 'assistant' && !m.parent_tool_use_id) {
-      last = m
-      // One API call is split into a line per content block, all sharing its id and usage.
-      const msg = m.message as { id?: string; usage?: Usage } | undefined
-      if (msg?.id && msg.usage) calls.set(msg.id, msg.usage)
-    }
-    out.push(m)
-  }
-  close()
-  return out
-}
-
-/** A message the user typed, as opposed to tool results or injected context. */
-function isPrompt(m: WireMessage): boolean {
-  if (m.type !== 'user' || m.parent_tool_use_id || m.isMeta || !m.timestamp) return false
-  const content = (m.message as { content?: unknown } | undefined)?.content
-  if (typeof content === 'string') return !content.trimStart().startsWith('<')
-  return Array.isArray(content) && content.some((b) => b?.type === 'text' && !String(b.text).trimStart().startsWith('<'))
 }
 
 /** Messages the client renders; everything else (hooks, rate limits, lifecycle) is dropped. */
@@ -670,17 +554,6 @@ function toolResultIds(m: WireMessage): string[] {
   const content = (m.message as { content?: unknown } | undefined)?.content
   if (!Array.isArray(content)) return []
   return content.filter((b) => b?.type === 'tool_result' && b.tool_use_id).map((b) => b.tool_use_id as string)
-}
-
-/** The model a transcript's main agent last answered with: a model id, e.g. `claude-opus-5-5`. */
-export function transcriptModel(messages: WireMessage[]): string | undefined {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i]
-    const model = m.type === 'assistant' && !m.parent_tool_use_id && (m.message as { model?: string } | undefined)?.model
-    // API errors are recorded as answers from a "<synthetic>" model.
-    if (model && !model.startsWith('<')) return model
-  }
-  return undefined
 }
 
 /**
@@ -742,8 +615,8 @@ export class SessionManager {
     return !!s && (s.running || s.busy)
   }
 
-  liveIds(): string[] {
-    return [...this.sessions.keys()]
+  all(): LiveSession[] {
+    return [...this.sessions.values()]
   }
 
   /** Some live session, for asking Claude Code about the account rather than a chat. */
@@ -765,7 +638,7 @@ export class SessionManager {
     const cwd = info?.cwd ?? opts.cwd
     if (!cwd) throw new Error('Unknown session and no working directory given')
     // Otherwise Claude Code fails to start with a misleading "binary failed to launch".
-    if (info && inaccessible(cwd)) throw new Error(`This chat's folder is gone or can't be opened: ${cwd}`)
+    if (inaccessible(cwd)) throw new Error(info ? `This chat's folder is gone or can't be opened: ${cwd}` : `${cwd} doesn't exist or can't be opened`)
 
     const session = new LiveSession({
       id,

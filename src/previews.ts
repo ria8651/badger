@@ -1,6 +1,7 @@
 import { createSignal } from 'solid-js'
 import { api, socket } from './api.ts'
 import { openPreview } from './layout.ts'
+import { LOCAL } from './machines.ts'
 
 /**
  * Where this browser reaches a port's preview, with `{port}` in it: the
@@ -28,13 +29,20 @@ api.config().then((c) => {
 })
 socket.onConnection((connected) => connected && tellServer())
 
-export const previewsAvailable = () => !!template()
+/** Whether a port on this machine can be previewed here. Another machine's always can, at its own localhost. */
+export const previewsAvailable = (machine: string = LOCAL) => machine !== LOCAL || !!template()
 
-export function previewUrl(port: number | string, path = '/'): string | undefined {
+/**
+ * Where to see a port. The hub's own are served through Badger; another
+ * machine's aren't, so they're at plain localhost, which only works in a
+ * browser on that machine.
+ */
+export function previewUrl(port: number | string, path = '/', machine: string = LOCAL): string | undefined {
+  if (machine !== LOCAL) return `http://localhost:${port}${path}`
   const t = template()
   return t && t.replace('{port}', String(port)) + path
 }
 
 socket.on((e) => {
-  if (e.type === 'open_preview') openPreview(e.root, e.port, { name: e.name, path: e.path })
+  if (e.type === 'open_preview') openPreview({ machine: e.machine || LOCAL, root: e.root }, e.port, { name: e.name, path: e.path })
 })

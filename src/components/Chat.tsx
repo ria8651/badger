@@ -1,16 +1,17 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, mapArray, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
-import { ArrowUp, FolderX, GitBranch, Paperclip, Pencil, ListChevronsDownUp, ListChevronsUpDown, SlidersHorizontal, Square, SquareTerminal, WifiOff, X, Zap } from '../icons'
+import { ArrowUp, FolderX, GitBranch, MonitorOff, Paperclip, Pencil, ListChevronsDownUp, ListChevronsUpDown, SlidersHorizontal, Square, SquareTerminal, WifiOff, X, Zap } from '../icons'
 import { isLongPaste } from '../../shared/pastes.ts'
 import { IMAGE_EXTENSIONS, type Card, type DraftAttachments, type PermissionMode, type QueuedMessage } from '../../shared/protocol.ts'
 import { chatActions, type ChatAction } from '../actions.ts'
 import { api, connected, socket } from '../api.ts'
 import { readImage } from '../images.ts'
 import { lastModel, modelValue, models, setLastModel } from '../models.ts'
-import { cardWorktreeName, isScratch, scratchDir, worktreeOf } from '../folders.ts'
+import { cardWorktreeName, isScratch, worktreeOf } from '../folders.ts'
 import { FileBrowser } from './FileBrowser.tsx'
 import { FolderPicker } from './FolderPicker.tsx'
 import { openView, panelsShown, planView, togglePanels, viewKey, viewShown, wide } from '../layout.ts'
-import { terminals, workspaceOf } from '../terminals.ts'
+import { LOCAL, isOnline, machineName, onMachine } from '../machines.ts'
+import { inWs, terminals, workspaceOf, type Ws } from '../terminals.ts'
 import { ChildChats, createChat } from '../useChat.ts'
 import { Attachments } from './Attachments.tsx'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
@@ -36,8 +37,10 @@ const NO_ATTACHMENTS: DraftAttachments = { pastes: [], images: [] }
 export function Chat(props: {
   sessionId: string
   draftCwd?: string
-  /** Given, the empty chat offers folders and worktrees to start in until the first message goes out. */
-  onPickCwd?: (cwd: string) => void
+  /** The runner a chat that hasn't started will run on; the hub's own if not given. */
+  draftMachine?: string
+  /** Given, the empty chat offers runners, folders and worktrees to start in until the first message goes out. */
+  onPickCwd?: (cwd: string, machine: string) => void
   /** The card this chat is on. A worktree it starts in is named after the card; otherwise Claude names it. */
   card?: Card
   /** Start with "New worktree" picked. */
@@ -74,7 +77,7 @@ export function Chat(props: {
   const attachFiles = (paths: string[]) => {
     const isImage = (path: string) => Object.values(IMAGE_EXTENSIONS).flat().some((ext) => path.toLowerCase().endsWith(ext))
     for (const path of paths.filter(isImage)) {
-      void fetch(api.fileUrl(path))
+      void fetch(api.fileUrl(path, machine()))
         .then((res) => (res.ok ? res.blob() : Promise.reject(new Error(res.statusText))))
         .then((blob) => addImages([new File([blob], path.split('/').pop()!, { type: blob.type })]))
         .catch((e: Error) => alert(`Couldn't attach ${path}: ${e.message}`))
@@ -111,11 +114,28 @@ export function Chat(props: {
   let pinned = true
   let lastTop = 0
   const cwd = () => state.cwd ?? props.draftCwd
+  /**
+   * A chat stays on the machine it started on; one that hasn't started goes where it was picked. Until the
+   * server says which, a chat started elsewhere is taken to be on the hub's, but not one just sent from here.
+   */
+  const machine = () => state.machine ?? (state.cwd && !started() ? LOCAL : (props.draftMachine ?? LOCAL))
+  // Its runner isn't connected, so it can be read but can't run. A memo, since the machine list changes
+  // whenever any machine's chats start or stop.
+  const offline = createMemo(() => !isOnline(machine()))
+  /** Offline as far as the hub knows. While the hub itself can't be reached, what's typed still queues up for it. */
+  const stranded = () => offline() && connected()
   // Holds the last one while a new folder's is looked up, so moving into a worktree doesn't drop the terminals button for a moment.
-  const root = createMemo<string | undefined>((last) => {
-    const dir = cwd()
-    return dir ? (workspaceOf(dir)() ?? last) : undefined
-  })
+  const ws = createMemo<Ws | undefined>(
+    (last) => {
+      const dir = cwd()
+      const m = machine()
+      // Not asked while the machine's offline, and asked again once it's back.
+      const root = dir && !offline() && workspaceOf(m, dir)()
+      return root ? { machine: m, root } : dir && last?.machine === m ? last : undefined
+    },
+    undefined,
+    { equals: (a, b) => a?.machine === b?.machine && a?.root === b?.root },
+  )
   /** Running, and not just waiting on Claude Code to make its worktree. */
   const working = () => state.running && !state.makingWorktree
   const where = () => (isScratch(cwd()) ? 'No folder' : (cwd() ?? ''))
@@ -136,17 +156,17 @@ export function Chat(props: {
 
   /** Open a subagent or background task in a panel beside the chat. */
   const openTask = (toolUseId: string) => {
-    const r = root()
-    if (r) openView(r, { kind: 'task', session: props.sessionId, id: toolUseId })
+    const w = ws()
+    if (w) openView(w, { kind: 'task', session: props.sessionId, id: toolUseId })
     else jump(toolUseId)
   }
   /** The plan waiting on the user, if Claude has proposed one. */
   const planPrompt = () => state.permissions.find((p) => p.toolName === 'ExitPlanMode')
   const openPlan = () => {
-    const r = root()
-    if (r) openView(r, planView(props.sessionId))
+    const w = ws()
+    if (w) openView(w, planView(props.sessionId))
   }
-  const planShown = () => !!root() && viewShown(root()!, viewKey(planView(props.sessionId)))
+  const planShown = () => !!ws() && viewShown(ws()!, viewKey(planView(props.sessionId)))
   // A plan arriving while the chat is open gets room beside it, on screens wide enough. Ones
   // already waiting when the chat opened don't, so closing the panel and coming back keeps it closed.
   let known: Set<string> | undefined
@@ -207,12 +227,12 @@ export function Chat(props: {
 
   // Fetched on opening and again each time a turn ends, since that's when commits happen.
   const [worktree, { refetch: refetchWorktree }] = createResource(
-    () => state.loaded && worktreeOf(cwd()) && cwd(),
-    (dir) => api.worktree(dir).catch(() => undefined),
+    () => state.loaded && !offline() && worktreeOf(cwd()) && { dir: cwd()!, machine: machine() },
+    (q) => api.worktree(q.dir, q.machine).catch(() => undefined),
   )
   const [changes, { refetch: refetchChanges }] = createResource(
-    () => state.loaded && cwd(),
-    (dir) => api.changes(dir).then((c) => c ?? undefined, () => undefined),
+    () => state.loaded && !offline() && !!cwd() && { dir: cwd()!, machine: machine() },
+    (q) => api.changes(q.dir, q.machine).then((c) => c ?? undefined, () => undefined),
   )
   createEffect(
     on(
@@ -291,9 +311,19 @@ export function Chat(props: {
 
 
   const send = (value: string, attachments: DraftAttachments = NO_ATTACHMENTS) => {
-    if (state.gone) return
+    if (state.gone || stranded()) return
     const worktree = inWorktree() && canWorktree() ? (worktreeName() ?? '') : undefined
-    socket.send({ type: 'send', sessionId: props.sessionId, text: value, ...attachments, cwd: cwd(), mode: mode(), model: model(), worktree })
+    socket.send({
+      type: 'send',
+      sessionId: props.sessionId,
+      text: value,
+      ...attachments,
+      cwd: cwd(),
+      machine: machine(),
+      mode: mode(),
+      model: model(),
+      worktree,
+    })
     if (!started()) {
       setStarted(true)
       props.onStart?.()
@@ -351,7 +381,7 @@ export function Chat(props: {
 
   return (
     <Workspace
-      root={root()}
+      ws={ws()}
       cwd={cwd()}
       sessionId={props.sessionId}
       panes={panes}
@@ -380,19 +410,22 @@ export function Chat(props: {
                       fallback={
                         <div class="pt-[22vh] text-center">
                           <p class="text-base text-fg-2">What are we working on?</p>
-                          <p class="mt-1.5 font-mono text-xs text-fg-3">{where()}</p>
+                          <p class="mt-1.5 font-mono text-xs text-fg-3">
+                            {where()}
+                            <Show when={onMachine(machine())}>{(name) => <span class="font-sans"> on {name()}</span>}</Show>
+                          </p>
                         </div>
                       }
                     >
                       <div class="pt-[10vh] text-center">
                         <p class="text-base text-fg-2">What are we working on?</p>
                         <FolderPicker
-                          scratch={scratchDir()}
+                          machine={machine()}
                           selected={cwd()}
                           worktree={inWorktree() && canWorktree()}
                           worktreeName={worktreeName()}
-                          onPick={(dir, worktree) => {
-                            props.onPickCwd!(dir)
+                          onPick={(dir, worktree, picked) => {
+                            props.onPickCwd!(dir, picked)
                             setInWorktree(worktree)
                             props.onPickWorktree?.(worktree)
                           }}
@@ -443,7 +476,7 @@ export function Chat(props: {
                       permission={p}
                       cwd={cwd()}
                       from={p.agent}
-                      onOpenPlan={root() ? openPlan : undefined}
+                      onOpenPlan={ws() ? openPlan : undefined}
                       planShown={planShown()}
                     />
                   )}
@@ -473,7 +506,8 @@ export function Chat(props: {
                     <span class="flex-1">Can’t reach the server. Retrying… What you send goes out once it’s back.</span>
                   </div>
                 </Show>
-                <Show when={state.gone}>
+                {/* A folder on a machine that's offline can't be looked at, so it's only gone once the machine's back. */}
+                <Show when={state.gone && !offline()}>
                   <div class="flex items-start gap-3 bg-surface rounded-lg px-3 py-2 text-[13px] text-fg-2">
                     <FolderX class="size-4 shrink-0 mt-0.5" />
                     <span class="flex-1">
@@ -481,9 +515,17 @@ export function Chat(props: {
                     </span>
                   </div>
                 </Show>
+                <Show when={state.loaded && stranded()}>
+                  <div class="flex items-start gap-3 bg-surface rounded-lg px-3 py-2 text-[13px] text-fg-2">
+                    <MonitorOff class="size-4 shrink-0 mt-0.5" />
+                    <span class="flex-1">
+                      {machineName(machine())} is offline. This chat runs there, so it can't take messages until it's back.
+                    </span>
+                  </div>
+                </Show>
                 <div
-                  inert={state.gone}
-                  class={`@container relative border transition-colors rounded-2xl focus-within:border-fg-3 ${dragging() ? 'border-fg-3' : 'border-edge'} ${state.gone ? 'opacity-50' : ''}`}
+                  inert={state.gone || stranded()}
+                  class={`@container relative border transition-colors rounded-2xl focus-within:border-fg-3 ${dragging() ? 'border-fg-3' : 'border-edge'} ${state.gone || stranded() ? 'opacity-50' : ''}`}
                   onDragOver={(e) => {
                     if (!e.dataTransfer?.types.includes('Files')) return
                     e.preventDefault()
@@ -506,7 +548,7 @@ export function Chat(props: {
                       model={models()?.length ? modelValue(model(), models()!) : undefined}
                       models={modelOptions()}
                       onModel={changeModel}
-                      root={root()}
+                      ws={ws()}
                       cwd={cwd()}
                       actions={actions()}
                       onAction={(a) => send(a.prompt)}
@@ -574,6 +616,7 @@ export function Chat(props: {
                       <FileBrowser
                         mode="files"
                         title="Attach files"
+                        machine={machine()}
                         start={cwd() && !isScratch(cwd()) ? cwd() : undefined}
                         onClose={() => {
                           setBrowsing(false)
@@ -596,7 +639,7 @@ export function Chat(props: {
                       }}
                     />
                     <div class="hidden items-center gap-2 @md:flex">
-                      <Show when={root()}>{(r) => <TerminalButton root={r()} cwd={cwd()!} />}</Show>
+                      <Show when={ws()}>{(w) => <TerminalButton ws={w()} cwd={cwd()!} />}</Show>
                       <Menu
                         items={actions().map((a) => ({ label: a.label, description: a.description }))}
                         onPick={(i) => send(actions()[i].prompt)}
@@ -685,7 +728,7 @@ function ComposerPanel(props: {
   model?: string
   models: Option<string>[]
   onModel: (model: string) => void
-  root?: string
+  ws?: Ws
   cwd?: string
   actions: ChatAction[]
   onAction: (action: ChatAction) => void
@@ -695,7 +738,7 @@ function ComposerPanel(props: {
     f()
     props.onClose()
   }
-  const running = () => terminals().filter((t) => t.root === props.root && t.running).length
+  const running = () => terminals().filter((t) => props.ws && inWs(t, props.ws) && t.running).length
   return (
     <div
       ref={props.ref}
@@ -706,11 +749,11 @@ function ComposerPanel(props: {
         {(model) => <PanelChoices label="Model" options={props.models} value={model()} onPick={props.onModel} />}
       </Show>
       <div class="mx-2.5 my-1 border-t border-line" />
-      <Show when={props.root}>
-        {(root) => (
-          <PanelButton onClick={pick(() => togglePanels(root(), props.cwd!))}>
+      <Show when={props.ws}>
+        {(ws) => (
+          <PanelButton onClick={pick(() => togglePanels(ws(), props.cwd!))}>
             <SquareTerminal class="size-4" />
-            {panelsShown(root()) ? 'Hide terminals' : 'Show terminals'}
+            {panelsShown(ws()) ? 'Hide terminals' : 'Show terminals'}
             <Show when={running()}>
               <span class="ml-auto text-xs text-fg-3 tabular-nums">{running()} running</span>
             </Show>

@@ -2,6 +2,7 @@ import { Show } from 'solid-js'
 import type { Card, SessionSummary } from '../../shared/protocol.ts'
 import { attention } from '../attention.ts'
 import { folderLabel } from '../folders.ts'
+import { isOnline, onMachine } from '../machines.ts'
 import { ChatDot } from './ui.tsx'
 
 /**
@@ -24,10 +25,20 @@ export function ChatSummary(props: {
       </div>
       <div class="mt-0.5 flex gap-1.5 text-[11px] text-fg-3 tabular-nums">
         <span class="truncate">{s().cwd && folderLabel(s().cwd!)}</span>
+        <Show when={onMachine(s().machine)}>{(name) => <MachineName machine={s().machine} name={name()} />}</Show>
         <Show when={props.card}>{(c) => <span class="shrink-0">#{c().id}</span>}</Show>
         <span class={`ml-auto shrink-0 ${props.timeClass ?? ''}`}>{when(s().lastModified)}</span>
       </div>
     </>
+  )
+}
+
+/** Which runner something's on, struck through while it's offline. */
+export function MachineName(props: { machine?: string; name: string; class?: string }) {
+  return (
+    <span class={`shrink-0 ${isOnline(props.machine) ? '' : 'line-through'} ${props.class ?? ''}`} title={isOnline(props.machine) ? undefined : 'Offline'}>
+      {props.name}
+    </span>
   )
 }
 

@@ -1,14 +1,15 @@
 import { tool, type SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
+import type { Card } from '../shared/protocol.ts'
 import type { Children } from './children.ts'
-import type { Store } from './db.ts'
 import type { SessionManager } from './session.ts'
 import { changesStatus } from './workspace.ts'
 
 export const REVIEW_TOOL = 'review_changes'
 
 export interface ReviewDeps {
-  store: Store
+  /** The card a chat on this machine is on, from the hub. */
+  cardOf: (sessionId: string) => Promise<Card | undefined>
   manager: SessionManager
   children: Children
 }
@@ -41,7 +42,7 @@ export function reviewTool(deps: ReviewDeps, sessionId: string, cwd: () => strin
         return error(`Nothing to review: no uncommitted changes${status.base ? `, and every commit on ${status.branch} is already on ${status.base}` : ''}.`)
       }
 
-      const card = deps.store.cards().find((c) => c.sessionIds.includes(sessionId))
+      const card = await deps.cardOf(sessionId)
       const what = [status.ahead && `the commits on \`${status.branch}\` that aren't on \`${status.base}\` yet`, status.changes && 'the uncommitted changes']
       const prompt = [
         `Review ${what.filter(Boolean).join(' and ')}. Another chat is waiting on your report, so don't change anything.`,

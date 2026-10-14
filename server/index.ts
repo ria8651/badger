@@ -1,28 +1,37 @@
-import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { mkdir } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage } from 'node:http'
 import { homedir } from 'node:os'
 import { extname, isAbsolute, join, resolve } from 'node:path'
-import { getSessionInfo, listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { IMAGE_EXTENSIONS, IMAGE_TYPES, type AnswerDraft, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
+import { z } from 'zod'
+import { IMAGE_TYPES, type AnswerDraft, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
 import { Attention } from './attention.ts'
 import { BRIDGE_PATH, Bridges } from './bridge.ts'
-import { BOARD_INSTRUCTIONS, BOARD_SERVER, boardOps, cardContext } from './boardTools.ts'
-import { Children } from './children.ts'
+import { boardOps, cardContext, type ChatInfo } from './boardTools.ts'
 import { type Actor, BadRequest, type Draft, Store } from './db.ts'
-import { MERGE_TOOL, mergeTool } from './merge.ts'
+import { LOCAL, Machines, mismatch, type Connection } from './machines.ts'
+import { OpError, type Op } from './ops.ts'
+import { memoryLinks, wsLink } from './peer.ts'
 import { proxyPreview, proxyPreviewUpgrade, previewPort } from './preview.ts'
-import { REVIEW_TOOL, reviewTool } from './review.ts'
-import { SessionManager, diskTranscript, listModels, transcriptModel } from './session.ts'
-import { type Op, OpError, catalog, mcpServer, message, runForScript, toolName } from './ops.ts'
-import { PREVIEW_INSTRUCTIONS, previewOps, type Previews } from './previewTools.ts'
-import { TERMINAL_INSTRUCTIONS, TERMINAL_SERVER, terminalOps } from './terminalTools.ts'
-import { Terminals, shellEnv } from './terminals.ts'
+import { bridgeOps } from './previewTools.ts'
+import { Runner } from './runner.ts'
+import {
+  PROTOCOL_HEADER,
+  RUNNER_MAX_FRAME,
+  RUNNER_PROTOCOL,
+  SESSION_EVENTS,
+  isUuid,
+  type HubApi,
+  type LiveSnapshot,
+  type RunnerEvent,
+  type TranscriptLines,
+} from './runnerProtocol.ts'
+import { shellEnv } from './terminals.ts'
 import { suggestTitle } from './titles.ts'
-import { Usage } from './usage.ts'
-import { folderSize, forgetSize, listDir, listFolders } from './folders.ts'
-import { changesStatus, excludeWorktrees, inaccessible, removeWorktree, workspaceRoot, worktreeStatus } from './workspace.ts'
+import { Transcripts, transcriptModel } from './transcripts.ts'
+import { AccountLimits } from './usage.ts'
+import { prepareScratch } from './workspace.ts'
 
 // Terminals get the environment Badger was started with, before .env adds PORT and friends.
 const startEnv = shellEnv(process.env)
@@ -30,6 +39,18 @@ loadDotEnv()
 
 /** How often plan usage is read again while a tab is open, besides after each turn. */
 const ACCOUNT_POLL_MS = 5 * 60 * 1000
+/** How long the chat list waits on a machine to say which folders are gone. */
+const GONE_TIMEOUT_MS = 3000
+/**
+ * How long opening a chat or terminal waits on its machine before showing what
+ * the hub has. A laptop gone to sleep can leave its connection half-open,
+ * answering nothing until the ping drops it.
+ */
+const QUICK_TIMEOUT_MS = 10 * 1000
+/** Changes to the chat list, terminals or runners within this long go out to tabs as one, however often runners send them. */
+const LIST_DEBOUNCE_MS = 200
+/** How often connected runners are pinged; one that hasn't answered the last ping by the next is dropped. */
+const RUNNER_PING_MS = 30 * 1000
 
 const PORT = Number(process.env.PORT ?? 3001)
 const HOST = process.env.HOST ?? '127.0.0.1'
@@ -39,14 +60,8 @@ const DATA_DIR = resolve(process.env.DATA_DIR ?? 'data')
 // Folderless chats run here. Outside DATA_DIR, which defaults to inside this repo.
 const SCRATCH_DIR = resolve(process.env.SCRATCH_DIR || join(homedir(), '.badger', 'scratch'))
 
-mkdirSync(SCRATCH_DIR, { recursive: true })
 mkdirSync(WORKSPACE_DIR, { recursive: true })
-if (!existsSync(join(SCRATCH_DIR, 'CLAUDE.md'))) {
-  writeFileSync(
-    join(SCRATCH_DIR, 'CLAUDE.md'),
-    'Chats here are general questions, not tied to any project. There is no codebase to explore; just answer. This folder is shared scratch space for every such chat.\n',
-  )
-}
+prepareScratch(SCRATCH_DIR)
 
 // ── Fan-out: which sockets are viewing which session ──
 
@@ -62,6 +77,21 @@ function broadcast(event: ServerEvent): void {
   for (const ws of targets ?? []) send(ws, event)
 }
 
+/** Runs `fn` once, shortly, however many times this is called meanwhile. */
+function debounced(fn: () => void, ms = LIST_DEBOUNCE_MS): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return () => {
+    timer ??= setTimeout(() => {
+      timer = undefined
+      fn()
+    }, ms)
+  }
+}
+
+/** Tells every tab to fetch the chat list again; each fetch asks every machine about its folders. */
+const sessionsChanged = debounced(() => broadcast({ type: 'sessions_changed' }))
+const machinesChanged = debounced(() => broadcast({ type: 'machines', machines: machines.list() }))
+
 /**
  * Where each browser reaches previews, with `{port}` in it. Claude gets the
  * latest that isn't localhost when there is one, since that works from
@@ -73,81 +103,45 @@ const previewUrl = () => {
   return urls.find((u) => !/\{port\}\.localhost\b/.test(u)) ?? urls[0]
 }
 
-const previews: Previews = {
-  open(root, port, name, path) {
-    broadcast({ type: 'open_preview', root, port, name, path })
-    return sockets.size
-  },
-  url: (port, path = '/') => previewUrl()?.replace('{port}', String(port)).concat(path),
-}
-
-const store = new Store(DATA_DIR, () => broadcast({ type: 'sessions_changed' }))
+const store = new Store(DATA_DIR, sessionsChanged)
+const transcripts = new Transcripts(store.db)
 /** Changes made through the REST API and WebSocket, i.e. by someone in the browser. */
 const UI: Actor = { source: 'ui' }
-const terminals = new Terminals(DATA_DIR, startEnv)
 const bridges = new Bridges()
-/**
- * What Claude's commands get besides Claude Code's own: the `badger` command
- * on PATH, and where it reaches this server from this machine.
- */
-const sessionEnv = {
-  PATH: [resolve('bin'), process.env.PATH].filter(Boolean).join(':'),
-  BADGER_URL: `http://${['0.0.0.0', '::'].includes(HOST) ? 'localhost' : HOST.includes(':') ? `[${HOST}]` : HOST}:${PORT}`,
-}
 const cardsChanged = () => broadcast({ type: 'cards_changed' })
-/** Every operation Claude has, as tools and from scripts. */
-const ops: Op[] = [...boardOps(store, cardsChanged), ...terminalOps(terminals), ...previewOps(previews, bridges)]
-// Merging only starts a chat in the main checkout, and that chat asks for anything risky itself.
-const MERGE_TOOL_NAME = `mcp__${BOARD_SERVER}__${MERGE_TOOL}`
-// Reviewing only starts a chat that's told to report, not change anything.
-const REVIEW_TOOL_NAME = `mcp__${BOARD_SERVER}__${REVIEW_TOOL}`
-const manager: SessionManager = new SessionManager(
-  () => {
-    broadcast({ type: 'sessions_changed' })
-    // A closed session's prompts are gone with it.
-    attention.update()
-  },
-  (sessionId, cwd) => ({
-    mcpServers: {
-      [BOARD_SERVER]: mcpServer(BOARD_SERVER, BOARD_INSTRUCTIONS, ops, { sessionId, cwd }, [
-        // Only as a tool: the merge shows inside its own call.
-        mergeTool(
-          {
-            store,
-            manager,
-            terminals,
-            children,
-            onChange: () => {
-              cardsChanged()
-              broadcast({ type: 'sessions_changed' })
-            },
-          },
-          sessionId,
-          cwd,
-          MERGE_TOOL_NAME,
-        ),
-        reviewTool({ store, manager, children }, sessionId, cwd, REVIEW_TOOL_NAME),
-      ]),
-      [TERMINAL_SERVER]: mcpServer(TERMINAL_SERVER, [...TERMINAL_INSTRUCTIONS, ...PREVIEW_INSTRUCTIONS].join('\n'), ops, { sessionId, cwd }),
-    },
-    allowedTools: [...ops.filter((o) => o.autoAllow).map(toolName), MERGE_TOOL_NAME, REVIEW_TOOL_NAME],
-    env: sessionEnv,
-    turnContext: (peek) => cardContext(store, sessionId, peek),
-  }),
-  (sessionId) => {
-    sendContext(sessionId)
-    void usage.refreshAccount()
-  },
-  (session) => attention.watch(session),
+
+/**
+ * The ops that run here rather than beside Claude: the board, and the bridge
+ * into previews of the hub's own machine. Runners' tools and scripts call
+ * them through runOp.
+ */
+const bridge = bridgeOps(bridges)
+const hubOps: Op[] = [...boardOps({ store, onChange: cardsChanged, chats: chatInfo }), ...bridge]
+const hubOnly = new Set(bridge.map((o) => o.script))
+
+const machines: Machines = new Machines(store.db, {
+  onChange: (connection, id) => machineChanged(id, !!connection),
+  onEvent: (machine, event) => runnerEvent(machine, event),
+})
+const attention = new Attention(store, () => machines.allLive().flatMap((s) => (s.waiting ? [s.id] : [])), broadcast)
+const account = new AccountLimits(
+  () => anyRunner()?.peer.remote.accountUsage(),
+  (u) => broadcast({ type: 'account_usage', usage: u }),
 )
-const attention = new Attention(store, manager, broadcast)
-const children = new Children(manager, store, broadcast)
-const usage = new Usage(manager, (u) => broadcast({ type: 'account_usage', usage: u }))
+
+/** The machine a chat runs on, if it's connected. */
+function runnerFor(sessionId: string): Connection | undefined {
+  const machine = machines.machineOf(sessionId)
+  return machine ? machines.get(machine) : undefined
+}
+
+/** Any connected runner, the hub's own first, for questions about the account rather than a chat. */
+const anyRunner = () => machines.get(LOCAL) ?? machines.online()[0]
 
 /** Tells one viewer, or all of them, how full the chat's context is. */
 function sendContext(sessionId: string, ws?: WebSocket): void {
-  usage
-    .context(sessionId)
+  runnerFor(sessionId)
+    ?.peer.remote.contextUsage(sessionId)
     .then((u) => {
       if (!u) return
       const event: ServerEvent = { type: 'context', sessionId, usage: u }
@@ -158,7 +152,186 @@ function sendContext(sessionId: string, ws?: WebSocket): void {
 }
 
 // Limits move with use on other machines too, so read them now and then while anyone's looking.
-setInterval(() => sockets.size && void usage.refreshAccount(), ACCOUNT_POLL_MS).unref()
+setInterval(() => sockets.size && void account.refresh(), ACCOUNT_POLL_MS).unref()
+
+// ── What runners tell the hub ──
+
+/** A chat's event from a runner (already checked to be a kind a chat emits), if the chat is on that runner's machine. */
+function sessionEvent(machine: string, event: ServerEvent): ServerEvent | undefined {
+  if (!('sessionId' in event) || !SESSION_EVENTS.includes(event.type as never) || !machines.owns(machine, event.sessionId)) return undefined
+  if (event.type === 'child_started' && store.parentOf(event.childId) !== event.sessionId) return undefined
+  return event
+}
+
+function runnerEvent(machine: Connection, event: RunnerEvent): void {
+  switch (event.type) {
+    case 'session': {
+      const e = sessionEvent(machine.id, event.event)
+      if (!e) return
+      broadcast(e)
+      attention.see(e)
+      return
+    }
+    case 'live':
+      // A chat started, closed, or started or finished working.
+      sessionsChanged()
+      machinesChanged()
+      attention.update()
+      return
+    case 'turn_end':
+      if (!machines.owns(machine.id, event.sessionId)) return
+      attention.turnEnded(event.sessionId, event.queued)
+      sendContext(event.sessionId)
+      void account.refresh()
+      return
+    case 'terminals':
+      broadcastTerminals()
+      return
+    case 'term_output': {
+      const id = `${machine.id}.${event.id}`
+      for (const [ws, v] of termViewers.get(id) ?? []) if (v.live) send(ws, { type: 'term_output', id, data: event.data })
+      return
+    }
+  }
+}
+
+/** Machines whose runner was connected, last we looked. */
+const wasOnline = new Set<string>()
+
+/**
+ * A machine was added, renamed or turned away, or its runner connected or went
+ * away. When that last happens, its chats' viewers get a fresh snapshot:
+ * running, read-only, or back again. So they do whenever a runner says hello,
+ * even replacing a connection the hub hadn't seen drop: what the runner did
+ * in between never reached them.
+ */
+function machineChanged(id: string, hello: boolean): void {
+  machinesChanged()
+  sessionsChanged()
+  const online = !!machines.get(id)
+  if (online === wasOnline.has(id) && !hello) return
+  if (online) wasOnline.add(id)
+  else wasOnline.delete(id)
+  attention.update()
+  broadcastTerminals()
+  for (const [sessionId, set] of viewers) {
+    if (machines.machineOf(sessionId) !== id) continue
+    for (const ws of set) void sendSnapshot(ws, sessionId)
+  }
+  if (!online) return
+  // Its terminals' viewers start again from a snapshot.
+  for (const [tid, set] of termViewers) {
+    if (!tid.startsWith(`${id}.`)) continue
+    for (const [ws, v] of set) {
+      v.live = false
+      snapshotTerminal(ws, tid)
+    }
+  }
+  void account.refresh()
+}
+
+/**
+ * What runners can ask of the hub: the board for Claude's tools, starting
+ * children, and taking their transcripts. A runner acts only for chats on its
+ * own machine, and anything it says about another chat is refused, including
+ * who made a change. The board is everyone's, though: its Claude can change
+ * any card, and archive any chat, as Claude can from any chat.
+ */
+function hubApi(machine: string): Omit<HubApi, 'hello'> {
+  const own = (sessionId: string): string => {
+    if (!machines.owns(machine, sessionId)) throw new BadRequest(`Chat ${sessionId} isn't on this machine`)
+    return sessionId
+  }
+  return {
+    runOp: async (chat, script, input) => {
+      own(chat)
+      const o = hubOps.find((o) => o.script === script)
+      if (!o) throw new BadRequest(`No badger.${script}`)
+      if (hubOnly.has(script) && machine !== LOCAL) throw new BadRequest(`${script} only works for chats on the hub's own machine`)
+      const parsed = z.object(o.input).safeParse(input ?? {})
+      if (!parsed.success) throw new BadRequest(`Bad input for ${script}: ${z.prettifyError(parsed.error)}`)
+      try {
+        // Claude in one of this machine's chats is who makes the change; runners never act for the UI.
+        return await o.run(parsed.data, { sessionId: chat, cwd: () => machines.live(chat)?.cwd ?? '' })
+      } catch (err) {
+        if (err instanceof OpError) throw new BadRequest(err.message)
+        throw err
+      }
+    },
+    chatCard: async (chat) => {
+      const card = store.cards().find((c) => c.sessionIds.includes(own(chat)))
+      if (!card) return undefined
+      const archived = store.archivedIds()
+      const chats = await chatInfo(card.sessionIds)
+      return { ...card, chats: chats.map(({ id, cwd, machine }) => ({ id, cwd, machine, archived: archived.has(id) })) }
+    },
+    cardContext: (chat, peek) => cardContext(store, own(chat), peek),
+    openPreview: (chat, { root, port, name, path }) => {
+      own(chat)
+      broadcast({ type: 'open_preview', root, machine, port, name, path })
+      // The hub proxies its own machine's ports; another machine's only open where they are.
+      const template = machine === LOCAL ? previewUrl() : 'http://localhost:{port}'
+      return { tabs: sockets.size, url: template?.replace('{port}', String(port)).concat(path) }
+    },
+    startChild: ({ parentId, toolUseId, kind }) => {
+      own(parentId)
+      // Children run on their parent's machine. Recorded before the chat exists, so the sidebar never lists it.
+      const sessionId = randomUUID()
+      store.transaction(() => {
+        machines.assign(sessionId, machine)
+        store.addChild({ sessionId, parentId, toolUseId, kind })
+      })
+      return sessionId
+    },
+    // Not refused: a chat removed from this machine since it asked mustn't sink the rest of the batch.
+    transcriptState: (files) => transcripts.state(files.filter((f) => machines.owns(machine, f.sessionId))),
+    transcriptLines: (batch) => (own(batch.sessionId), takeLines(batch)),
+  }
+}
+
+async function chatInfo(ids: string[]): Promise<ChatInfo[]> {
+  const where = machines.machinesOf(ids)
+  return Promise.all(
+    [...new Set(ids)].map(async (id) => {
+      const info = await transcripts.info(id)
+      const machine = where.get(id)
+      return {
+        id,
+        title: info?.customTitle || info?.summary || info?.firstPrompt,
+        cwd: machines.live(id)?.cwd ?? info?.cwd,
+        machine,
+        machineName: machine && machines.name(machine),
+      }
+    }),
+  )
+}
+
+/** A runner's transcript lines, already checked to be for one of its own chats. */
+function takeLines(batch: TranscriptLines) {
+  const result = store.transaction(() => transcripts.append(batch))
+  if (result.bytes === batch.bytes && (batch.lines.length || batch.reset)) transcriptChanged(batch.sessionId)
+  return result
+}
+
+const listChanged = debounced(sessionsChanged, 1000)
+const stale = new Set<string>()
+const resendStale = debounced(() => {
+  for (const id of stale) for (const ws of viewers.get(id) ?? []) void sendSnapshot(ws, id)
+  stale.clear()
+}, 500)
+
+/**
+ * A chat's transcript grew on the hub. The list may have a new title or time.
+ * Viewers of a chat with no live process are watching history arrive, e.g.
+ * after its machine reconnects, so they get it again; a live chat's viewers
+ * already have it from the process.
+ */
+function transcriptChanged(sessionId: string): void {
+  listChanged()
+  if (machines.live(sessionId) || !viewers.get(sessionId)?.size) return
+  stale.add(sessionId)
+  resendStale()
+}
 
 // ── Terminals: which sockets are watching which terminal ──
 
@@ -169,13 +342,11 @@ setInterval(() => sockets.size && void usage.refreshAccount(), ACCOUNT_POLL_MS).
  */
 const termViewers = new Map<string, Map<WebSocket, { views: number; live: boolean }>>()
 
-terminals.on((e) => {
-  if (e.type === 'terminals') {
-    broadcast({ type: 'terminals', terminals: e.terminals })
-    for (const id of termViewers.keys()) if (!e.terminals.some((t) => t.id === id)) termViewers.delete(id)
-    return
-  }
-  for (const [ws, v] of termViewers.get(e.id) ?? []) if (v.live) send(ws, { type: 'term_output', id: e.id, data: e.data })
+const broadcastTerminals = debounced(() => {
+  if (!machines.terminalsKnown()) return
+  const list = machines.terminals()
+  broadcast({ type: 'terminals', terminals: list })
+  for (const id of termViewers.keys()) if (!list.some((t) => t.id === id)) termViewers.delete(id)
 })
 
 /** Every subscribe gets a fresh snapshot, which also resets any view of it the socket already has. */
@@ -184,12 +355,20 @@ function subscribeTerminal(ws: WebSocket, id: string): void {
   if (!viewers) termViewers.set(id, (viewers = new Map()))
   const v = viewers.get(ws) ?? { views: 0, live: false }
   viewers.set(ws, { views: v.views + 1, live: false })
-  terminals.snapshot(id, (data) => {
+  snapshotTerminal(ws, id)
+}
+
+/** The reply is handled in order with the terminal's output, so nothing falls between the snapshot and going live. */
+function snapshotTerminal(ws: WebSocket, id: string): void {
+  const done = (data: string | undefined) => {
     const current = termViewers.get(id)?.get(ws)
     if (!current || current.live) return
     current.live = true
     send(ws, { type: 'term_snapshot', id, data: data ?? '' })
-  })
+  }
+  const t = machines.terminal(id)
+  if (!t) return done(undefined)
+  t.machine.peer.request('termSnapshot', [t.id], (err, data) => done(err ? undefined : data), QUICK_TIMEOUT_MS)
 }
 
 function unsubscribeTerminal(ws: WebSocket, id: string): void {
@@ -197,29 +376,55 @@ function unsubscribeTerminal(ws: WebSocket, id: string): void {
   if (v && --v.views <= 0) termViewers.get(id)!.delete(ws)
 }
 
-async function snapshotFor(sessionId: string): Promise<ServerEvent> {
+// ── Chats ──
+
+/** Per viewer and chat, the number of the last snapshot asked for. */
+const snapshotsAsked = new WeakMap<WebSocket, Map<string, number>>()
+
+/**
+ * Sends a viewer the chat's history and, if it's live, its process's state.
+ * The history comes from the hub's copy of the transcript; the process adds
+ * its own turns, which may be newer. The live part is taken last and sent the
+ * moment it arrives, so the chat's events after it reach the viewer after it.
+ * Only the newest snapshot asked for is sent: an older one can finish later,
+ * e.g. failing on a connection its runner has just replaced.
+ */
+async function sendSnapshot(ws: WebSocket, sessionId: string): Promise<void> {
+  let asked = snapshotsAsked.get(ws)
+  if (!asked) snapshotsAsked.set(ws, (asked = new Map()))
+  const n = (asked.get(sessionId) ?? 0) + 1
+  asked.set(sessionId, n)
   const { text: draft, attachments: draftAttachments } = store.draft(sessionId)
-  const childSessions = store.children(sessionId)
-  const live = manager.get(sessionId)
-  if (live) return { ...(await live.snapshot()), draft, draftAttachments, children: childSessions }
-  const [info, messages] = await Promise.all([getSessionInfo(sessionId), diskTranscript(sessionId)])
-  return {
-    type: 'snapshot',
-    sessionId,
-    messages,
-    running: false,
-    mode: 'auto',
-    model: transcriptModel(messages),
-    cwd: info?.cwd,
-    gone: !!info?.cwd && inaccessible(info.cwd),
-    permissions: [],
-    bashOutput: {},
-    draft,
-    draftAttachments,
-    children: childSessions,
-    background: [],
-    queued: [],
+  const children = store.children(sessionId)
+  const machine = machines.machineOf(sessionId)
+  const [history, info] = machine ? await Promise.all([transcripts.transcript(sessionId), transcripts.info(sessionId)]) : [[], undefined]
+  const runner = machine ? machines.get(machine) : undefined
+  const base = { type: 'snapshot' as const, sessionId, machine, draft, draftAttachments, children }
+  const done = (live: LiveSnapshot | null, gone: boolean) => {
+    if (asked.get(sessionId) !== n) return
+    if (!live) {
+      return send(ws, {
+        ...base,
+        messages: history,
+        running: false,
+        mode: 'auto',
+        model: transcriptModel(history),
+        cwd: info?.cwd,
+        gone,
+        permissions: [],
+        bashOutput: {},
+        background: [],
+        queued: [],
+      })
+    }
+    // History holds earlier processes' turns; the live list holds this process's, in order.
+    const seen = new Set(live.messages.map((m) => m.uuid))
+    const messages = [...history.filter((m) => !seen.has(m.uuid) && !seen.has(m.after_uuid as string)), ...live.messages]
+    send(ws, { ...base, ...live, messages })
   }
+  if (!runner) return done(null, false)
+  const gone = info?.cwd ? (await runner.peer.within(QUICK_TIMEOUT_MS).inaccessible([info.cwd]).catch(() => [])).length > 0 : false
+  runner.peer.request('liveSnapshot', [sessionId], (err, live) => done(err ? null : live, gone), QUICK_TIMEOUT_MS)
 }
 
 /** Stores parts of a chat's draft and shows them to the chat's other viewers; the one editing it already has them. */
@@ -260,7 +465,7 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       let set = viewers.get(event.sessionId)
       if (!set) viewers.set(event.sessionId, (set = new Set()))
       set.add(ws)
-      send(ws, await snapshotFor(event.sessionId))
+      await sendSnapshot(ws, event.sessionId)
       // After the snapshot: it can mean starting a process, which shouldn't hold up the transcript.
       sendContext(event.sessionId, ws)
       return
@@ -270,21 +475,25 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       return
     case 'send': {
       const { pastes, images } = checkAttachments(event)
+      if (event.model !== undefined && typeof event.model !== 'string') throw new BadRequest('model must be a string')
+      if (event.machine !== undefined && typeof event.machine !== 'string') throw new BadRequest('machine must be a string')
+      if (!isUuid(event.sessionId)) throw new BadRequest('sessionId must be a UUID')
+      // A chat stays where it started; a new one goes where it was asked to.
+      const machine = machines.machineOf(event.sessionId) ?? (event.machine || LOCAL)
+      const runner = machines.require(machine)
       // Picking an archived chat back up brings it back to the sidebar.
       store.setArchived(event.sessionId, false, UI)
       attention.mark(event.sessionId, false)
       // Sending empties the composer in every tab, not just the one that sent.
       saveDraft(ws, event.sessionId, { text: '', attachments: { pastes: [], images: [] } })
-      const isNew = !manager.get(event.sessionId)
-      if (isNew && event.worktree !== undefined && event.cwd) {
-        await excludeWorktrees(event.cwd).catch(() => {
-          throw new Error(`${event.cwd} isn't a git repository, so it can't have worktrees`)
-        })
-      }
-      if (event.model !== undefined && typeof event.model !== 'string') throw new BadRequest('model must be a string')
-      const session = await manager.open(event.sessionId, { cwd: event.cwd, mode: event.mode, model: event.model, worktree: event.worktree })
-      if (isNew) session.subscribe(broadcast)
-      if (!session.send(event.text, pastes, images)) throw new Error('Session is closed; try again')
+      machines.assign(event.sessionId, machine)
+      await runner.peer.remote.send(
+        event.sessionId,
+        { cwd: event.cwd, mode: event.mode, model: event.model, worktree: event.worktree },
+        event.text,
+        pastes,
+        images,
+      )
       return
     }
     case 'draft':
@@ -293,7 +502,7 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       return
     case 'unqueue': {
       if (typeof event.id !== 'string') throw new BadRequest('id must be a string')
-      const message = await manager.get(event.sessionId)?.unqueue(event.id)
+      const message = await runnerFor(event.sessionId)?.peer.remote.unqueue(event.sessionId, event.id)
       if (!message || !event.edit) return
       // Back into the composer, ahead of anything typed since, in every tab.
       const saved = store.draft(event.sessionId)
@@ -305,38 +514,43 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       for (const other of viewers.get(event.sessionId) ?? []) send(other, { type: 'draft', sessionId: event.sessionId, ...change })
       return
     }
-    case 'interrupt':
-      await Promise.all([manager.get(event.sessionId)?.interrupt(), children.interrupt(event.sessionId)])
+    case 'interrupt': {
+      // Stopping a chat stops whatever it's waiting on too. Children run on their parent's machine.
+      const runner = runnerFor(event.sessionId)
+      if (!runner) return
+      const ids = [event.sessionId, ...Object.values(store.children(event.sessionId))]
+      await Promise.all(ids.map((id) => runner.peer.remote.interrupt(id)))
       return
+    }
     case 'stop_task':
-      await manager.get(event.sessionId)?.stopTask(event.taskId)
+      await runnerFor(event.sessionId)?.peer.remote.stopTask(event.sessionId, event.taskId)
       return
     case 'background_task':
       if (event.toolUseId !== undefined && typeof event.toolUseId !== 'string') throw new BadRequest('toolUseId must be a string')
-      await manager.get(event.sessionId)?.backgroundTask(event.toolUseId)
+      await runnerFor(event.sessionId)?.peer.remote.backgroundTask(event.sessionId, event.toolUseId)
       return
     case 'set_mode':
-      await manager.get(event.sessionId)?.setMode(event.mode)
+      await runnerFor(event.sessionId)?.peer.remote.setMode(event.sessionId, event.mode)
       return
     case 'set_model':
       if (typeof event.model !== 'string') throw new BadRequest('model must be a string')
       // A chat that isn't running takes the model with its next message.
-      await manager.get(event.sessionId)?.setModel(event.model)
+      await runnerFor(event.sessionId)?.peer.remote.setModel(event.sessionId, event.model)
       return
     case 'permission':
-      manager.get(event.sessionId)?.resolvePermission(event.requestId, event.decision, event.message, event.updatedInput)
+      await runnerFor(event.sessionId)?.peer.remote.resolvePermission(event.sessionId, event.requestId, event.decision, event.message, event.updatedInput)
       return
     case 'answer_draft': {
       const answers = checkAnswers(event.answers)
       // Shown to the chat's other viewers; the one answering already has it.
-      if (!manager.get(event.sessionId)?.draftAnswers(event.requestId, answers)) return
+      if (!(await runnerFor(event.sessionId)?.peer.remote.draftAnswers(event.sessionId, event.requestId, answers))) return
       const update: ServerEvent = { type: 'answer_draft', sessionId: event.sessionId, requestId: event.requestId, answers }
       for (const other of viewers.get(event.sessionId) ?? []) if (other !== ws) send(other, update)
       return
     }
     case 'plan_draft': {
       if (typeof event.plan !== 'string') throw new BadRequest('plan must be a string')
-      if (!manager.get(event.sessionId)?.draftPlan(event.requestId, event.plan)) return
+      if (!(await runnerFor(event.sessionId)?.peer.remote.draftPlan(event.sessionId, event.requestId, event.plan))) return
       const update: ServerEvent = { type: 'plan_draft', sessionId: event.sessionId, requestId: event.requestId, plan: event.plan }
       for (const other of viewers.get(event.sessionId) ?? []) if (other !== ws) send(other, update)
       return
@@ -355,12 +569,16 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
     case 'term_unsubscribe':
       unsubscribeTerminal(ws, event.id)
       return
-    case 'term_input':
-      terminals.input(event.id, event.data)
+    case 'term_input': {
+      const t = machines.terminal(event.id)
+      t?.machine.peer.emit({ type: 'term_input', id: t.id, data: event.data })
       return
-    case 'term_resize':
-      terminals.resize(event.id, event.cols, event.rows)
+    }
+    case 'term_resize': {
+      const t = machines.terminal(event.id)
+      t?.machine.peer.emit({ type: 'term_resize', id: t.id, cols: event.cols, rows: event.rows })
       return
+    }
     case 'preview_url':
       if (/^https?:\/\/\{port\}\.[a-z0-9.-]+(:\d+)?$/i.test(event.url)) previewUrls.delete(ws), previewUrls.set(ws, event.url)
       return
@@ -370,33 +588,51 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
 // ── HTTP ──
 
 async function sessionList(): Promise<SessionSummary[]> {
-  const infos = await listSessions({ limit: 200 })
+  const infos = await transcripts.list(200)
   const archived = store.archivedIds()
   // Children show inside the chat that started them.
   const childIds = store.childIds()
-  const exists = new Map<string, boolean>()
-  const gone = (cwd?: string) => {
-    if (!cwd) return false
-    if (!exists.has(cwd)) exists.set(cwd, !inaccessible(cwd))
-    return !exists.get(cwd)
-  }
-  const summaries: SessionSummary[] = infos.filter((s) => !childIds.has(s.sessionId)).map((s) => ({
-    id: s.sessionId,
-    title: s.customTitle || s.summary || s.firstPrompt || 'Untitled',
-    // A live chat may have moved into a worktree since its transcript was last written.
-    cwd: manager.get(s.sessionId)?.cwd ?? s.cwd,
-    lastModified: s.lastModified,
-    running: manager.isRunning(s.sessionId),
-    archived: archived.has(s.sessionId),
-    gone: gone(s.cwd),
-  }))
-  // A brand-new live session may not have a transcript on disk yet.
-  for (const id of manager.liveIds()) {
-    if (!childIds.has(id) && !summaries.some((s) => s.id === id)) {
-      summaries.unshift({ id, title: 'New chat', cwd: manager.get(id)?.cwd, lastModified: Date.now(), running: manager.isRunning(id), archived: false })
+  const listed = infos.filter((s) => !childIds.has(s.sessionId))
+  const where = machines.machinesOf(listed.map((s) => s.sessionId))
+  const gone = await goneFolders(listed.flatMap((s) => (s.cwd && !machines.live(s.sessionId) ? [{ machine: where.get(s.sessionId), cwd: s.cwd }] : [])))
+  const summaries: SessionSummary[] = listed.map((s) => {
+    const machine = where.get(s.sessionId)
+    const live = machines.live(s.sessionId)
+    return {
+      id: s.sessionId,
+      title: s.customTitle || s.summary || s.firstPrompt || 'Untitled',
+      // A live chat may have moved into a worktree since its transcript was last written.
+      cwd: live?.cwd ?? s.cwd,
+      machine,
+      lastModified: s.lastModified,
+      running: !!live?.running,
+      archived: archived.has(s.sessionId),
+      gone: !live && !!s.cwd && !!gone.get(machine ?? '')?.has(s.cwd),
+    }
+  })
+  // A brand-new live session may not have a transcript here yet.
+  for (const runner of machines.online()) {
+    for (const live of runner.live.values()) {
+      if (childIds.has(live.id) || summaries.some((s) => s.id === live.id)) continue
+      summaries.unshift({ id: live.id, title: 'New chat', cwd: live.cwd, machine: runner.id, lastModified: Date.now(), running: live.running, archived: false })
     }
   }
   return summaries
+}
+
+/** Which of these folders are gone, by machine, asking each connected machine once. Offline machines' folders can't be checked, so they aren't. */
+async function goneFolders(folders: { machine?: string; cwd: string }[]): Promise<Map<string, Set<string>>> {
+  const byMachine = new Map<string, Set<string>>()
+  for (const f of folders) if (f.machine) byMachine.set(f.machine, (byMachine.get(f.machine) ?? new Set()).add(f.cwd))
+  const out = new Map<string, Set<string>>()
+  await Promise.all(
+    [...byMachine].map(async ([machine, dirs]) => {
+      const runner = machines.get(machine)
+      if (!runner) return
+      out.set(machine, new Set(await runner.peer.within(GONE_TIMEOUT_MS).inaccessible([...dirs]).catch(() => [])))
+    }),
+  )
+  return out
 }
 
 /** Card routes. Returns undefined when the path isn't one of them. */
@@ -439,37 +675,59 @@ async function sessionsApi(method: string, path: string, req: IncomingMessage): 
     if (method === 'POST') return (store.setArchived(id, true, UI), [204, null])
     if (method === 'DELETE') return (store.setArchived(id, false, UI), [204, null])
   }
-  // The title goes in the transcript, where the CLI's /resume sees it too.
+  // The title goes in the transcript, on the chat's machine, where the CLI's /resume sees it too. It comes back with the transcript.
   if (action === 'title' && method === 'PUT') {
     const { title } = await readJson(req)
     if (typeof title !== 'string' || !title.trim()) throw new BadRequest('title is required')
-    await renameSession(id, title.trim()).catch(badRequest)
-    broadcast({ type: 'sessions_changed' })
+    const machine = machines.machineOf(id)
+    if (!machine) return [404, { error: 'No such chat' }]
+    await machines.require(machine).peer.remote.rename(id, title.trim())
     return [204, null]
   }
   if (action === 'title/suggest' && method === 'POST') {
-    const info = await getSessionInfo(id)
+    const info = await transcripts.info(id)
     if (!info) return [404, { error: 'No such chat' }]
     const current = info.customTitle || info.summary || info.firstPrompt || ''
     const card = store.cards().find((c) => c.sessionIds.includes(id))
-    return [200, { title: await suggestTitle(id, current, card, SCRATCH_DIR).catch(badRequest) }]
+    return [200, { title: await suggestTitle(id, current, card, SCRATCH_DIR, transcripts.store).catch(badRequest) }]
   }
   return undefined
 }
 
-/** Worktree routes, by path. Making them is Claude Code's job (--worktree); these look and clean up. */
+/** Runner routes: the list, adding one (its token is shown once), renaming, a new token, and removing one. */
+async function machinesApi(method: string, path: string, req: IncomingMessage): Promise<[number, unknown] | undefined> {
+  if (path === '/api/machines') {
+    if (method === 'GET') return [200, machines.list()]
+    if (method === 'POST') return [201, machines.create()]
+  }
+  const token = path.match(/^\/api\/machines\/([a-z0-9-]+)\/token$/)
+  if (token && method === 'POST') return [200, machines.resetToken(token[1])]
+  const m = path.match(/^\/api\/machines\/([a-z0-9-]+)$/)
+  if (m && method === 'PATCH') return [200, machines.rename(m[1], (await readJson(req)).name)]
+  if (m && method === 'DELETE') return machines.remove(m[1]) ? [204, null] : [404, { error: 'No such runner' }]
+  return undefined
+}
+
+/** The connected runner for a machine named in a request, defaulting to the hub's own. */
+function machineParam(value: unknown): Connection {
+  if (value !== undefined && value !== null && typeof value !== 'string') throw new BadRequest('machine must be a string')
+  return machines.require(value || LOCAL)
+}
+
+const requirePath = (dir: unknown) => {
+  if (typeof dir !== 'string' || !isAbsolute(dir)) throw new BadRequest('path must be an absolute path')
+  return resolve(dir)
+}
+
+/** Worktree routes, by machine and path. Making them is Claude Code's job (--worktree); these look and clean up. */
 async function worktreesApi(method: string, path: string, url: URL): Promise<[number, unknown] | undefined> {
   if (path !== '/api/worktree') return undefined
-  const dir = url.searchParams.get('path')
-  if (!dir || !isAbsolute(dir)) throw new BadRequest('path must be an absolute path')
-  if (method === 'GET') return [200, await worktreeStatus(dir).catch(badRequest)]
+  const dir = requirePath(url.searchParams.get('path'))
+  const runner = machineParam(url.searchParams.get('machine'))
+  if (method === 'GET') return [200, await runner.peer.remote.worktreeStatus(dir)]
   if (method === 'DELETE') {
-    if (manager.in(dir).some((s) => s.running)) throw new BadRequest('A chat is still working in this worktree')
-    if (terminals.terminals.some((t) => t.root === dir)) throw new BadRequest('Close its terminals first')
-    for (const s of manager.in(dir)) s.close()
-    await removeWorktree(dir).catch(badRequest)
-    forgetSize(dir)
-    broadcast({ type: 'sessions_changed' })
+    await runner.peer.remote.removeWorktree(dir)
+    sessionsChanged()
     return [204, null]
   }
   return undefined
@@ -478,41 +736,46 @@ async function worktreesApi(method: string, path: string, url: URL): Promise<[nu
 /** Temp dirs, e.g. from tests, aren't worth offering as folders. */
 const TEMP_DIR = /^\/(private\/)?(tmp|var\/folders)\//
 
-/** The folders new chats can start in, and the file browser that adds them. */
+/** The folders new chats can start in on a machine, and the file browser that adds them. */
 async function foldersApi(method: string, path: string, url: URL, req: IncomingMessage): Promise<[number, unknown] | undefined> {
-  const requirePath = (dir: unknown) => {
-    if (typeof dir !== 'string' || !isAbsolute(dir)) throw new BadRequest('path must be an absolute path')
-    return resolve(dir)
-  }
   if (path === '/api/folders') {
     if (method === 'GET') {
-      const used = new Map<string, number>([[WORKSPACE_DIR, 0]])
+      const runner = machineParam(url.searchParams.get('machine'))
+      const used = new Map<string, number>()
       for (const s of await sessionList()) {
-        if (s.cwd && !s.gone && s.cwd !== SCRATCH_DIR && !TEMP_DIR.test(s.cwd)) used.set(s.cwd, Math.max(s.lastModified, used.get(s.cwd) ?? 0))
+        if ((s.machine ?? LOCAL) !== runner.id || !s.cwd || s.gone || TEMP_DIR.test(s.cwd)) continue
+        used.set(s.cwd, Math.max(s.lastModified, used.get(s.cwd) ?? 0))
       }
-      const { added, hidden } = store.folders()
-      return [200, await listFolders(used, added, hidden)]
+      const { added, hidden } = store.folders(runner.id)
+      return [200, await runner.peer.remote.listFolders([...used], [...added], [...hidden])]
     }
     if (method === 'POST') {
-      const dir = requirePath((await readJson(req)).path)
-      if (inaccessible(dir)) throw new BadRequest(`${dir} isn't a folder Badger can open`)
-      store.addFolder(dir)
+      const body = await readJson(req)
+      const runner = machineParam(body.machine)
+      const dir = requirePath(body.path)
+      if ((await runner.peer.remote.inaccessible([dir])).length) throw new BadRequest(`${dir} isn't a folder Badger can open`)
+      store.addFolder(runner.id, dir)
       return [204, null]
     }
     if (method === 'DELETE') {
-      store.hideFolder(requirePath(url.searchParams.get('path')))
+      // Hiding needs no runner, so it works while the machine is offline.
+      const machine = url.searchParams.get('machine') || LOCAL
+      store.hideFolder(machine, requirePath(url.searchParams.get('path')))
       return [204, null]
     }
   }
-  if (path === '/api/folders/size' && method === 'GET') return [200, { bytes: await folderSize(requirePath(url.searchParams.get('path'))) }]
+  if (path === '/api/folders/size' && method === 'GET') {
+    const runner = machineParam(url.searchParams.get('machine'))
+    return [200, { bytes: await runner.peer.remote.folderSize(requirePath(url.searchParams.get('path'))) }]
+  }
   if (path === '/api/fs' && method === 'GET') {
-    const dir = requirePath(url.searchParams.get('path') || homedir())
-    return [200, await listDir(dir, url.searchParams.get('hidden') === '1').catch(badRequest)]
+    const runner = machineParam(url.searchParams.get('machine'))
+    const dir = url.searchParams.get('path')
+    return [200, await runner.peer.remote.listDir(dir ? requirePath(dir) : undefined, url.searchParams.get('hidden') === '1')]
   }
   if (path === '/api/fs/folder' && method === 'POST') {
-    const dir = requirePath((await readJson(req)).path)
-    await mkdir(dir).catch(badRequest)
-    return [201, { path: dir }]
+    const body = await readJson(req)
+    return [201, { path: await machineParam(body.machine).peer.remote.makeDir(requirePath(body.path)) }]
   }
   return undefined
 }
@@ -520,51 +783,32 @@ async function foldersApi(method: string, path: string, url: URL, req: IncomingM
 /** Terminal routes. Live I/O goes over the WebSocket; these are the one-off actions. */
 async function terminalsApi(method: string, path: string, req: IncomingMessage): Promise<[number, unknown] | undefined> {
   if (path === '/api/terminals') {
-    if (method === 'GET') return [200, terminals.terminals]
+    if (method === 'GET') return [200, machines.terminals()]
     if (method === 'POST') {
-      const { cwd, command, cols, rows } = await readJson(req)
+      const { cwd, command, cols, rows, machine } = await readJson(req)
       if (typeof cwd !== 'string' || !isAbsolute(cwd)) throw new BadRequest('cwd must be an absolute path')
       if (command !== undefined && typeof command !== 'string') throw new BadRequest('command must be a string')
-      return [201, await terminals.create({ cwd, command: command || undefined, cols, rows }).catch(badRequest)]
+      const runner = machineParam(machine)
+      return [201, machines.upsertTerminal(runner, await runner.peer.remote.termCreate({ cwd, command: command || undefined, cols, rows }))]
     }
   }
-  const m = path.match(/^\/api\/terminals\/([0-9a-f]+)(?:\/(restart))?$/)
+  const m = path.match(/^\/api\/terminals\/([a-z0-9-]+\.[0-9a-f]+)(?:\/(restart))?$/)
   if (!m) return undefined
   const [, id, action] = m
-  if (!terminals.get(id)) return [404, { error: 'No such terminal' }]
-  if (method === 'POST' && action === 'restart') return [200, await terminals.restart(id)]
-  if (method === 'DELETE' && !action) return (await terminals.remove(id), [204, null])
-  return undefined
-}
-
-/**
- * Operations for the `badger` command's scripts. They run as the chat whose
- * script it is (its id comes from Claude Code's environment), from the
- * script's directory. Some take a while: a terminal's wait_for, a page.
- */
-async function opsApi(method: string, path: string, req: IncomingMessage): Promise<[number, unknown] | undefined> {
-  if (path === '/api/ops' && method === 'GET') return [200, catalog(ops)]
-  const m = path.match(/^\/api\/ops\/([\w.]+)$/)
-  if (!m || method !== 'POST') return undefined
-  const o = ops.find((o) => o.script === m[1])
-  if (!o) return [404, { error: `No badger.${m[1]}; badger --help lists them.` }]
-  const header = (name: string) => [req.headers[name]].flat()[0] ?? ''
-  const sessionId = /^[0-9a-f-]{36}$/.test(header('x-badger-session')) ? header('x-badger-session') : ''
-  const dir = isAbsolute(header('x-badger-cwd')) ? header('x-badger-cwd') : (manager.get(sessionId)?.cwd ?? WORKSPACE_DIR)
-  const input = await readJson(req)
-  try {
-    return [200, { value: await runForScript(o, input, { sessionId, cwd: () => dir }) }]
-  } catch (err) {
-    if (!(err instanceof OpError)) console.error(`badger.${o.script} failed:`, err)
-    return [422, { error: message(err) }]
+  const t = machines.terminal(id)
+  if (!t || !t.machine.terminals.some((x) => x.id === t.id)) return [404, { error: 'No such terminal' }]
+  if (method === 'POST' && action === 'restart') return [200, machines.upsertTerminal(t.machine, await t.machine.peer.remote.termRestart(t.id))]
+  if (method === 'DELETE' && !action) {
+    await t.machine.peer.remote.termRemove(t.id)
+    t.machine.terminals = t.machine.terminals.filter((x) => x.id !== t.id)
+    return [204, null]
   }
+  return undefined
 }
 
 const badRequest = (err: Error): never => {
   throw new BadRequest(err.message)
 }
-
-const roots = new Map<string, string>()
 
 const found = (card: unknown): [number, unknown] => (card ? [200, card] : [404, { error: 'No such card' }])
 
@@ -597,6 +841,8 @@ const MIME: Record<string, string> = {
  * Bound to loopback, the Host check also stops DNS rebinding (a hostile name
  * resolving to 127.0.0.1). Bound wider, whatever fronts the port (an auth
  * proxy) is the guard: a rebound name reaches the proxy without a session.
+ *
+ * Runners don't come through here: they have a token instead (see `/runner`).
  */
 const LOCAL_NAMES = new Set(['localhost', '127.0.0.1', '[::1]'])
 const CHECK_HOST = LOCAL_NAMES.has(HOST) || HOST === '::1'
@@ -628,41 +874,36 @@ const server = createServer(async (req, res) => {
   try {
     if (url.pathname === '/api/config') return json(200, { defaultCwd: WORKSPACE_DIR, scratchCwd: SCRATCH_DIR, port: PORT })
     if (url.pathname.startsWith('/api/')) {
+      const method = req.method ?? 'GET'
       if (url.pathname === '/api/sessions') return json(200, await sessionList())
-      if (url.pathname === '/api/models') return json(200, await listModels())
+      if (url.pathname === '/api/models') {
+        const runner = anyRunner()
+        return json(200, runner ? await runner.peer.remote.models() : [])
+      }
       if (url.pathname === '/api/workspace') {
         const cwd = url.searchParams.get('cwd')
         if (!cwd) throw new BadRequest('cwd is required')
-        if (!roots.has(cwd)) roots.set(cwd, workspaceRoot(cwd))
-        return json(200, { root: roots.get(cwd) })
+        return json(200, { root: await machineParam(url.searchParams.get('machine')).peer.remote.workspaceRoot(cwd) })
       }
       if (url.pathname === '/api/changes') {
-        const dir = url.searchParams.get('path')
-        if (!dir || !isAbsolute(dir)) throw new BadRequest('path must be an absolute path')
-        return json(200, (await changesStatus(dir).catch(badRequest)) ?? null)
+        const dir = requirePath(url.searchParams.get('path'))
+        return json(200, (await machineParam(url.searchParams.get('machine')).peer.remote.changesStatus(dir)) ?? null)
       }
-      const sessions = await sessionsApi(req.method ?? 'GET', url.pathname, req)
-      if (sessions) return json(...sessions)
-      const worktrees = await worktreesApi(req.method ?? 'GET', url.pathname, url)
-      if (worktrees) return json(...worktrees)
-      const terms = await terminalsApi(req.method ?? 'GET', url.pathname, req)
-      if (terms) return json(...terms)
-      const cards = await cardsApi(req.method ?? 'GET', url.pathname, req)
-      if (cards) return json(...cards)
-      const folders = await foldersApi(req.method ?? 'GET', url.pathname, url, req)
-      if (folders) return json(...folders)
       // A file from the file browser, e.g. an image to attach.
-      if (url.pathname === '/api/fs/file' && req.method === 'GET') {
-        const file = url.searchParams.get('path')
-        if (!file || !isAbsolute(file) || !existsSync(file) || statSync(file).isDirectory()) throw new BadRequest('path must be a file')
+      if (url.pathname === '/api/fs/file' && method === 'GET') {
+        const file = await machineParam(url.searchParams.get('machine')).peer.remote.readFile(requirePath(url.searchParams.get('path')))
         // Only images keep their type: anything else, like an HTML file from a repo, must never render as Badger's own page.
-        const type = IMAGE_TYPES.find((t) => IMAGE_EXTENSIONS[t].includes(extname(file).toLowerCase()))
-        res.writeHead(200, { 'content-type': type ?? 'application/octet-stream', 'x-content-type-options': 'nosniff', 'content-disposition': 'attachment' })
-        return void createReadStream(file).pipe(res)
+        res.writeHead(200, { 'content-type': file.type ?? 'application/octet-stream', 'x-content-type-options': 'nosniff', 'content-disposition': 'attachment' })
+        return void res.end(Buffer.from(file.data, 'base64'))
       }
-      const scripted = await opsApi(req.method ?? 'GET', url.pathname, req)
-      if (scripted) return json(...scripted)
-      return json(404, { error: 'Not found' })
+      const result =
+        (await sessionsApi(method, url.pathname, req)) ??
+        (await machinesApi(method, url.pathname, req)) ??
+        (await worktreesApi(method, url.pathname, url)) ??
+        (await terminalsApi(method, url.pathname, req)) ??
+        (await cardsApi(method, url.pathname, req)) ??
+        (await foldersApi(method, url.pathname, url, req))
+      return result ? json(...result) : json(404, { error: 'Not found' })
     }
     // Production: serve the built client, falling back to index.html for client routes.
     let file = join(DIST, url.pathname)
@@ -677,6 +918,8 @@ const server = createServer(async (req, res) => {
 })
 
 const wss = new WebSocketServer({ noServer: true })
+// Transcript lines can be big (pasted images); runners send bigger ones as blanks (see sync.ts).
+const runnerWss = new WebSocketServer({ noServer: true, maxPayload: RUNNER_MAX_FRAME })
 
 server.on('upgrade', (req, socket, head) => {
   const preview = previewPort(req.headers.host, PREVIEW_HOSTS)
@@ -685,24 +928,52 @@ server.on('upgrade', (req, socket, head) => {
     return proxyPreviewUpgrade(req, socket, head, preview)
   }
   const url = new URL(req.url ?? '/', 'http://x')
-  if (url.pathname !== '/ws' || !sameOrigin(req)) {
-    socket.write(url.pathname !== '/ws' ? 'HTTP/1.1 404 Not Found\r\n\r\n' : 'HTTP/1.1 403 Forbidden\r\n\r\n')
+  const refuse = (status: string, why = '') => {
+    socket.write(`HTTP/1.1 ${status}\r\ncontent-type: text/plain\r\nconnection: close\r\n\r\n${why}`)
     socket.destroy()
-    return
   }
+  if (url.pathname === '/runner') {
+    // A runner: no browser session, so it's let through the proxy in front and has a token instead.
+    const token = (req.headers.authorization ?? '').replace(/^Bearer\s+/i, '')
+    const machine = token ? machines.byToken(token) : undefined
+    if (!machine) return refuse('401 Unauthorized', 'Unknown or revoked runner token')
+    if (req.headers[PROTOCOL_HEADER] !== String(RUNNER_PROTOCOL)) {
+      const why = mismatch(req.headers[PROTOCOL_HEADER])
+      machines.refused(machine, why)
+      return refuse('426 Upgrade Required', why)
+    }
+    return runnerWss.handleUpgrade(req, socket, head, (ws) => connectRunner(machine, token, ws))
+  }
+  if (url.pathname !== '/ws') return refuse('404 Not Found')
+  if (!sameOrigin(req)) return refuse('403 Forbidden')
   wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws))
 })
 
+/** A remote runner's connection, dropped if it stops answering pings (a laptop that went to sleep mid-connection). */
+function connectRunner(machine: string, token: string, ws: WebSocket): void {
+  let alive = true
+  ws.on('pong', () => (alive = true))
+  const ping = setInterval(() => {
+    if (!alive) return ws.terminate()
+    alive = false
+    ws.ping()
+  }, RUNNER_PING_MS)
+  ws.on('close', () => clearInterval(ping))
+  machines.attach(machine, wsLink(ws), hubApi, token)
+}
+
 wss.on('connection', (ws: WebSocket) => {
   sockets.add(ws)
-  // Before the host has said hello the list is unknown, not empty; it's broadcast once it arrives.
-  if (terminals.known) send(ws, { type: 'terminals', terminals: terminals.terminals })
-  const account = usage.latestAccount()
-  if (account) send(ws, { type: 'account_usage', usage: account })
-  void usage.refreshAccount()
+  send(ws, { type: 'machines', machines: machines.list() })
+  // Before every machine's PTY host has said hello the list is unknown, not empty; it's broadcast once they have.
+  if (machines.terminalsKnown()) send(ws, { type: 'terminals', terminals: machines.terminals() })
+  const latest = account.latest()
+  if (latest) send(ws, { type: 'account_usage', usage: latest })
+  void account.refresh()
   send(ws, { type: 'attention', chats: attention.chats() })
-  // Handle each socket's events in order so a snapshot can't overtake a later status.
-  let chain = Promise.resolve()
+  // Each chat's events are handled in order, so a snapshot can't overtake a later status. Chats don't wait on
+  // each other: one whose machine has stopped answering doesn't hold up the rest of the tab.
+  const chains = new Map<string, Promise<void>>()
   ws.on('message', (raw) => {
     let event: ClientEvent
     try {
@@ -710,7 +981,8 @@ wss.on('connection', (ws: WebSocket) => {
     } catch {
       return
     }
-    chain = chain.then(() =>
+    const key = 'sessionId' in event && typeof event.sessionId === 'string' ? event.sessionId : ''
+    const next = (chains.get(key) ?? Promise.resolve()).then(() =>
       handleClient(ws, event).catch((err) =>
         send(ws, {
           type: 'error',
@@ -719,6 +991,8 @@ wss.on('connection', (ws: WebSocket) => {
         }),
       ),
     )
+    chains.set(key, next)
+    void next.then(() => chains.get(key) === next && chains.delete(key))
   })
   ws.on('close', () => {
     sockets.delete(ws)
@@ -728,18 +1002,52 @@ wss.on('connection', (ws: WebSocket) => {
   })
 })
 
+// The hub's own machine: a runner in this process, over an in-memory link.
+const runner = new Runner({ workspaceDir: WORKSPACE_DIR, scratchDir: SCRATCH_DIR, dataDir: DATA_DIR, env: startEnv })
+const [hubEnd, runnerEnd] = memoryLinks()
+importOlderChats()
+machines.attach(LOCAL, hubEnd, hubApi)
+runner.connect(runnerEnd).catch((err) => console.error('The hub’s own runner failed to start:', err))
+
 server.listen(PORT, HOST, () => {
   console.log(`badger server on http://${HOST}:${PORT} (workspace ${WORKSPACE_DIR})`)
 })
 
-// Terminals live in a separate process and outlive this one; connect now so the list is ready.
-terminals.connect().catch((err) => console.error(err.message))
-
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
-    manager.closeAll()
+    runner.closeAll()
     process.exit(0)
   })
+}
+
+/**
+ * Once, on the first start with machines: puts every chat Claude Code has on this machine on the hub's machine, since
+ * Badger didn't use to record which were its. Done before the hub's runner connects, so its first chat list has them.
+ * After this, only chats started in Badger are added.
+ */
+function importOlderChats(): void {
+  if (!store.db.prepare('SELECT 1 FROM pending_import').get()) return
+  const projects = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects')
+  const insert = store.db.prepare('INSERT OR IGNORE INTO chat_machines (session_id, machine, created_at) VALUES (?, ?, ?)')
+  store.transaction(() => {
+    for (const project of readdirSafe(projects)) {
+      for (const name of readdirSafe(join(projects, project))) {
+        const sessionId = name.slice(0, -'.jsonl'.length)
+        if (!name.endsWith('.jsonl') || !isUuid(sessionId)) continue
+        const info = statSync(join(projects, project, name), { throwIfNoEntry: false })
+        if (info?.isFile()) insert.run(sessionId, LOCAL, Math.floor(info.mtimeMs))
+      }
+    }
+    store.db.exec('DELETE FROM pending_import')
+  })
+}
+
+function readdirSafe(dir: string): string[] {
+  try {
+    return readdirSync(dir)
+  } catch {
+    return []
+  }
 }
 
 function loadDotEnv(): void {

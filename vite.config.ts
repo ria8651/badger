@@ -13,6 +13,8 @@ export default defineConfig({
     proxy: {
       '/api': { target: server, changeOrigin: false },
       '/ws': { target: server, ws: true, changeOrigin: false },
+      // So runners can connect to the hub at the address its page is on.
+      '/runner': { target: server, ws: true, changeOrigin: false },
     },
   },
 })

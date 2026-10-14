@@ -5,22 +5,35 @@ import { op, type Op } from './ops.ts'
 import { TERMINAL_SERVER } from './terminalTools.ts'
 import { workspaceRoot } from './workspace.ts'
 
-export const PREVIEW_INSTRUCTIONS = [
-  "To show the user a web page a dev server serves, use open_preview: it opens in a panel beside this chat. The user may be on another computer or a phone, so give them preview URLs, never localhost ones.",
-  "The preview_* tools work in the page the user has open, with their login and whatever state it's in: run code in it, read its console, screenshot it, navigate it. Use them when the user says something's broken there, or to set up a state for them to try.",
+/**
+ * How Claude should use previews. On the hub's own machine they go through
+ * the hub, so they work from anywhere and Claude can drive the user's page;
+ * on another machine they open at plain localhost there.
+ */
+export const previewInstructions = (hub: boolean) => [
+  ...(hub
+    ? [
+        "To show the user a web page a dev server serves, use open_preview: it opens in a panel beside this chat. The user may be on another computer or a phone, so give them preview URLs, never localhost ones.",
+        "The preview_* tools work in the page the user has open, with their login and whatever state it's in: run code in it, read its console, screenshot it, navigate it. Use them when the user says something's broken there, or to set up a state for them to try.",
+      ]
+    : [
+        "To show the user a web page a dev server serves, use open_preview: it opens in a panel beside this chat, at http://localhost:<port>, so only a browser on this machine shows it. Tell the user that URL.",
+      ]),
   ...(process.env.BADGER_CHROMIUM
     ? [
-        `To check a page yourself, with nobody watching, Playwright and a headless Chromium are installed: \`require('playwright-core').chromium.launch({ executablePath: '${process.env.BADGER_CHROMIUM}', args: ['--no-sandbox'] })\` in a node script. Dev servers are at http://localhost:<port>. Save screenshots to files and Read them; the user sees them too. It has its own cookies and state, not the user's: for their page, use the preview_* tools.`,
+        `To check a page yourself, with nobody watching, Playwright and a headless Chromium are installed: \`require('playwright-core').chromium.launch({ executablePath: '${process.env.BADGER_CHROMIUM}', args: ['--no-sandbox'] })\` in a node script. Dev servers are at http://localhost:<port>. Save screenshots to files and Read them; the user sees them too. It has its own cookies and state, not the user's${hub ? ': for their page, use the preview_* tools' : ''}.`,
       ]
     : []),
 ]
 
 /** Showing what a port serves in the user's browser. */
 export interface Previews {
-  /** Shows it in the panels of every browser tab on that workspace; returns how many tabs are connected. */
-  open(root: string, port: number, name?: string, path?: string): number
-  /** The address a browser opens it at, once one has said where previews are. */
-  url(port: number, path?: string): string | undefined
+  /**
+   * Shows it in the panels of every browser tab on that workspace. Returns how
+   * many tabs are connected, and the address a browser opens it at, once one
+   * has said where previews are.
+   */
+  open(sessionId: string, preview: { root: string; port: number; name?: string; path: string }): Promise<{ tabs: number; url?: string }>
 }
 
 const port = z.number().int().min(1).max(65535)
@@ -36,37 +49,40 @@ const RUN_HELP = `Run JavaScript in the page the user has open, and get its resu
 - sleep(ms)
 This acts on the user's real page: clicking can change their real data.`
 
-/** Showing previews, and the bridge into the pages the user has open. */
-export function previewOps(previews: Previews, bridges: Bridges): Op[] {
+/** Showing a port's preview. It runs where the port is; the hub tells the browsers. */
+export function openPreviewOp(previews: Previews): Op {
+  return op({
+    server: TERMINAL_SERVER,
+    tool: 'open_preview',
+    script: 'preview.open',
+    description:
+      "Show what a port on this machine serves, e.g. a dev server, in a panel beside this chat in the user's browser. Returns the preview's URL, which works in its own browser tab too. Opening a port that's already showing navigates it to path and reloads it.",
+    input: {
+      port,
+      name: z.string().optional().describe('Tab label, e.g. "Storefront" or "Storybook". Defaults to the port.'),
+      path: z.string().optional().describe('Path to open, e.g. "/settings". Defaults to "/".'),
+    },
+    returns: '{ url?, tabs, listening }',
+    autoAllow: true,
+    annotations: { readOnlyHint: true },
+    async run(args, ctx) {
+      const path = args.path ? (args.path.startsWith('/') ? args.path : `/${args.path}`) : '/'
+      const listening = await isListening(args.port)
+      const { tabs, url } = await previews.open(ctx.sessionId, { root: workspaceRoot(ctx.cwd()), port: args.port, name: args.name, path })
+      const text = [
+        tabs ? `Opened in the panels of ${tabs === 1 ? 'the browser tab' : `${tabs} browser tabs`} showing Badger.` : 'No browser has Badger open, so nothing was shown.',
+        url ? `URL: ${url}` : '',
+        listening ? '' : `Nothing is listening on port ${args.port} yet; the preview loads once something does.`,
+      ]
+      return { text: text.filter(Boolean).join('\n'), value: { url, tabs, listening } }
+    },
+  })
+}
+
+/** The bridge into the preview pages the user has open. Only for ports on the hub's own machine, which its proxy serves. */
+export function bridgeOps(bridges: Bridges): Op[] {
   const s = { server: TERMINAL_SERVER }
   return [
-    op({
-      ...s,
-      tool: 'open_preview',
-      script: 'preview.open',
-      description:
-        "Show what a port on this machine serves, e.g. a dev server, in a panel beside this chat in the user's browser. Returns the preview's URL, which works in its own browser tab too. Opening a port that's already showing navigates it to path and reloads it.",
-      input: {
-        port,
-        name: z.string().optional().describe('Tab label, e.g. "Storefront" or "Storybook". Defaults to the port.'),
-        path: z.string().optional().describe('Path to open, e.g. "/settings". Defaults to "/".'),
-      },
-      returns: '{ url?, tabs, listening }',
-      autoAllow: true,
-      annotations: { readOnlyHint: true },
-      async run(args, ctx) {
-        const path = args.path ? (args.path.startsWith('/') ? args.path : `/${args.path}`) : '/'
-        const listening = await isListening(args.port)
-        const tabs = previews.open(workspaceRoot(ctx.cwd()), args.port, args.name, path)
-        const url = previews.url(args.port, path)
-        const text = [
-          tabs ? `Opened in the panels of ${tabs === 1 ? 'the browser tab' : `${tabs} browser tabs`} showing Badger.` : 'No browser has Badger open, so nothing was shown.',
-          url ? `URL: ${url}` : '',
-          listening ? '' : `Nothing is listening on port ${args.port} yet; the preview loads once something does.`,
-        ]
-        return { text: text.filter(Boolean).join('\n'), value: { url, tabs, listening } }
-      },
-    }),
     op({
       ...s,
       tool: 'preview_pages',

@@ -4,7 +4,8 @@ import type { TerminalInfo } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { LEADER, panelsShown, togglePanels } from '../layout.ts'
 import { previewUrl, previewsAvailable } from '../previews.ts'
-import { terminalLabel, terminalState, terminals } from '../terminals.ts'
+import { LOCAL, onMachine } from '../machines.ts'
+import { inWs, terminalLabel, terminalState, terminals, type Ws } from '../terminals.ts'
 import { TerminalView } from './TerminalView.tsx'
 import { ltr } from './ui.tsx'
 
@@ -14,19 +15,19 @@ export function StatusDot(props: { terminal: TerminalInfo }) {
   return <span title={terminalState(props.terminal)} class={`inline-block size-1.5 shrink-0 rounded-full ${tone()}`} />
 }
 
-const inWorkspace = (root: string) => terminals().filter((t) => t.root === root)
+const inWorkspace = (ws: Ws) => terminals().filter((t) => inWs(t, ws))
 
 export const ghost = (active = false) =>
   `grid size-7 shrink-0 place-items-center rounded-md transition-colors hover:bg-surface hover:text-fg ${active ? 'text-fg' : 'text-fg-3'}`
 
 /** For the composer: shows or hides the panels and says how many terminals are running here. */
-export function TerminalButton(props: { root: string; cwd: string }) {
-  const running = () => inWorkspace(props.root).filter((t) => t.running).length
-  const open = () => panelsShown(props.root)
+export function TerminalButton(props: { ws: Ws; cwd: string }) {
+  const running = () => inWorkspace(props.ws).filter((t) => t.running).length
+  const open = () => panelsShown(props.ws)
   return (
     <button
       type="button"
-      onClick={() => togglePanels(props.root, props.cwd)}
+      onClick={() => togglePanels(props.ws, props.cwd)}
       title={`${open() ? 'Hide' : 'Show'} terminals (${LEADER} P)`}
       class={`flex h-7 items-center gap-1 rounded-md px-2 text-xs tabular-nums transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 ${
         open() ? 'bg-surface text-fg-2' : 'text-fg-3'
@@ -55,7 +56,7 @@ export function RestartButton(props: { terminal: TerminalInfo }) {
  */
 export function PortButtons(props: { terminal: TerminalInfo; onOpen?: (port: number) => void }) {
   return (
-    <Show when={previewsAvailable()}>
+    <Show when={previewsAvailable(props.terminal.machine || LOCAL)}>
       <For each={props.terminal.ports ?? []}>
         {(port) => {
           const cls = 'flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs tabular-nums text-fg-3 transition-colors hover:bg-surface hover:text-fg'
@@ -69,7 +70,7 @@ export function PortButtons(props: { terminal: TerminalInfo; onOpen?: (port: num
               {label}
             </button>
           ) : (
-            <a href={previewUrl(port)} target="_blank" rel="noopener" title={`Open port ${port} in a new browser tab`} class={cls}>
+            <a href={previewUrl(port, '/', props.terminal.machine || LOCAL)} target="_blank" rel="noopener" title={`Open port ${port} in a new browser tab`} class={cls}>
               {label}
             </a>
           )
@@ -95,6 +96,7 @@ export function TerminalPage(props: { id: string; onClosed: () => void }) {
               <StatusDot terminal={t()} />
               <span class="truncate text-fg">{terminalLabel(t())}</span>
               <span class="min-w-0 flex-1 truncate text-left font-mono text-[11px] text-fg-3 [direction:rtl]">{ltr(t().cwd)}</span>
+              <Show when={onMachine(t().machine)}>{(name) => <span class="shrink-0 text-[11px] text-fg-3">{name()}</span>}</Show>
               <span class="shrink-0 text-xs text-fg-3">{terminalState(t())}</span>
               <PortButtons terminal={t()} />
               <RestartButton terminal={t()} />

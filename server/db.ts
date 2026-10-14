@@ -82,6 +82,72 @@ const MIGRATIONS = [
      added_at INTEGER NOT NULL,
      hidden_at INTEGER
    );`,
+  // Machines chats and terminals run on. The hub's own is 'local'; others connect with a token, kept hashed.
+  // named is whether someone named it; until then it takes its host's name. info is what it said about itself when
+  // it last connected, as JSON. A removed machine is only marked, so its id is never given to another machine and its
+  // chats can't come back to life there.
+  `CREATE TABLE machines (
+     id TEXT PRIMARY KEY,
+     name TEXT NOT NULL,
+     named INTEGER NOT NULL DEFAULT 0,
+     token_hash TEXT UNIQUE,
+     created_at INTEGER NOT NULL,
+     last_seen INTEGER,
+     info TEXT,
+     removed_at INTEGER
+   );
+   -- The machine each chat runs on. A chat stays on the machine it started on.
+   CREATE TABLE chat_machines (
+     session_id TEXT PRIMARY KEY,
+     machine TEXT NOT NULL,
+     created_at INTEGER NOT NULL
+   );
+   CREATE INDEX chat_machines_machine ON chat_machines(machine);
+   -- Claude Code's transcripts, copied line by line from the machine each chat runs on, so chats can be read while it's away.
+   -- subpath is '' for a chat's own transcript, or e.g. 'subagents/agent-<id>'.
+   CREATE TABLE transcript_files (
+     session_id TEXT NOT NULL,
+     subpath TEXT NOT NULL,
+     project TEXT NOT NULL,
+     lines INTEGER NOT NULL,
+     bytes INTEGER NOT NULL,
+     mtime INTEGER NOT NULL,
+     meta TEXT,
+     PRIMARY KEY (session_id, subpath)
+   );
+   CREATE TABLE transcript_lines (
+     session_id TEXT NOT NULL,
+     subpath TEXT NOT NULL,
+     n INTEGER NOT NULL,
+     entry TEXT NOT NULL,
+     PRIMARY KEY (session_id, subpath, n)
+   ) WITHOUT ROWID;
+   -- The SDK's running summary of each chat's transcript (foldSessionSummary), so chats can be listed without reading them.
+   CREATE TABLE transcript_summaries (
+     session_id TEXT PRIMARY KEY,
+     mtime INTEGER NOT NULL,
+     data TEXT NOT NULL
+   );
+   -- Before machines, every chat ran on the hub's. Which were Badger's wasn't recorded, so they're brought in once at
+   -- startup from Claude Code's transcripts (importOlderChats in index.ts); this row says that's still to do. The ones
+   -- on cards and their children, however deep, are certainly the hub's.
+   CREATE TABLE pending_import (id INTEGER PRIMARY KEY CHECK (id = 1));
+   INSERT INTO pending_import (id) VALUES (1);
+   WITH RECURSIVE tree(session_id) AS (
+     SELECT session_id FROM card_sessions
+     UNION SELECT c.session_id FROM child_sessions c JOIN tree ON c.parent_session = tree.session_id
+   )
+   INSERT OR IGNORE INTO chat_machines (session_id, machine, created_at) SELECT session_id, 'local', 0 FROM tree;
+   -- Folders are on a machine too.
+   CREATE TABLE machine_folders (
+     machine TEXT NOT NULL,
+     path TEXT NOT NULL,
+     added_at INTEGER NOT NULL,
+     hidden_at INTEGER,
+     PRIMARY KEY (machine, path)
+   );
+   INSERT INTO machine_folders (machine, path, added_at, hidden_at) SELECT 'local', path, added_at, hidden_at FROM folders;
+   DROP TABLE folders;`,
 ]
 
 /**
@@ -119,7 +185,8 @@ type AuditAction = 'create' | 'update' | 'delete' | 'link' | 'unlink' | 'archive
 
 /** Project data that spans repos and users: cards and which chats belong to them. */
 export class Store {
-  private db: DatabaseSync
+  /** Shared with the other tables' owners: machines and transcripts. */
+  readonly db: DatabaseSync
   private inTransaction = false
 
   /** @param onArchived called whenever a chat is archived or unarchived, including by a card's status changing. */
@@ -144,7 +211,7 @@ export class Store {
   }
 
   /** Joins the enclosing transaction if there is one, so writes that call each other stay atomic. */
-  private transaction<T>(fn: () => T): T {
+  transaction<T>(fn: () => T): T {
     if (this.inTransaction) return fn()
     this.db.exec('BEGIN')
     this.inTransaction = true
@@ -386,24 +453,34 @@ export class Store {
         .run(sessionId, hash)
   }
 
-  /** Folders added by hand and folders taken off the list, by path. */
-  folders(): { added: Map<string, number>; hidden: Set<string> } {
-    const rows = this.db.prepare('SELECT path, added_at, hidden_at FROM folders').all() as { path: string; added_at: number; hidden_at: number | null }[]
+  /** A machine's folders added by hand and folders taken off the list, by path. */
+  folders(machine: string): { added: Map<string, number>; hidden: Set<string> } {
+    const rows = this.db.prepare('SELECT path, added_at, hidden_at FROM machine_folders WHERE machine = ?').all(machine) as {
+      path: string
+      added_at: number
+      hidden_at: number | null
+    }[]
     return {
       added: new Map(rows.filter((r) => r.hidden_at === null).map((r) => [r.path, r.added_at])),
       hidden: new Set(rows.filter((r) => r.hidden_at !== null).map((r) => r.path)),
     }
   }
 
-  addFolder(path: string): void {
+  addFolder(machine: string, path: string): void {
     this.db
-      .prepare('INSERT INTO folders (path, added_at) VALUES (?, ?) ON CONFLICT(path) DO UPDATE SET added_at = excluded.added_at, hidden_at = NULL')
-      .run(path, Date.now())
+      .prepare(
+        'INSERT INTO machine_folders (machine, path, added_at) VALUES (?, ?, ?) ON CONFLICT(machine, path) DO UPDATE SET added_at = excluded.added_at, hidden_at = NULL',
+      )
+      .run(machine, path, Date.now())
   }
 
-  hideFolder(path: string): void {
+  hideFolder(machine: string, path: string): void {
     const now = Date.now()
-    this.db.prepare('INSERT INTO folders (path, added_at, hidden_at) VALUES (?, ?, ?) ON CONFLICT(path) DO UPDATE SET hidden_at = excluded.hidden_at').run(path, now, now)
+    this.db
+      .prepare(
+        'INSERT INTO machine_folders (machine, path, added_at, hidden_at) VALUES (?, ?, ?, ?) ON CONFLICT(machine, path) DO UPDATE SET hidden_at = excluded.hidden_at',
+      )
+      .run(machine, path, now, now)
   }
 
   /** A card to put cards on, checked to exist and, when moving `cardId`, not to be it or below it. */

@@ -1,11 +1,12 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup, on, onMount, untrack } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
-import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, FolderInput, Moon, PanelLeft, Pencil, Plus, Radar as RadarIcon, Sun } from './icons'
+import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, FolderInput, Moon, PanelLeft, Pencil, Plus, Radar as RadarIcon, Settings as SettingsIcon, Sun } from './icons'
 import { descendants, projectOf } from '../shared/cardTree.ts'
 import type { Card, SessionSummary } from '../shared/protocol.ts'
 import { api, socket } from './api.ts'
 import { attention, looking, notifications, notify, onAttention, toggleNotifications } from './attention.ts'
-import { basename, isScratch, lastWorkedIn, setScratch } from './folders.ts'
+import { basename, isScratch, lastWorkedIn, scratchDir, setScratch } from './folders.ts'
+import { LOCAL, machineOf, machines, onMachine } from './machines.ts'
 import { Board } from './components/Board.tsx'
 import { CardView } from './components/CardView.tsx'
 import { Radar } from './components/Radar.tsx'
@@ -14,9 +15,10 @@ import { RenameChat } from './components/RenameChat.tsx'
 import { FileChat } from './components/FileChat.tsx'
 import { AccountLimits } from './components/Usage.tsx'
 import { StatusDot, TerminalPage } from './components/Terminals.tsx'
-import { ChatSummary } from './components/ChatSummary.tsx'
+import { ChatSummary, MachineName } from './components/ChatSummary.tsx'
+import { Settings } from './components/Settings.tsx'
 import { Loading, Menu } from './components/ui.tsx'
-import { terminalLabel, terminals, terminalsLoaded } from './terminals.ts'
+import { terminalLabel, terminalWs, terminals, terminalsLoaded, wsKey } from './terminals.ts'
 import { accountUsage } from './usage.ts'
 import { isDark, toggleTheme } from './theme.ts'
 
@@ -44,8 +46,10 @@ function routeFromPath(): Route {
   if (chat) return { kind: 'chat', id: chat[1] }
   const card = path.match(/^\/c\/(\d+)/)
   if (card) return { kind: 'card', id: Number(card[1]) }
-  const terminal = path.match(/^\/t\/([0-9a-f]+)/)
-  if (terminal) return { kind: 'terminal', id: terminal[1] }
+  // `<machine>.<hex id>`; bare hex from before there were other machines.
+  const terminal = path.match(/^\/t\/((?:[a-z0-9-]+\.)?[0-9a-f]+)/)
+  // Links from before there were other machines are to the hub's own.
+  if (terminal) return { kind: 'terminal', id: terminal[1].includes('.') ? terminal[1] : `local.${terminal[1]}` }
   if (path === '/board') return { kind: 'board' }
   if (path === '/radar') return { kind: 'radar' }
   return { kind: 'home' }
@@ -74,6 +78,11 @@ export function App() {
   const setCards = (next: Card[]) => setCardStore(reconcile(next, { key: 'id' }))
   const [route, setRoute] = createSignal<Route>(routeFromPath())
   const [drafts, setDrafts] = createSignal<Record<string, string>>(loadRecord(DRAFTS_KEY))
+  /** The runner each blank chat will run on, picked along with its folder. */
+  const [machineDrafts, setMachineDrafts] = createSignal<Record<string, string>>(loadRecord(MACHINES_KEY))
+  /** The runner this browser last picked for a chat, which new ones default to while it's online. */
+  const [lastMachine, setLastMachine] = createSignal(localStorage.getItem(LAST_MACHINE_KEY) ?? undefined)
+  createEffect(() => lastMachine() && localStorage.setItem(LAST_MACHINE_KEY, lastMachine()!))
   /** Blank chats that should start with "In a worktree" ticked, e.g. a card whose work is already in one. */
   const [worktreeDrafts, setWorktreeDrafts] = createSignal<Record<string, boolean>>(loadRecord(WORKTREES_KEY))
   /** Each card's blank chat, kept like the home chat until its first message so leaving it doesn't lose what's typed there. */
@@ -82,12 +91,13 @@ export function App() {
   // Its id is kept until then so a draft typed there survives reloads.
   const [homeId, setHomeId] = createSignal(localStorage.getItem(HOME_KEY) ?? uuid())
   createEffect(() => localStorage.setItem(HOME_KEY, homeId()))
-  // Only blank chats' folder and worktree picks are kept; once a chat starts, the server has them.
+  // Only blank chats' runner, folder and worktree picks are kept; once a chat starts, the server has them.
   createEffect(() => {
     const blank = new Set([homeId(), ...Object.values(blanks())])
     const keep = <T,>(all: Record<string, T>) => Object.fromEntries(Object.entries(all).filter(([id]) => blank.has(id)))
     localStorage.setItem(BLANKS_KEY, JSON.stringify(blanks()))
     localStorage.setItem(DRAFTS_KEY, JSON.stringify(keep(drafts())))
+    localStorage.setItem(MACHINES_KEY, JSON.stringify(keep(machineDrafts())))
     localStorage.setItem(WORKTREES_KEY, JSON.stringify(keep(worktreeDrafts())))
   })
 
@@ -148,6 +158,15 @@ export function App() {
       removeEventListener('keydown', onKey)
     })
   })
+
+  const [settings, setSettings] = createSignal(false)
+  const onSettingsKey = (e: KeyboardEvent) => {
+    if (e.key !== ',' || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return
+    e.preventDefault()
+    setSettings(true)
+  }
+  addEventListener('keydown', onSettingsKey)
+  onCleanup(() => removeEventListener('keydown', onSettingsKey))
 
   /** On narrow screens the sidebar is a drawer over the page; going anywhere closes it. */
   const [drawer, setDrawer] = createSignal(false)
@@ -225,9 +244,9 @@ export function App() {
     const r = route()
     return r.kind === 'terminal' ? r.id : null
   }
-  // Grouped by workspace, oldest first within each, so a workspace's terminals sit together.
+  // Grouped by workspace (the hub's own first), oldest first within each, so a workspace's terminals sit together.
   const sortedTerminals = createMemo(() =>
-    [...terminals()].sort((a, b) => a.root.localeCompare(b.root) || a.createdAt - b.createdAt),
+    [...terminals()].sort((a, b) => wsKey(terminalWs(a)).localeCompare(wsKey(terminalWs(b))) || a.createdAt - b.createdAt),
   )
   // Looking at a chat reads it, including a turn that ends while you watch.
   createEffect(() => {
@@ -327,36 +346,47 @@ export function App() {
   }
   const cardOf = createMemo(() => new Map(cards().flatMap((c) => c.sessionIds.map((id) => [id, c] as const))))
 
-  /**
-   * No folder first, then every directory a session has run in, most recent
-   * first, plus the server default. Temp dirs and ones that are gone (removed worktrees) are skipped.
-   */
-  const projects = createMemo(() => {
-    const dirs = [...new Set(sessions().flatMap((s) => (s.cwd && !s.gone && !TEMP.test(s.cwd) && !isScratch(s.cwd) ? [s.cwd] : [])))]
-    const fallback = config()?.defaultCwd
-    if (fallback && !dirs.includes(fallback)) dirs.push(fallback)
-    const scratch = config()?.scratchCwd
-    return scratch ? [scratch, ...dirs] : dirs
-  })
-  /** New chats start where the most recently active chat ran, or with no folder. */
-  const defaultCwd = createMemo(() => {
-    const recent = sessions()
-      .filter((s) => s.cwd && projects().includes(s.cwd))
+  /** The most recent chat a new one could start where it ran: temp dirs and ones that are gone (removed worktrees) don't count. */
+  const latestChat = (machine?: string) =>
+    sessions()
+      .filter((s) => s.cwd && !s.gone && (isScratch(s.cwd) || !TEMP.test(s.cwd)) && (!machine || (s.machine || LOCAL) === machine))
       .reduce<SessionSummary | undefined>((a, s) => (!a || s.lastModified > a.lastModified ? s : a), undefined)
-    return recent?.cwd ?? projects()[0]
+  /** New chats run on the runner this browser last picked while it's online, else where the most recently active chat ran if that's online. */
+  const defaultMachine = createMemo(() => {
+    const online = (m?: string) => !!m && !!machineOf(m)?.online
+    const picked = lastMachine()
+    const latest = latestChat()?.machine
+    return online(picked) ? picked! : online(latest) ? latest! : LOCAL
   })
-  // Pin it per blank chat so activity elsewhere doesn't move the folder while you type.
+  /** And start where that runner's most recently active chat ran, or with no folder there. */
+  const defaultCwd = createMemo(() => {
+    const m = defaultMachine()
+    return latestChat(m)?.cwd ?? scratchDir(m) ?? (m === LOCAL ? config()?.defaultCwd : machineOf(m)?.workspaceDir)
+  })
+  // Pin them per blank chat so activity elsewhere doesn't move the folder while you type.
   createEffect(() => {
     const id = homeId()
-    if (loaded() && !untrack(drafts)[id]) setDrafts((d) => ({ ...d, [id]: untrack(defaultCwd) }))
+    // Not until the runners are known, so the one last picked isn't passed over for seeming offline; and a runner
+    // that's only just connected may not have said where its folders are yet.
+    if (!loaded() || !machines().length || untrack(drafts)[id]) return
+    const cwd = defaultCwd()
+    if (!cwd) return
+    setDrafts((d) => ({ ...d, [id]: cwd }))
+    setMachineDrafts((d) => ({ ...d, [id]: untrack(defaultMachine) }))
   })
+  /** Where a blank chat will run. A folder picked without a runner was picked before there were any but the hub's. */
+  const draftMachine = (id: string) => machineDrafts()[id] ?? (drafts()[id] ? LOCAL : defaultMachine())
+  const pickDraft = (id: string, cwd: string | undefined, machine: string) => {
+    if (cwd) setDrafts((d) => ({ ...d, [id]: cwd }))
+    setMachineDrafts((d) => ({ ...d, [id]: machine }))
+  }
 
   /** A card's new chat is its blank one if it has one, so a draft left there is still there. */
-  const newChat = (from: { cwd: string; worktree: boolean } | undefined, cardId?: number) => {
+  const newChat = (from: { cwd: string; machine: string; worktree: boolean } | undefined, cardId?: number) => {
     const kept = cardId === undefined ? undefined : untrack(blanks)[cardId]
     if (kept) return go({ kind: 'chat', id: kept })
     const id = uuid()
-    setDrafts((d) => ({ ...d, [id]: from?.cwd ?? untrack(defaultCwd) }))
+    untrack(() => pickDraft(id, from?.cwd ?? defaultCwd(), from?.machine ?? defaultMachine()))
     if (from?.worktree) setWorktreeDrafts((w) => ({ ...w, [id]: true }))
     if (cardId !== undefined) {
       setBlanks((b) => ({ ...b, [cardId]: id }))
@@ -378,7 +408,7 @@ export function App() {
     if (!f) return go({ kind: 'home' })
     const ids = [f, ...descendants(cards(), f.id)].flatMap((c) => c.sessionIds)
     const from = lastWorkedIn(sessions().filter((s) => ids.includes(s.id)))
-    newChat(from && { cwd: from.cwd, worktree: false }, f.id)
+    newChat(from && { ...from, worktree: false }, f.id)
   }
   /** For the switcher: how far along a project is. */
   const projectSummary = (p: Card) => {
@@ -387,8 +417,8 @@ export function App() {
   }
   const switchable = createMemo(() => [null, 'none' as const, ...allProjects().filter((c) => c.status !== 'done' || c.id === focusId())])
   /** The home chat's first message went out: give it its own URL and a fresh blank chat for next time. */
-  const startHomeChat = (id: string, cwd?: string) => {
-    if (cwd) setDrafts((d) => ({ ...d, [id]: cwd }))
+  const startHomeChat = (id: string, cwd: string | undefined, machine: string) => {
+    pickDraft(id, cwd, machine)
     history.replaceState(null, '', pathFor({ kind: 'chat', id }))
     setRoute({ kind: 'chat', id })
     setHomeId(uuid())
@@ -452,6 +482,13 @@ export function App() {
             <Show when={notifications() === 'on'} fallback={<BellOff class="size-4" />}>
               <Bell class="size-4" />
             </Show>
+          </button>
+          <button
+            onClick={() => setSettings(true)}
+            title="Settings"
+            class="grid size-7 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-10"
+          >
+            <SettingsIcon class="size-4" />
           </button>
         </div>
         <div class="px-2 pb-3">
@@ -542,6 +579,7 @@ export function App() {
                     {terminalLabel(t)}
                   </span>
                   <span class="shrink-0 text-[11px] text-fg-3">{basename(t.root)}</span>
+                  <Show when={onMachine(t.machine)}>{(name) => <MachineName machine={t.machine} name={name()} class="text-[11px] text-fg-3" />}</Show>
                 </button>
               )}
             </For>
@@ -605,11 +643,15 @@ export function App() {
                   <Chat
                     sessionId={id}
                     draftCwd={drafts()[id] ?? defaultCwd()}
+                    draftMachine={sessions().find((s) => s.id === id)?.machine ?? draftMachine(id)}
                     worktree={worktreeDrafts()[id]}
-                    onPickCwd={(cwd) => setDrafts((d) => ({ ...d, [id]: cwd }))}
+                    onPickCwd={(cwd, machine) => {
+                      pickDraft(id, cwd, machine)
+                      setLastMachine(machine)
+                    }}
                     onPickWorktree={(on) => setWorktreeDrafts((w) => ({ ...w, [id]: on }))}
                     card={cardOf().get(id)}
-                    onStart={() => home() && startHomeChat(id, drafts()[id] ?? defaultCwd())}
+                    onStart={() => home() && startHomeChat(id, drafts()[id] ?? defaultCwd(), draftMachine(id))}
                     onOpenTerminal={(tid) => go({ kind: 'terminal', id: tid })}
                   />
                 )
@@ -649,6 +691,9 @@ export function App() {
           </Switch>
         </div>
       </div>
+      <Show when={settings()}>
+        <Settings onClose={() => setSettings(false)} />
+      </Show>
     </div>
   )
 }
@@ -656,6 +701,8 @@ export function App() {
 const HOME_KEY = 'badger.homeId'
 const BLANKS_KEY = 'badger.blankChats'
 const DRAFTS_KEY = 'badger.draftCwds'
+const MACHINES_KEY = 'badger.draftMachines'
+const LAST_MACHINE_KEY = 'badger.lastMachine'
 const WORKTREES_KEY = 'badger.draftWorktrees'
 const FOCUS_KEY = 'badger.focus'
 const SIDEBAR_KEY = 'badger.sidebarWidth'

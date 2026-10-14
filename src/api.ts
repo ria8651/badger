@@ -1,5 +1,5 @@
 import { createSignal } from 'solid-js'
-import type { Card, CardStatus, ChangesStatus, ClientEvent, Folder, Listing, ModelOption, ServerEvent, SessionSummary, TerminalInfo, WorktreeStatus } from '../shared/protocol.ts'
+import type { Card, CardStatus, ChangesStatus, ClientEvent, Folder, Listing, Machine, ModelOption, ServerEvent, SessionSummary, TerminalInfo, WorktreeStatus } from '../shared/protocol.ts'
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -34,24 +34,36 @@ export const api = {
   deleteCard: (id: number) => request<void>('DELETE', `/api/cards/${id}`),
   linkSession: (id: number, sessionId: string) => request<Card>('POST', `/api/cards/${id}/sessions`, { sessionId }),
   unlinkSession: (id: number, sessionId: string) => request<Card>('DELETE', `/api/cards/${id}/sessions/${sessionId}`),
-  worktree: (path: string) => get<WorktreeStatus>(`/api/worktree?path=${encodeURIComponent(path)}`),
+  // Folders, files, git and terminals are on a machine: the hub's own unless one is given.
+  worktree: (path: string, machine?: string) => get<WorktreeStatus>(`/api/worktree?${on(machine, { path })}`),
   /** Null outside a git repo. */
-  changes: (path: string) => get<ChangesStatus | null>(`/api/changes?path=${encodeURIComponent(path)}`),
-  removeWorktree: (path: string) => request<void>('DELETE', `/api/worktree?path=${encodeURIComponent(path)}`),
-  folders: () => get<Folder[]>('/api/folders'),
-  addFolder: (path: string) => request<void>('POST', '/api/folders', { path }),
-  hideFolder: (path: string) => request<void>('DELETE', `/api/folders?path=${encodeURIComponent(path)}`),
-  folderSize: (path: string) => get<{ bytes: number }>(`/api/folders/size?path=${encodeURIComponent(path)}`),
-  listDir: (path: string | undefined, hidden: boolean) =>
-    get<Listing>(`/api/fs?${new URLSearchParams({ ...(path ? { path } : {}), ...(hidden ? { hidden: '1' } : {}) })}`),
-  makeFolder: (path: string) => request<{ path: string }>('POST', '/api/fs/folder', { path }),
-  fileUrl: (path: string) => `/api/fs/file?path=${encodeURIComponent(path)}`,
-  workspace: (cwd: string) => get<{ root: string }>(`/api/workspace?cwd=${encodeURIComponent(cwd)}`),
-  createTerminal: (spec: { cwd: string; command?: string; cols?: number; rows?: number }) =>
+  changes: (path: string, machine?: string) => get<ChangesStatus | null>(`/api/changes?${on(machine, { path })}`),
+  removeWorktree: (path: string, machine?: string) => request<void>('DELETE', `/api/worktree?${on(machine, { path })}`),
+  folders: (machine?: string) => get<Folder[]>(`/api/folders?${on(machine)}`),
+  addFolder: (path: string, machine?: string) => request<void>('POST', '/api/folders', { path, machine }),
+  hideFolder: (path: string, machine?: string) => request<void>('DELETE', `/api/folders?${on(machine, { path })}`),
+  folderSize: (path: string, machine?: string) => get<{ bytes: number }>(`/api/folders/size?${on(machine, { path })}`),
+  listDir: (path: string | undefined, hidden: boolean, machine?: string) =>
+    get<Listing>(`/api/fs?${on(machine, { ...(path ? { path } : {}), ...(hidden ? { hidden: '1' } : {}) })}`),
+  makeFolder: (path: string, machine?: string) => request<{ path: string }>('POST', '/api/fs/folder', { path, machine }),
+  fileUrl: (path: string, machine?: string) => `/api/fs/file?${on(machine, { path })}`,
+  workspace: (cwd: string, machine?: string) => get<{ root: string }>(`/api/workspace?${on(machine, { cwd })}`),
+  createTerminal: (spec: { cwd: string; machine?: string; command?: string; cols?: number; rows?: number }) =>
     request<TerminalInfo>('POST', '/api/terminals', spec),
   restartTerminal: (id: string) => request<TerminalInfo>('POST', `/api/terminals/${id}/restart`),
   closeTerminal: (id: string) => request<void>('DELETE', `/api/terminals/${id}`),
+  machines: () => get<Machine[]>('/api/machines'),
+  /** A new runner, named after its host once it first connects. Its token is only ever shown here. */
+  addMachine: () => request<{ machine: Machine; token: string }>('POST', '/api/machines'),
+  /** Replaces a runner's token; the old one stops working at once. The new one is only shown here. */
+  resetMachineToken: (id: string) => request<{ machine: Machine; token: string }>('POST', `/api/machines/${id}/token`),
+  renameMachine: (id: string, name: string) => request<Machine>('PATCH', `/api/machines/${id}`, { name }),
+  removeMachine: (id: string) => request<void>('DELETE', `/api/machines/${id}`),
 }
+
+/** Query parameters, with the machine when one is given. */
+const on = (machine: string | undefined, params: Record<string, string> = {}) =>
+  new URLSearchParams({ ...params, ...(machine ? { machine } : {}) }).toString()
 
 type Listener = (event: ServerEvent) => void
 
