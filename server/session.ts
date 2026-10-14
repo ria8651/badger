@@ -72,6 +72,8 @@ export class LiveSession {
   private onTurnEnd: () => void
   /** Tool calls that have started, by tool_use_id, so a tool's handler can find out which call it is. */
   private toolUses = new Map<string, string>()
+  /** Until the first init: only that one says where --worktree put us. */
+  private awaitingInit = true
   private afterTurnCallbacks: (() => void)[] = []
   /** Subagents' descriptions by agent id, to say which one is asking for permission. */
   private agents = new Map<string, string>()
@@ -404,9 +406,11 @@ export class LiveSession {
       this.emit({ type: 'message', sessionId: this.id, message: wire })
       return
     }
-    // With --worktree, Claude Code reports where it actually ended up.
+    // With --worktree, Claude Code reports where it actually ended up. Later inits (one per
+    // turn) report wherever a Bash `cd` left Claude's shell, which isn't the chat moving.
     if (msg.type === 'system' && msg.subtype === 'init') {
-      this.setCwd(msg.cwd)
+      if (this.awaitingInit) this.setCwd(msg.cwd)
+      this.awaitingInit = false
       if (!this.model && msg.model) {
         this.model = msg.model
         this.emitStatus()
