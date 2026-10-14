@@ -1,10 +1,11 @@
 import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { mkdir } from 'node:fs/promises'
 import { createServer, type IncomingMessage } from 'node:http'
 import { homedir } from 'node:os'
 import { extname, isAbsolute, join, resolve } from 'node:path'
 import { getSessionInfo, listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { IMAGE_TYPES, type AnswerDraft, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
+import { IMAGE_EXTENSIONS, IMAGE_TYPES, type AnswerDraft, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
 import { Attention } from './attention.ts'
 import { BOARD_AUTO_ALLOWED, BOARD_SERVER, boardServer, cardContext } from './boardTools.ts'
 import { Children } from './children.ts'
@@ -16,6 +17,7 @@ import { TERMINAL_AUTO_ALLOWED, TERMINAL_SERVER, terminalServer, type Previews }
 import { Terminals, shellEnv } from './terminals.ts'
 import { suggestTitle } from './titles.ts'
 import { Usage } from './usage.ts'
+import { folderSize, forgetSize, listDir, listFolders } from './folders.ts'
 import { excludeWorktrees, inaccessible, removeWorktree, workspaceRoot, worktreeStatus } from './workspace.ts'
 
 // Terminals get the environment Badger was started with, before .env adds PORT and friends.
@@ -446,8 +448,51 @@ async function worktreesApi(method: string, path: string, url: URL): Promise<[nu
     if (terminals.terminals.some((t) => t.root === dir)) throw new BadRequest('Close its terminals first')
     for (const s of manager.in(dir)) s.close()
     await removeWorktree(dir).catch(badRequest)
+    forgetSize(dir)
     broadcast({ type: 'sessions_changed' })
     return [204, null]
+  }
+  return undefined
+}
+
+/** Temp dirs, e.g. from tests, aren't worth offering as folders. */
+const TEMP_DIR = /^\/(private\/)?(tmp|var\/folders)\//
+
+/** The folders new chats can start in, and the file browser that adds them. */
+async function foldersApi(method: string, path: string, url: URL, req: IncomingMessage): Promise<[number, unknown] | undefined> {
+  const requirePath = (dir: unknown) => {
+    if (typeof dir !== 'string' || !isAbsolute(dir)) throw new BadRequest('path must be an absolute path')
+    return resolve(dir)
+  }
+  if (path === '/api/folders') {
+    if (method === 'GET') {
+      const used = new Map<string, number>([[WORKSPACE_DIR, 0]])
+      for (const s of await sessionList()) {
+        if (s.cwd && !s.gone && s.cwd !== SCRATCH_DIR && !TEMP_DIR.test(s.cwd)) used.set(s.cwd, Math.max(s.lastModified, used.get(s.cwd) ?? 0))
+      }
+      const { added, hidden } = store.folders()
+      return [200, await listFolders(used, added, hidden)]
+    }
+    if (method === 'POST') {
+      const dir = requirePath((await readJson(req)).path)
+      if (inaccessible(dir)) throw new BadRequest(`${dir} isn't a folder Badger can open`)
+      store.addFolder(dir)
+      return [204, null]
+    }
+    if (method === 'DELETE') {
+      store.hideFolder(requirePath(url.searchParams.get('path')))
+      return [204, null]
+    }
+  }
+  if (path === '/api/folders/size' && method === 'GET') return [200, { bytes: await folderSize(requirePath(url.searchParams.get('path'))) }]
+  if (path === '/api/fs' && method === 'GET') {
+    const dir = requirePath(url.searchParams.get('path') || homedir())
+    return [200, await listDir(dir, url.searchParams.get('hidden') === '1').catch(badRequest)]
+  }
+  if (path === '/api/fs/folder' && method === 'POST') {
+    const dir = requirePath((await readJson(req)).path)
+    await mkdir(dir).catch(badRequest)
+    return [201, { path: dir }]
   }
   return undefined
 }
@@ -556,6 +601,17 @@ const server = createServer(async (req, res) => {
       if (terms) return json(...terms)
       const cards = await cardsApi(req.method ?? 'GET', url.pathname, req)
       if (cards) return json(...cards)
+      const folders = await foldersApi(req.method ?? 'GET', url.pathname, url, req)
+      if (folders) return json(...folders)
+      // A file from the file browser, e.g. an image to attach.
+      if (url.pathname === '/api/fs/file' && req.method === 'GET') {
+        const file = url.searchParams.get('path')
+        if (!file || !isAbsolute(file) || !existsSync(file) || statSync(file).isDirectory()) throw new BadRequest('path must be a file')
+        // Only images keep their type: anything else, like an HTML file from a repo, must never render as Badger's own page.
+        const type = IMAGE_TYPES.find((t) => IMAGE_EXTENSIONS[t].includes(extname(file).toLowerCase()))
+        res.writeHead(200, { 'content-type': type ?? 'application/octet-stream', 'x-content-type-options': 'nosniff', 'content-disposition': 'attachment' })
+        return void createReadStream(file).pipe(res)
+      }
       return json(404, { error: 'Not found' })
     }
     // Production: serve the built client, falling back to index.html for client routes.

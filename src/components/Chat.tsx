@@ -1,12 +1,14 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, mapArray, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
-import { ArrowUp, Check, FolderX, GitBranch, ImagePlus, Pencil, ListChevronsDownUp, ListChevronsUpDown, SlidersHorizontal, Square, SquareTerminal, WifiOff, X, Zap } from '../icons'
+import { ArrowUp, FolderX, GitBranch, Paperclip, Pencil, ListChevronsDownUp, ListChevronsUpDown, SlidersHorizontal, Square, SquareTerminal, WifiOff, X, Zap } from '../icons'
 import { isLongPaste } from '../../shared/pastes.ts'
-import type { Card, DraftAttachments, PermissionMode, QueuedMessage } from '../../shared/protocol.ts'
+import { IMAGE_EXTENSIONS, type Card, type DraftAttachments, type PermissionMode, type QueuedMessage } from '../../shared/protocol.ts'
 import { chatActions, type ChatAction } from '../actions.ts'
 import { api, connected, socket } from '../api.ts'
 import { readImage } from '../images.ts'
 import { lastModel, modelValue, models, setLastModel } from '../models.ts'
-import { cardWorktreeName, folderItem, isScratch, worktreeOf } from '../folders.ts'
+import { cardWorktreeName, isScratch, scratchDir, worktreeOf } from '../folders.ts'
+import { FileBrowser } from './FileBrowser.tsx'
+import { FolderPicker } from './FolderPicker.tsx'
 import { openView, panelsShown, planView, togglePanels, viewKey, viewShown, wide } from '../layout.ts'
 import { terminals, workspaceOf } from '../terminals.ts'
 import { ChildChats, createChat } from '../useChat.ts'
@@ -19,7 +21,7 @@ import { reveal, revealed, toolLabel } from './ToolCard.tsx'
 import { TaskPane, Transcript, UserMessage, createIndex, detail, runInBackground, setDetail } from './Transcript.tsx'
 import { ContextMeter } from './Usage.tsx'
 import { Workspace, type ChatPanes } from './Workspace.tsx'
-import { IconButton, Loading, Menu, Select, ltr, touch, type Option } from './ui.tsx'
+import { IconButton, Loading, Menu, Select, touch, type Option } from './ui.tsx'
 
 const MODES: Option<PermissionMode>[] = [
   { value: 'default', label: 'Ask before edits', description: 'Claude asks before changing files or running commands.' },
@@ -34,12 +36,11 @@ const NO_ATTACHMENTS: DraftAttachments = { pastes: [], images: [] }
 export function Chat(props: {
   sessionId: string
   draftCwd?: string
-  /** Offered as a directory picker until the first message goes out; existing chats never show it. */
-  projects?: string[]
+  /** Given, the empty chat offers folders and worktrees to start in until the first message goes out. */
   onPickCwd?: (cwd: string) => void
   /** The card this chat is on. A worktree it starts in is named after the card; otherwise Claude names it. */
   card?: Card
-  /** Start with "In a worktree" ticked. */
+  /** Start with "New worktree" picked. */
   worktree?: boolean
   /** Called once, when the first message is sent. */
   onStart?: () => void
@@ -64,6 +65,30 @@ export function Chat(props: {
     return found.length > 0
   }
   const [dragging, setDragging] = createSignal(false)
+  const [browsing, setBrowsing] = createSignal(false)
+  /**
+   * Files picked on the server: images go in as images, so Claude sees them straight away; the rest
+   * go in the message as @-mentions, relative to the chat's folder, for Claude to read.
+   */
+  const attachFiles = (paths: string[]) => {
+    const isImage = (path: string) => Object.values(IMAGE_EXTENSIONS).flat().some((ext) => path.toLowerCase().endsWith(ext))
+    for (const path of paths.filter(isImage)) {
+      void fetch(api.fileUrl(path))
+        .then((res) => (res.ok ? res.blob() : Promise.reject(new Error(res.statusText))))
+        .then((blob) => addImages([new File([blob], path.split('/').pop()!, { type: blob.type })]))
+        .catch((e: Error) => alert(`Couldn't attach ${path}: ${e.message}`))
+    }
+    const dir = cwd() && !isScratch(cwd()) ? `${cwd()}/` : undefined
+    const mentions = paths
+      .filter((path) => !isImage(path))
+      .map((path) => (dir && path.startsWith(dir) ? path.slice(dir.length) : path))
+      .map((path) => `@${/\s/.test(path) ? `"${path}"` : path}`)
+    if (!mentions.length) return
+    const at = input.selectionStart ?? text().length
+    const before = text().slice(0, at)
+    const after = text().slice(at)
+    edit(`${before}${before && !/\s$/.test(before) ? ' ' : ''}${mentions.join(' ')} ${after.replace(/^ /, '')}`)
+  }
   let picker!: HTMLInputElement
   const [started, setStarted] = createSignal(false)
   const [mode, setMode] = createSignal<PermissionMode>('auto')
@@ -335,18 +360,29 @@ export function Chat(props: {
                 <Show
                   when={state.messages.length}
                   fallback={
-                    <div class="pt-[22vh] text-center">
-                      <p class="text-base text-fg-2">What are we working on?</p>
-                      <Show
-                        when={props.projects?.length && props.onPickCwd && !state.cwd && !started()}
-                        fallback={<p class="mt-1.5 font-mono text-xs text-fg-3">{where()}</p>}
-                      >
-                        <FolderPicker folders={props.projects!} selected={cwd()} onPick={props.onPickCwd!} />
-                      </Show>
-                      <Show when={canWorktree()}>
-                        <WorktreeOption checked={inWorktree()} onChange={setInWorktree} name={worktreeName()} />
-                      </Show>
-                    </div>
+                    <Show
+                      when={props.onPickCwd && !state.cwd && !started()}
+                      fallback={
+                        <div class="pt-[22vh] text-center">
+                          <p class="text-base text-fg-2">What are we working on?</p>
+                          <p class="mt-1.5 font-mono text-xs text-fg-3">{where()}</p>
+                        </div>
+                      }
+                    >
+                      <div class="pt-[10vh] text-center">
+                        <p class="text-base text-fg-2">What are we working on?</p>
+                        <FolderPicker
+                          scratch={scratchDir()}
+                          selected={cwd()}
+                          worktree={inWorktree() && canWorktree()}
+                          worktreeName={worktreeName()}
+                          onPick={(dir, worktree) => {
+                            props.onPickCwd!(dir)
+                            setInWorktree(worktree)
+                          }}
+                        />
+                      </div>
+                    </Show>
                   }
                 >
                   <ChildChats.Provider value={childState}>
@@ -512,12 +548,25 @@ export function Chat(props: {
                     </div>
                     <button
                       type="button"
-                      onClick={() => picker.click()}
-                      title="Attach images"
+                      onClick={() => setBrowsing(true)}
+                      title="Attach files"
                       class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9"
                     >
-                      <ImagePlus class="size-3.5" />
+                      <Paperclip class="size-3.5" />
                     </button>
+                    <Show when={browsing()}>
+                      <FileBrowser
+                        mode="files"
+                        title="Attach files"
+                        start={cwd() && !isScratch(cwd()) ? cwd() : undefined}
+                        onClose={() => {
+                          setBrowsing(false)
+                          input.focus()
+                        }}
+                        onUpload={() => picker.click()}
+                        onPickFiles={attachFiles}
+                      />
+                    </Show>
                     <input
                       ref={picker}
                       type="file"
@@ -711,89 +760,6 @@ function PanelButton(props: { onClick: () => void; children: JSX.Element }) {
       class="flex h-10 w-full items-center gap-3 rounded-lg px-2.5 text-left text-[13px] text-fg-2 transition-colors hover:bg-surface hover:text-fg"
     >
       {props.children}
-    </button>
-  )
-}
-
-/** How many folders show before "Show more": no folder plus the most recent few. */
-const FOLDERS_SHOWN = 5
-
-/** Every folder on view at once, most recent first; the picked one stays visible even when collapsed. */
-function FolderPicker(props: { folders: string[]; selected?: string; onPick: (cwd: string) => void }) {
-  const [all, setAll] = createSignal(false)
-  const shown = () => {
-    if (all() || props.folders.length <= FOLDERS_SHOWN + 1) return props.folders
-    const top = props.folders.slice(0, FOLDERS_SHOWN)
-    return props.selected && !top.includes(props.selected) && props.folders.includes(props.selected) ? [...top, props.selected] : top
-  }
-  return (
-    <div class="mx-auto mt-4 w-80 text-left">
-      <div class={all() ? 'max-h-[40vh] overflow-y-auto' : ''}>
-        <For each={shown()}>
-          {(dir) => {
-            const item = folderItem(dir)
-            const selected = () => dir === props.selected
-            return (
-              <button
-                type="button"
-                onClick={() => props.onPick(dir)}
-                aria-pressed={selected()}
-                class={`flex w-full items-start gap-3 rounded-lg px-2.5 py-2 text-left transition-colors ${
-                  selected() ? 'bg-surface' : 'hover:bg-surface/60'
-                }`}
-              >
-                <div class="min-w-0 flex-1">
-                  <div class={`truncate text-[13px] ${selected() ? 'text-fg' : 'text-fg-2'}`}>{item.label}</div>
-                  <div
-                    class={`mt-0.5 leading-snug text-fg-3 ${item.mono ? 'truncate font-mono text-[11px] text-left [direction:rtl]' : 'text-xs'}`}
-                  >
-                    {item.mono ? ltr(item.description) : item.description}
-                  </div>
-                </div>
-                <Check class={`mt-0.5 size-3.5 shrink-0 text-fg-2 ${selected() ? '' : 'invisible'}`} />
-              </button>
-            )
-          }}
-        </For>
-      </div>
-      <Show when={props.folders.length > shown().length}>
-        <button
-          type="button"
-          onClick={() => setAll(true)}
-          class="mt-0.5 w-full rounded-lg px-2.5 py-1.5 text-left text-xs text-fg-3 transition-colors hover:bg-surface/60 hover:text-fg-2"
-        >
-          Show {props.folders.length - shown().length} more
-        </button>
-      </Show>
-    </div>
-  )
-}
-
-/** Start the chat in a git worktree. Drawn rather than a native checkbox so it takes the theme's ink, not the system blue. */
-function WorktreeOption(props: { checked: boolean; onChange: (checked: boolean) => void; name?: string }) {
-  return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={props.checked}
-      onClick={() => props.onChange(!props.checked)}
-      title="Run this chat in its own git worktree and branch, so it can work alongside others"
-      class={`mt-3 inline-flex h-7 items-center gap-2 rounded-md px-2 text-xs transition-colors hover:bg-surface ${
-        props.checked ? 'text-fg-2' : 'text-fg-3 hover:text-fg-2'
-      }`}
-    >
-      <span
-        class={`grid size-3.5 place-items-center rounded-[4px] border transition-colors ${
-          props.checked ? 'border-fg bg-fg text-bg' : 'border-edge'
-        }`}
-      >
-        <Show when={props.checked}>
-          <Check class="size-2.5" stroke-width={3} />
-        </Show>
-      </span>
-      <GitBranch class="size-3.5" />
-      In a worktree
-      <Show when={props.name}>{(name) => <span class="font-mono text-fg-3">{name()}</span>}</Show>
     </button>
   )
 }

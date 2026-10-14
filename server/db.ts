@@ -76,6 +76,12 @@ const MIGRATIONS = [
   // Deleting a card only marks it, so it stays in the table and is migrated like any other row, ready for a restore feature later.
   // The cards inside it aren't marked; they're hidden because it is (see VISIBLE).
   `ALTER TABLE cards ADD COLUMN deleted_at INTEGER;`,
+  // Folders added in the file browser, and ones taken off the new-chat list. Others are found from where chats ran.
+  `CREATE TABLE folders (
+     path TEXT PRIMARY KEY,
+     added_at INTEGER NOT NULL,
+     hidden_at INTEGER
+   );`,
 ]
 
 /**
@@ -378,6 +384,26 @@ export class Store {
       this.db
         .prepare('INSERT INTO session_context (session_id, hash) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET hash = excluded.hash')
         .run(sessionId, hash)
+  }
+
+  /** Folders added by hand and folders taken off the list, by path. */
+  folders(): { added: Map<string, number>; hidden: Set<string> } {
+    const rows = this.db.prepare('SELECT path, added_at, hidden_at FROM folders').all() as { path: string; added_at: number; hidden_at: number | null }[]
+    return {
+      added: new Map(rows.filter((r) => r.hidden_at === null).map((r) => [r.path, r.added_at])),
+      hidden: new Set(rows.filter((r) => r.hidden_at !== null).map((r) => r.path)),
+    }
+  }
+
+  addFolder(path: string): void {
+    this.db
+      .prepare('INSERT INTO folders (path, added_at) VALUES (?, ?) ON CONFLICT(path) DO UPDATE SET added_at = excluded.added_at, hidden_at = NULL')
+      .run(path, Date.now())
+  }
+
+  hideFolder(path: string): void {
+    const now = Date.now()
+    this.db.prepare('INSERT INTO folders (path, added_at, hidden_at) VALUES (?, ?, ?) ON CONFLICT(path) DO UPDATE SET hidden_at = excluded.hidden_at').run(path, now, now)
   }
 
   /** A card to put cards on, checked to exist and, when moving `cardId`, not to be it or below it. */

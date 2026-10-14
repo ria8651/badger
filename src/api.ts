@@ -1,5 +1,5 @@
 import { createSignal } from 'solid-js'
-import type { Card, CardStatus, ClientEvent, ModelOption, ServerEvent, SessionSummary, TerminalInfo, WorktreeStatus } from '../shared/protocol.ts'
+import type { Card, CardStatus, ClientEvent, Folder, Listing, ModelOption, ServerEvent, SessionSummary, TerminalInfo, WorktreeStatus } from '../shared/protocol.ts'
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -36,6 +36,14 @@ export const api = {
   unlinkSession: (id: number, sessionId: string) => request<Card>('DELETE', `/api/cards/${id}/sessions/${sessionId}`),
   worktree: (path: string) => get<WorktreeStatus>(`/api/worktree?path=${encodeURIComponent(path)}`),
   removeWorktree: (path: string) => request<void>('DELETE', `/api/worktree?path=${encodeURIComponent(path)}`),
+  folders: () => get<Folder[]>('/api/folders'),
+  addFolder: (path: string) => request<void>('POST', '/api/folders', { path }),
+  hideFolder: (path: string) => request<void>('DELETE', `/api/folders?path=${encodeURIComponent(path)}`),
+  folderSize: (path: string) => get<{ bytes: number }>(`/api/folders/size?path=${encodeURIComponent(path)}`),
+  listDir: (path: string | undefined, hidden: boolean) =>
+    get<Listing>(`/api/fs?${new URLSearchParams({ ...(path ? { path } : {}), ...(hidden ? { hidden: '1' } : {}) })}`),
+  makeFolder: (path: string) => request<{ path: string }>('POST', '/api/fs/folder', { path }),
+  fileUrl: (path: string) => `/api/fs/file?path=${encodeURIComponent(path)}`,
   workspace: (cwd: string) => get<{ root: string }>(`/api/workspace?cwd=${encodeURIComponent(cwd)}`),
   createTerminal: (spec: { cwd: string; command?: string; cols?: number; rows?: number }) =>
     request<TerminalInfo>('POST', '/api/terminals', spec),

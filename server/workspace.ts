@@ -26,7 +26,7 @@ export function inaccessible(dir: string): boolean {
 }
 
 const run = promisify(execFile)
-const git = async (cwd: string, ...args: string[]) => (await run('git', args, { cwd })).stdout.trim()
+export const git = async (cwd: string, ...args: string[]) => (await run('git', args, { cwd })).stdout.trim()
 
 /** Where Claude Code puts the worktrees it makes (--worktree, EnterWorktree). */
 export const WORKTREE_PATH = /^(.*)\/\.claude\/worktrees\/([^/]+)\/?$/
@@ -64,13 +64,13 @@ export async function worktreeStatus(path: string): Promise<WorktreeStatus> {
 }
 
 /**
- * Remove a worktree the way `git worktree remove` would: refused if it has
+ * Remove a linked worktree the way `git worktree remove` would: refused if it has
  * uncommitted changes. Its branch is deleted only if it's merged, so no commit
  * is ever lost.
  */
 export async function removeWorktree(path: string): Promise<void> {
-  if (!WORKTREE_PATH.test(path)) throw new Error('Not a Claude Code worktree')
   const main = await mainCheckout(path)
+  if (resolve(main) === resolve(path)) throw new Error("That's the repo's main checkout, not a worktree")
   const branch = await git(path, 'branch', '--show-current')
   // Claude Code locks worktrees it's using and doesn't always unlock them when the process ends.
   await git(main, 'worktree', 'unlock', path).catch(() => {})
