@@ -1,5 +1,5 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, mapArray, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
-import { ArrowUp, Check, FolderX, GitBranch, ImagePlus, Pencil, ListChevronsDownUp, ListChevronsUpDown, SlidersHorizontal, Square, SquareTerminal, WifiOff, X, Zap } from 'lucide-solid'
+import { ArrowUp, Check, FolderX, GitBranch, ImagePlus, Pencil, ListChevronsDownUp, ListChevronsUpDown, SlidersHorizontal, Square, SquareTerminal, WifiOff, X, Zap } from '../icons'
 import { isLongPaste } from '../../shared/pastes.ts'
 import type { Card, DraftAttachments, PermissionMode, QueuedMessage } from '../../shared/protocol.ts'
 import { chatActions, type ChatAction } from '../actions.ts'

@@ -1,6 +1,6 @@
 import { For, Show, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, splitProps, type JSX } from 'solid-js'
 import { Portal } from 'solid-js/web'
-import { Check, ChevronDown } from 'lucide-solid'
+import { Check, ChevronDown } from '../icons'
 import type { AttentionState } from '../../shared/protocol.ts'
 import { connected } from '../api.ts'
 

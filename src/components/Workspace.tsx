@@ -1,5 +1,5 @@
 import { For, Index, Match, Show, Switch, children, createEffect, createMemo, createSignal, on, onCleanup, untrack, type JSX } from 'solid-js'
-import { Globe, Minimize2, NotebookPen, Plus, RotateCw, SquareArrowOutUpRight, X } from 'lucide-solid'
+import { Globe, Minimize2, NotebookPen, Plus, RotateCw, SquareArrowOutUpRight, X } from '../icons'
 import { api } from '../api.ts'
 import {
   CHAT,

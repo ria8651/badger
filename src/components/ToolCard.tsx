@@ -1,5 +1,5 @@
 import { For, Match, Show, Switch, createEffect, createSignal, on, type JSX } from 'solid-js'
-import { Check, ChevronRight, Loader2 } from 'lucide-solid'
+import { Check, ChevronRight, Loader2 } from '../icons'
 import type { Task } from '../tasks.ts'
 import { Markdown } from './Markdown.tsx'
 

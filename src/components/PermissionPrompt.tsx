@@ -1,6 +1,6 @@
 import { For, Match, Show, Switch, createEffect, createSignal, on, onCleanup, type JSX } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
-import { Check, ChevronDown } from 'lucide-solid'
+import { Check, ChevronDown } from '../icons'
 import type { AnswerDraft, PendingPermission } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
 import { Markdown } from './Markdown.tsx'

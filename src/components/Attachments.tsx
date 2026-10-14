@@ -1,6 +1,6 @@
 import { For, Show, createSignal, onCleanup } from 'solid-js'
 import { Portal } from 'solid-js/web'
-import { Columns3, FileText, X } from 'lucide-solid'
+import { Columns3, FileText, X } from '../icons'
 import type { CardContext } from '../../shared/cardContext.ts'
 import type { ImageAttachment } from '../../shared/protocol.ts'
 import { imageUrl } from '../images.ts'

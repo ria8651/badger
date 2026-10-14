@@ -1,5 +1,5 @@
 import { For, Show } from 'solid-js'
-import { Globe, RotateCw, SquareTerminal, Trash2 } from 'lucide-solid'
+import { Globe, RotateCw, SquareTerminal, Trash2 } from '../icons'
 import type { TerminalInfo } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { LEADER, panelsShown, togglePanels } from '../layout.ts'
