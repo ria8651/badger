@@ -600,7 +600,7 @@ export function Chat(props: {
                       <Menu
                         items={actions().map((a) => ({ label: a.label, description: a.description }))}
                         onPick={(i) => send(actions()[i].prompt)}
-                        title={actions().length ? 'Chat actions' : 'No actions for this chat'}
+                        title="Chat actions"
                         triggerClass={(open) =>
                           `flex h-7 items-center rounded-md px-2 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 ${open ? 'bg-surface text-fg-2' : 'text-fg-3'}`
                         }
