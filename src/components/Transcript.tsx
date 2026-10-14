@@ -1,6 +1,6 @@
 import { For, Show, createContext, createMemo, createSignal, onCleanup, useContext, type Accessor, type JSX } from 'solid-js'
 import { unwrap } from 'solid-js/store'
-import { Columns3 } from 'lucide-solid'
+import { Columns3 } from '../icons'
 import { parseCardContext, type CardContext } from '../../shared/cardContext.ts'
 import { unwrapPaste } from '../../shared/pastes.ts'
 import type { CardStatus, ImageAttachment, WireMessage } from '../../shared/protocol.ts'

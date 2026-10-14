@@ -1,5 +1,5 @@
 import { Show, createSignal, onCleanup, untrack } from 'solid-js'
-import { PanelRight } from 'lucide-solid'
+import { PanelRight } from '../icons'
 import type { PendingPermission, PermissionMode } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
 import { Markdown } from './Markdown.tsx'

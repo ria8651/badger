@@ -1,5 +1,5 @@
 import { For, Show, createSignal } from 'solid-js'
-import { TriangleAlert, X } from 'lucide-solid'
+import { TriangleAlert, X } from './icons'
 import { socket } from './api.ts'
 import { Button } from './components/ui.tsx'
 

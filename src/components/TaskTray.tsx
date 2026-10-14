@@ -1,5 +1,5 @@
 import { For, Show, createMemo, createSignal, type Accessor } from 'solid-js'
-import { Check, ChevronRight } from 'lucide-solid'
+import { Check, ChevronRight } from '../icons'
 import type { BackgroundTask, WireMessage } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
 import { taskLabel, type Task } from '../tasks.ts'

@@ -1,5 +1,5 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, on, type JSX } from 'solid-js'
-import { ChevronDown, FolderInput, GitBranch, Link, Pencil, Plus, Trash2, X } from 'lucide-solid'
+import { ChevronDown, FolderInput, GitBranch, Link, Pencil, Plus, Trash2, X } from '../icons'
 import { ancestors, descendants, projectOf } from '../../shared/cardTree.ts'
 import { CARD_STATUSES, type Card, type SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'

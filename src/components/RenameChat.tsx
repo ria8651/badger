@@ -1,5 +1,5 @@
 import { Show, createSignal, onMount } from 'solid-js'
-import { RefreshCw, Sparkles } from 'lucide-solid'
+import { RefreshCw, Sparkles } from '../icons'
 import type { SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 

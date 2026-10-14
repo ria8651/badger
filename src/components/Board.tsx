@@ -1,5 +1,5 @@
 import { For, Show, createSignal } from 'solid-js'
-import { ArrowLeftRight, GitBranch, ListChecks, MessageSquare, Plus } from 'lucide-solid'
+import { ArrowLeftRight, GitBranch, ListChecks, MessageSquare, Plus } from '../icons'
 import { descendants } from '../../shared/cardTree.ts'
 import { CARD_STATUSES, type Card, type CardStatus, type SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
