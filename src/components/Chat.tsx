@@ -11,7 +11,7 @@ import { FileBrowser } from './FileBrowser.tsx'
 import { FolderPicker } from './FolderPicker.tsx'
 import { openView, panelsShown, planView, togglePanels, viewKey, viewShown, wide } from '../layout.ts'
 import { terminals, workspaceOf } from '../terminals.ts'
-import { ChildChats, createChat } from '../useChat.ts'
+import { Checking, ChildChats, createChat } from '../useChat.ts'
 import { Attachments } from './Attachments.tsx'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
 import { PlanPane, latestPlan } from './Plan.tsx'
@@ -402,17 +402,19 @@ export function Chat(props: {
                   }
                 >
                   <ChildChats.Provider value={childState}>
-                    <Transcript
-                      sessionId={props.sessionId}
-                      index={index}
-                      messages={state.messages}
-                      partial={state.partial}
-                      bashOutput={state.bashOutput}
-                      running={working()}
-                      working={working() && state.permissions.length === 0 && childPrompts().length === 0}
-                      cwd={cwd()}
-                      children={state.children}
-                    />
+                    <Checking.Provider value={(id) => state.checking.includes(id)}>
+                      <Transcript
+                        sessionId={props.sessionId}
+                        index={index}
+                        messages={state.messages}
+                        partial={state.partial}
+                        bashOutput={state.bashOutput}
+                        running={working()}
+                        working={working() && state.permissions.length === 0 && childPrompts().length === 0}
+                        cwd={cwd()}
+                        children={state.children}
+                      />
+                    </Checking.Provider>
                   </ChildChats.Provider>
                   <Show when={state.makingWorktree}>
                     <div class="mt-4 flex h-6 items-center gap-2 text-[13px] text-fg-3">

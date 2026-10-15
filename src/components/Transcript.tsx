@@ -1,12 +1,12 @@
 import { For, Show, createContext, createMemo, createSignal, onCleanup, useContext, type Accessor, type JSX } from 'solid-js'
 import { unwrap } from 'solid-js/store'
-import { Columns3 } from '../icons'
+import { Columns3, Shield } from '../icons'
 import { parseCardContext, type CardContext } from '../../shared/cardContext.ts'
 import { unwrapPaste } from '../../shared/pastes.ts'
 import type { CardStatus, ImageAttachment, WireMessage } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
 import { collectTasks, type Task } from '../tasks.ts'
-import { ChildChats, type Partial } from '../useChat.ts'
+import { ChildChats, useChecking, type Partial } from '../useChat.ts'
 import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
 import { Disclosure, Pre, ToolBody, ToolCard, resultText, toolLabel, toolSummary, type ToolResult } from './ToolCard.tsx'
@@ -285,6 +285,7 @@ export function Transcript(props: TranscriptProps & { sessionId?: string; index?
 /** One conversation: the chat's own, or a subagent's nested in the call that started it. */
 function Messages(props: TranscriptProps & { nested?: boolean }) {
   const index = useIndex()
+  const isChecking = useChecking()
   const view = createMemo(() => buildView(props.messages, !!props.nested))
   const folded = createMemo(() => foldWork(view().items))
   const rows = (): Row[] => (detail() === 'full' ? view().items : folded().rows)
@@ -315,6 +316,7 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
   const WorkRow = (p: { work: Work }) => {
     const items = () => folded().groups.get(p.work) ?? []
     const live = () => props.running && folded().tail === p.work
+    const checking = () => live() && !props.partial && items().some((i) => i.kind === 'tool' && isChecking(i.id))
     const steps = () => items().filter((i) => i.kind === 'tool').length
     return (
       <Disclosure
@@ -326,7 +328,11 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
             <Show when={steps()}>
               <span class="shrink-0 text-xs text-fg-3 tabular-nums">{plural(steps(), 'step')}</span>
             </Show>
-            <LiveDot />
+            <Show when={checking()} fallback={<LiveDot />}>
+              <span title="Auto mode is checking whether to allow this">
+                <Shield class="size-3.5 shrink-0 animate-pulse text-fg-3" />
+              </span>
+            </Show>
           </Show>
         }
       >

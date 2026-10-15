@@ -24,6 +24,8 @@ import { MessageQueue } from './queue.ts'
 
 /** Close an idle Claude Code process after this long; the next message resumes it. */
 const IDLE_CLOSE_MS = 15 * 60 * 1000
+/** Allowed in auto mode without asking the classifier. */
+const READ_ONLY_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS', 'NotebookRead', 'TodoWrite', 'ToolSearch', 'TaskOutput'])
 
 type Listener = (event: ServerEvent) => void
 
@@ -76,6 +78,8 @@ export class LiveSession {
   private onTurnEnd: () => void
   /** Tool calls that have started, by tool_use_id, so a tool's handler can find out which call it is. */
   private toolUses = new Map<string, string>()
+  /** Calls auto mode's classifier is still deciding on: tool_use_id to the subagent's call, or null for the chat's own. */
+  private checking = new Map<string, string | null>()
   /** Until the first init: only that one says where --worktree put us. */
   private awaitingInit = true
   private afterTurnCallbacks: (() => void)[] = []
@@ -113,8 +117,10 @@ export class LiveSession {
     this.onClose = opts.onClose
     this.onChange = opts.onChange
     this.onTurnEnd = opts.onTurnEnd
-    this.bash = new BashStreams(this.id, (toolUseId, chunk) =>
-      this.emit({ type: 'bash_output', sessionId: this.id, toolUseId, chunk }),
+    this.bash = new BashStreams(
+      this.id,
+      (toolUseId, chunk) => this.emit({ type: 'bash_output', sessionId: this.id, toolUseId, chunk }),
+      (toolUseId) => this.checked(toolUseId),
     )
 
     this.agent = query({
@@ -126,6 +132,9 @@ export class LiveSession {
         ...(opts.model && opts.model !== 'default' ? { model: opts.model } : {}),
         allowDangerouslySkipPermissions: true,
         includePartialMessages: true,
+        // Subagents' text and thinking too, not just their tool calls, so they show live as the chat's own do.
+        // Claude Code streams only the chat's own messages token by token; a subagent's arrive a block at a time.
+        forwardSubagentText: true,
         // A one-line "what it's doing" for each running subagent, every ~30s.
         agentProgressSummaries: true,
         // Each task has its own Stop, so stopping the turn leaves background work running.
@@ -224,6 +233,7 @@ export class LiveSession {
       cwd: this.cwd,
       permissions: [...this.pending.values()].map(publicPermission),
       bashOutput: this.bash.outputs(),
+      checking: [...this.checking.keys()],
       background: this.background,
       queued: this.queued.map(publicQueued),
     }
@@ -370,6 +380,7 @@ export class LiveSession {
 
   private canUseTool: CanUseTool = (toolName, input, { signal, suggestions, blockedPath, toolUseID, agentID }) =>
     new Promise<PermissionResult>((resolve) => {
+      this.checked(toolUseID)
       const requestId = randomUUID()
       const done = (result: PermissionResult) => {
         if (!this.pending.delete(requestId)) return
@@ -419,9 +430,13 @@ export class LiveSession {
       return
     }
     if (msg.type === 'stream_event') {
+      // Auto mode checks a message's calls as they stream in and holds back the message's end until it's decided on all of them.
+      if (msg.event.type === 'message_delta') this.checkedMessage(msg.parent_tool_use_id)
       this.emit({ type: 'message', sessionId: this.id, message: wire })
       return
     }
+    if (msg.type === 'system' && msg.subtype === 'permission_denied') this.checked(msg.tool_use_id)
+    if (msg.type === 'assistant' && this.mode === 'auto') this.startChecking(wire)
     // With --worktree, Claude Code reports where it actually ended up. Later inits (one per
     // turn) report wherever a Bash `cd` left Claude's shell, which isn't the chat moving.
     if (msg.type === 'system' && msg.subtype === 'init') {
@@ -464,11 +479,15 @@ export class LiveSession {
       const ids = toolResultIds(wire)
       // A command left running in the background says so in its result, which is the only one in its message.
       const taskId = ids.length === 1 ? (wire.tool_use_result as { backgroundTaskId?: string } | undefined)?.backgroundTaskId : undefined
-      for (const id of ids) this.bash.result(id, taskId)
+      for (const id of ids) {
+        this.bash.result(id, taskId)
+        this.checked(id)
+      }
     }
     if (msg.type === 'system' && msg.subtype === 'task_notification') this.bash.taskEnded(msg.task_id)
     if (msg.type === 'result') {
       this.bash.finishAll()
+      this.checked()
       wire.ended_at = Date.now()
     }
     if (!isTranscriptMessage(msg)) return
@@ -517,6 +536,43 @@ export class LiveSession {
     this.cwd = cwd
     this.emitStatus()
     this.onChange()
+  }
+
+  /**
+   * A call Claude has just made goes to auto mode's check. The chat's own
+   * calls are followed until their message ends. A subagent's messages don't
+   * stream here, so only its commands, which say when they start, are.
+   */
+  private startChecking(msg: WireMessage): void {
+    const parent = (msg.parent_tool_use_id as string | null | undefined) ?? null
+    const content = (msg.message as { content?: unknown } | undefined)?.content
+    const uses = Array.isArray(content) ? (content as { type?: string; id?: string; name?: string }[]) : []
+    let added = false
+    for (const u of uses) {
+      if (u.type !== 'tool_use' || !u.id || !u.name || READ_ONLY_TOOLS.has(u.name)) continue
+      if (parent && u.name !== 'Bash') continue
+      this.checking.set(u.id, parent)
+      added = true
+    }
+    if (added) this.emitChecking()
+  }
+
+  /** A call is through auto mode's check, one way or another; without an id, every call. */
+  private checked(toolUseId?: string): void {
+    if (toolUseId ? !this.checking.delete(toolUseId) : !this.checking.size) return
+    if (!toolUseId) this.checking.clear()
+    this.emitChecking()
+  }
+
+  /** A message ended, so auto mode has decided on all of its calls: the chat's own, or a subagent's. */
+  private checkedMessage(parent: string | null): void {
+    const ids = [...this.checking].filter(([, p]) => p === parent).map(([id]) => id)
+    for (const id of ids) this.checking.delete(id)
+    if (ids.length) this.emitChecking()
+  }
+
+  private emitChecking(): void {
+    this.emit({ type: 'checking', sessionId: this.id, toolUseIds: [...this.checking.keys()] })
   }
 
   private emitStatus(): void {

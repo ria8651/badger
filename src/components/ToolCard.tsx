@@ -1,6 +1,7 @@
 import { For, Match, Show, Switch, createEffect, createSignal, on, type JSX } from 'solid-js'
-import { Check, ChevronRight, Loader2 } from '../icons'
+import { Check, ChevronRight, Loader2, Shield } from '../icons'
 import type { Task } from '../tasks.ts'
+import { useChecking } from '../useChat.ts'
 import { Markdown } from './Markdown.tsx'
 
 export interface ToolResult {
@@ -269,6 +270,7 @@ const liveOf = (props: ToolProps) =>
 
 export function ToolCard(props: ToolProps) {
   const live = () => liveOf(props)
+  const checking = useChecking()
   const status = () =>
     props.task?.status === 'running'
       ? 'running'
@@ -277,7 +279,9 @@ export function ToolCard(props: ToolProps) {
           ? 'error'
           : 'done'
         : props.running
-          ? 'running'
+          ? props.id && checking(props.id)
+            ? 'checking'
+            : 'running'
           : 'stopped'
 
   const questions = () => (props.input.questions as Question[] | undefined) ?? []
@@ -297,6 +301,12 @@ export function ToolCard(props: ToolProps) {
             <>
               {/* Success is the norm and stays silent; only work in progress and failures show. */}
               <Switch>
+                <Match when={status() === 'checking'}>
+                  <span class="flex shrink-0 items-center gap-1 text-xs text-fg-3" title="Auto mode is checking whether to allow this">
+                    <Shield class="size-3.5 animate-pulse" />
+                    Checking
+                  </span>
+                </Match>
                 <Match when={status() === 'running'}>
                   <Loader2 class="size-3.5 shrink-0 animate-spin text-fg-3" />
                 </Match>

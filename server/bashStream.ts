@@ -51,6 +51,8 @@ export class BashStreams {
   constructor(
     private sessionId: string,
     private onOutput: (toolUseId: string, chunk: string) => void,
+    /** The command started running: the wrapper only runs once permission checks have passed. */
+    private onStart?: (toolUseId: string) => void,
   ) {}
 
   /** Called from the PreToolUse hook, before the command runs (or is approved). */
@@ -132,7 +134,10 @@ export class BashStreams {
         continue
       }
       const s = [...this.streams.values()].find((s) => !s.file && shell.includes(s.needle))
-      if (s) s.file = file
+      if (s) {
+        s.file = file
+        this.onStart?.(s.toolUseId)
+      }
     }
   }
 

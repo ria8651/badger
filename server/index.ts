@@ -214,6 +214,7 @@ async function snapshotFor(sessionId: string): Promise<ServerEvent> {
     gone: !!info?.cwd && inaccessible(info.cwd),
     permissions: [],
     bashOutput: {},
+    checking: [],
     draft,
     draftAttachments,
     children: childSessions,

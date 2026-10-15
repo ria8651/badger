@@ -27,6 +27,8 @@ export interface ChatState {
   permissions: PendingPermission[]
   /** Live output of running Bash commands, by tool_use_id. */
   bashOutput: Record<string, string>
+  /** Calls auto mode is still deciding whether to allow, by tool_use_id. */
+  checking: string[]
   /** Chats this one started from a tool call, by that call's tool_use_id. */
   children: Record<string, string>
   /** Subagents, shells and the like running in the background now. */
@@ -54,6 +56,7 @@ function apply(state: ChatState, event: ServerEvent): void {
       state.gone = !!event.gone
       state.permissions = event.permissions
       state.bashOutput = event.bashOutput
+      state.checking = event.checking ?? []
       state.children = event.children
       state.background = event.background
       state.queued = event.queued
@@ -97,6 +100,9 @@ function apply(state: ChatState, event: ServerEvent): void {
       break
     case 'bash_output':
       state.bashOutput[event.toolUseId] = ((state.bashOutput[event.toolUseId] ?? '') + event.chunk).slice(-BASH_KEEP)
+      break
+    case 'checking':
+      state.checking = event.toolUseIds
       break
     case 'error':
       state.error = event.error
@@ -154,6 +160,7 @@ export function createChat(sessionId: string) {
     gone: false,
     permissions: [],
     bashOutput: {},
+    checking: [],
     children: {},
     background: [],
     queued: [],
@@ -179,3 +186,7 @@ export function createChat(sessionId: string) {
  */
 export const ChildChats = createContext<(sessionId: string) => ChatState | undefined>(() => undefined)
 export const useChildChat = (sessionId: string) => useContext(ChildChats)(sessionId)
+
+/** Whether auto mode is still deciding on a call, by tool_use_id. */
+export const Checking = createContext<(toolUseId: string) => boolean>(() => false)
+export const useChecking = () => useContext(Checking)

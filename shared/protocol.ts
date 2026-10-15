@@ -298,6 +298,8 @@ export type ServerEvent =
       permissions: PendingPermission[]
       /** Output so far of Bash commands still running, by tool_use_id. */
       bashOutput: Record<string, string>
+      /** Calls auto mode is still deciding whether to allow. */
+      checking: string[]
       /** Unsent composer text, in the same message as the transcript so they arrive together. */
       draft: string
       draftAttachments: DraftAttachments
@@ -311,6 +313,8 @@ export type ServerEvent =
   | { type: 'draft'; sessionId: string; text?: string; attachments?: DraftAttachments }
   /** Live output from a running Bash command; the tool_result still carries the final output. */
   | { type: 'bash_output'; sessionId: string; toolUseId: string; chunk: string }
+  /** The calls auto mode is still deciding whether to allow; replaces the previous set. */
+  | { type: 'checking'; sessionId: string; toolUseIds: string[] }
   /** cwd changes when the chat moves into a worktree. */
   | { type: 'status'; sessionId: string; running: boolean; makingWorktree: boolean; mode: PermissionMode; model?: string; cwd: string }
   /** Messages Claude Code is holding for its next break; replaces the previous list. */
