@@ -25,7 +25,8 @@ const BENIGN = [/^ResizeObserver loop/, /^Script error\.?$/]
 
 function record(error: unknown, fallback = 'Unknown error'): void {
   const err = error instanceof Error ? error : undefined
-  const message = err ? `${err.name}: ${err.message}` : error === undefined ? fallback : String(error)
+  // An error event with no error object (ResizeObserver's, for one) has `error: null`, and its text only in the message.
+  const message = err ? `${err.name}: ${err.message}` : error == null ? fallback : String(error)
   if (BENIGN.some((re) => re.test(message.replace(/^Error: /, '')))) return
   const stack = err?.stack
   setCrashes((all) => {
