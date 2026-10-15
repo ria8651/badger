@@ -3,11 +3,25 @@ import { Editor, Extension, InputRule } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import { TaskItem, TaskList } from '@tiptap/extension-list'
 import { TableKit } from '@tiptap/extension-table'
+import Image from '@tiptap/extension-image'
 import Link from '@tiptap/extension-link'
+import { Paragraph as BaseParagraph } from '@tiptap/extension-paragraph'
 import { Placeholder } from '@tiptap/extensions'
 import { Markdown } from '@tiptap/markdown'
 
 const SAVE_DELAY = 800
+
+/**
+ * Keeps an image on a line of its own inside its paragraph. Images are inline here, so they can sit in text too, and
+ * the stock paragraph unwraps a lone image into the document, where inline content is invalid and every edit throws.
+ */
+const Paragraph = BaseParagraph.extend({
+  parseMarkdown(token, helpers) {
+    const tokens = token.tokens ?? []
+    if (tokens.length === 1 && tokens[0].type === 'image') return helpers.createNode('paragraph', undefined, helpers.parseInline(tokens))
+    return this.parent?.(token, helpers) ?? helpers.createNode('paragraph', undefined, helpers.parseInline(tokens))
+  },
+})
 
 /** A link whose text is its own URL is written back as the bare URL, the way it was most likely typed. */
 const BareLink = Link.extend({
@@ -30,6 +44,25 @@ const LinkShortcut = Extension.create({
       },
     }),
   ],
+})
+
+/** Lines that are only HTML comments; the editor would otherwise show each as an empty paragraph. */
+// Each comment stops at its own `-->`, so a comment with text after it can't stretch on to a later one.
+const COMMENT_LINES = /^ {0,3}(?:<!--(?:(?!-->)[\s\S])*-->[ \t]*)+(?:\n|$)/m
+
+/** Drops comment lines, rather than leaving a blank line where each was. */
+const DropComments = Extension.create({
+  name: 'dropComments',
+  markdownTokenizer: {
+    name: 'htmlComment',
+    level: 'block',
+    start: (src) => src.search(COMMENT_LINES),
+    tokenize: (src) => {
+      const comment = COMMENT_LINES.exec(src)
+      // Nothing handles this token, so it parses to nothing; as a `space` token, blank lines before a last comment would become a paragraph.
+      return comment?.index === 0 ? { type: 'htmlComment', raw: comment[0] } : undefined
+    },
+  },
 })
 
 /** Drops the `&nbsp;` lines empty paragraphs serialize to, and runs of blank lines, leaving code blocks alone. */
@@ -73,12 +106,15 @@ export function MarkdownEditor(props: {
     editor = new Editor({
       element: el,
       extensions: [
-        StarterKit.configure({ underline: false, link: false }),
+        StarterKit.configure({ underline: false, link: false, paragraph: false }),
         BareLink,
         TaskList,
         TaskItem.configure({ nested: true }),
         TableKit,
+        Paragraph,
+        Image.configure({ inline: true }),
         LinkShortcut,
+        DropComments,
         Placeholder.configure({ placeholder: () => props.placeholder ?? '' }),
         Markdown,
       ],
