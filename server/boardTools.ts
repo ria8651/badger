@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto'
-import { getSessionInfo } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import { CARD_STATUSES, type Card } from '../shared/protocol.ts'
 import { NO_CARD_CONTEXT, renderCardContext } from '../shared/cardContext.ts'
@@ -15,7 +14,7 @@ export const BOARD_INSTRUCTIONS = [
   'Top-level cards are projects. Each has its own board of cards, one per piece of work. When you find a follow-up or bug while working, add it as a card to the same project.',
   'Use these tools when the user talks about cards, the board, tasks or what to work on. Keep a card you are working on up to date: move its status as work progresses and write what you learn into its description.',
   `Statuses, in board order: ${CARD_STATUSES.join(', ')}.`,
-  "Every Badger tool (these, the terminal ones and the preview ones) can also be called from code: the `badger` command in Bash runs a JavaScript script in which they're `badger.cards.list(...)` and so on, returning data rather than text. Use it for bulk changes, or anything you'd otherwise do in many calls or that needs filtering. `badger --help` lists them.",
+  "Every Badger tool (these, the terminal ones and the preview ones) can also be called from code: run_script runs JavaScript in which they're `badger.cards.list(...)` and so on, returning data rather than text. Use it for bulk changes, or anything you'd otherwise do in many calls or that needs filtering.",
 ].join('\n')
 
 const status = z.enum(CARD_STATUSES)
@@ -24,34 +23,52 @@ const status = z.enum(CARD_STATUSES)
  * The chat's card as context for the next turn, or undefined when Claude has
  * already seen this exact state. Appended to the turn rather than the system
  * prompt, so it never invalidates the prompt cache; it lands in the transcript
- * and survives resumes, and the stored hash stops it being repeated. A peek
- * leaves the hash alone, for showing what's about to go in.
+ * and survives resumes, and the stored hash stops it being repeated. Asking
+ * doesn't count it as seen: `contextSeen` does, once it's gone in, so a reply
+ * lost on the way can't lose it.
  */
-export function cardContext(store: Store, sessionId: string, peek = false): string | undefined {
+export function cardContext(store: Store, sessionId: string): string | undefined {
   const cards = store.cards()
   const card = cards.find((c) => c.sessionIds.includes(sessionId))
   const last = store.contextHash(sessionId)
-  if (!card) {
-    if (last === undefined) return undefined
-    if (!peek) store.setContextHash(sessionId, null)
-    return NO_CARD_CONTEXT
-  }
+  if (!card) return last === undefined ? undefined : NO_CARD_CONTEXT
   const rendered = renderCardContext(card, ancestors(cards, card.id))
-  const hash = hashOf(rendered)
-  if (hash === last) return undefined
-  if (!peek) store.setContextHash(sessionId, hash)
-  return rendered
+  return hashOf(rendered) === last ? undefined : rendered
+}
+
+/** Claude has been given this card context, so it isn't repeated. */
+export function contextSeen(store: Store, sessionId: string, text: string): void {
+  store.setContextHash(sessionId, text === NO_CARD_CONTEXT ? null : hashOf(text))
 }
 
 const hashOf = (text: string) => createHash('sha1').update(text).digest('hex')
 
 const CARD = 'Card = { id, parentId, title, description, status, position, sessionIds, createdAt, updatedAt, statusChangedAt }'
 
+/** A chat as the board describes it. */
+export interface ChatInfo {
+  id: string
+  title?: string
+  cwd?: string
+  /** The machine it runs on, and what that's called. */
+  machine?: string
+  machineName?: string
+}
+
+export interface BoardDeps {
+  store: Store
+  /** Board data changed. */
+  onChange: () => void
+  /** What the hub knows of these chats, wherever they run. */
+  chats: (ids: string[]) => Promise<ChatInfo[]>
+}
+
 /**
  * The project board. "This chat" is whichever chat calls: a tool's own, or
- * the one whose script it is.
+ * the one whose script it is. The board is the hub's; runners run these
+ * there (ops.ts forwarded).
  */
-export function boardOps(store: Store, onChange: () => void): Op[] {
+export function boardOps({ store, onChange, chats }: BoardDeps): Op[] {
   const actor = (ctx: OpContext): Actor => ({ source: 'claude', sessionId: ctx.sessionId })
   const cardOf = (ctx: OpContext) => store.cards().find((c) => c.sessionIds.includes(ctx.sessionId))
   // Claude already knows this state (it wrote or just read it), so don't inject it next turn.
@@ -93,13 +110,13 @@ export function boardOps(store: Store, onChange: () => void): Op[] {
       script: 'cards.get',
       description: "Get a card's full description and its chats. Omit id for the card this chat belongs to.",
       input: { id: z.number().int().optional() },
-      returns: 'Card & { chats: { id, title, cwd?, archived, thisChat }[], inside: Card[] }',
+      returns: 'Card & { chats: { id, title, cwd?, machine?, archived, thisChat }[], inside: Card[] }',
       autoAllow: true,
       annotations: { readOnlyHint: true },
       async run(args, ctx) {
         const card = args.id === undefined ? (cardOf(ctx) ?? fail('This chat is not on a card.')) : need(args.id)
         markSeen(card, ctx)
-        return detail(card, store.cards(), ctx.sessionId, store.archivedIds())
+        return detail(card, store.cards(), ctx.sessionId, store.archivedIds(), await chats([...card.sessionIds, ctx.sessionId]))
       },
     }),
     op({
@@ -238,19 +255,18 @@ function tree(cards: Card[], parent: number | null, status?: Card['status']): { 
 
 const boardOrder = (a: Card, b: Card) => CARD_STATUSES.indexOf(a.status) - CARD_STATUSES.indexOf(b.status) || a.position - b.position
 
-async function detail(c: Card, cards: Card[], sessionId: string, archived: Set<string>) {
-  const chats = (
-    await Promise.all(
-      c.sessionIds.map(async (id) => {
-        const info = await getSessionInfo(id).catch(() => undefined)
-        if (!info && id !== sessionId) return null
-        const title = info?.customTitle || info?.summary || info?.firstPrompt || 'New chat'
-        return { id, title, cwd: info?.cwd, archived: archived.has(id), thisChat: id === sessionId }
-      }),
-    )
-  ).filter((chat) => chat !== null)
+/** A card in full. Chats on another machine than the caller's say which. */
+function detail(c: Card, cards: Card[], sessionId: string, archived: Set<string>, infos: ChatInfo[]) {
+  const mine = infos.find((i) => i.id === sessionId)?.machine
+  const chats = c.sessionIds.flatMap((id) => {
+    const info = infos.find((i) => i.id === id)
+    if (!info?.title && id !== sessionId) return []
+    return [{ id, title: info?.title || 'New chat', cwd: info?.cwd, machine: info?.machine, archived: archived.has(id), thisChat: id === sessionId }]
+  })
   const lines = chats.map((chat) => {
-    const notes = [chat.cwd && `in ${chat.cwd}`, chat.archived && 'archived', chat.thisChat && 'this chat'].filter(Boolean)
+    const info = infos.find((i) => i.id === chat.id)
+    const elsewhere = chat.machine && chat.machine !== mine ? ` on ${info?.machineName ?? chat.machine}` : ''
+    const notes = [chat.cwd && `in ${chat.cwd}${elsewhere}`, chat.archived && 'archived', chat.thisChat && 'this chat'].filter(Boolean)
     return `- ${chat.title} [${chat.id}]${notes.length ? ` (${notes.join(', ')})` : ''}`
   })
   const path = ancestors(cards, c.id)

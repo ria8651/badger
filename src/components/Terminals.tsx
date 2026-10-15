@@ -4,9 +4,10 @@ import type { TerminalInfo } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { LEADER, panelsShown, togglePanels } from '../layout.ts'
 import { previewUrl, previewsAvailable } from '../previews.ts'
-import { terminalLabel, terminalState, terminals } from '../terminals.ts'
+import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
+import { inWs, terminalLabel, terminalState, terminals, terminalsListed, type Ws } from '../terminals.ts'
 import { TerminalView } from './TerminalView.tsx'
-import { ltr } from './ui.tsx'
+import { Loading, ltr } from './ui.tsx'
 
 /** Green while running, red if it failed or was killed, grey once it exited cleanly. */
 export function StatusDot(props: { terminal: TerminalInfo }) {
@@ -14,19 +15,19 @@ export function StatusDot(props: { terminal: TerminalInfo }) {
   return <span title={terminalState(props.terminal)} class={`inline-block size-1.5 shrink-0 rounded-full ${tone()}`} />
 }
 
-const inWorkspace = (root: string) => terminals().filter((t) => t.root === root)
+const inWorkspace = (ws: Ws) => terminals().filter((t) => inWs(t, ws))
 
 export const ghost = (active = false) =>
   `grid size-7 shrink-0 place-items-center rounded-md transition-colors hover:bg-surface hover:text-fg ${active ? 'text-fg' : 'text-fg-3'}`
 
 /** For the composer: shows or hides the panels and says how many terminals are running here. */
-export function TerminalButton(props: { root: string; cwd: string }) {
-  const running = () => inWorkspace(props.root).filter((t) => t.running).length
-  const open = () => panelsShown(props.root)
+export function TerminalButton(props: { ws: Ws; cwd: string }) {
+  const running = () => inWorkspace(props.ws).filter((t) => t.running).length
+  const open = () => panelsShown(props.ws)
   return (
     <button
       type="button"
-      onClick={() => togglePanels(props.root, props.cwd)}
+      onClick={() => togglePanels(props.ws, props.cwd)}
       title={`${open() ? 'Hide' : 'Show'} terminals (${LEADER} P)`}
       class={`flex h-7 items-center gap-1 rounded-md px-2 text-xs tabular-nums transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 ${
         open() ? 'bg-surface text-fg-2' : 'text-fg-3'
@@ -55,7 +56,7 @@ export function RestartButton(props: { terminal: TerminalInfo }) {
  */
 export function PortButtons(props: { terminal: TerminalInfo; onOpen?: (port: number) => void }) {
   return (
-    <Show when={previewsAvailable()}>
+    <Show when={previewsAvailable(props.terminal.machine || LOCAL)}>
       <For each={props.terminal.ports ?? []}>
         {(port) => {
           const cls = 'flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs tabular-nums text-fg-3 transition-colors hover:bg-surface hover:text-fg'
@@ -69,7 +70,7 @@ export function PortButtons(props: { terminal: TerminalInfo; onOpen?: (port: num
               {label}
             </button>
           ) : (
-            <a href={previewUrl(port)} target="_blank" rel="noopener" title={`Open port ${port} in a new browser tab`} class={cls}>
+            <a href={previewUrl(port, '/', props.terminal.machine || LOCAL)} target="_blank" rel="noopener" title={`Open port ${port} in a new browser tab`} class={cls}>
               {label}
             </a>
           )
@@ -82,12 +83,27 @@ export function PortButtons(props: { terminal: TerminalInfo; onOpen?: (port: num
 /** One terminal filling the page, at /t/:id. */
 export function TerminalPage(props: { id: string; onClosed: () => void }) {
   const terminal = () => terminals().find((t) => t.id === props.id)
+  /** The machine it runs on, from its id: `<machine>.<id>`. */
+  const machine = () => props.id.slice(0, Math.max(0, props.id.lastIndexOf('.'))) || LOCAL
+  // Missing from the list while its runner is away, or back but hasn't said what it has: not closed.
+  const missing = () =>
+    isRemoved(machine())
+      ? `${knownName(machine()) ?? 'The runner this terminal ran on'} was removed, so this terminal is gone`
+      : !isOnline(machine())
+        ? `${machineName(machine())} is offline. This terminal runs there, so it's back when that is`
+        : !terminalsListed(machine())
+          ? undefined
+          : 'This terminal is closed'
 
   return (
     <div class="flex h-full min-w-0 flex-1 flex-col">
       <Show
         when={terminal()}
-        fallback={<p class="flex flex-1 items-center justify-center text-[13px] text-fg-3">This terminal is closed</p>}
+        fallback={
+          <Show when={missing()} fallback={<Loading />}>
+            {(text) => <p class="flex flex-1 items-center justify-center px-6 text-center text-[13px] text-fg-3">{text()}</p>}
+          </Show>
+        }
       >
         {(t) => (
           <>
@@ -95,6 +111,7 @@ export function TerminalPage(props: { id: string; onClosed: () => void }) {
               <StatusDot terminal={t()} />
               <span class="truncate text-fg">{terminalLabel(t())}</span>
               <span class="min-w-0 flex-1 truncate text-left font-mono text-[11px] text-fg-3 [direction:rtl]">{ltr(t().cwd)}</span>
+              <Show when={onMachine(t().machine)}>{(name) => <span class="shrink-0 text-[11px] text-fg-3">{name()}</span>}</Show>
               <span class="shrink-0 text-xs text-fg-3">{terminalState(t())}</span>
               <PortButtons terminal={t()} />
               <RestartButton terminal={t()} />

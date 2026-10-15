@@ -5,6 +5,7 @@
     "dev": "concurrently -k --handle-input -n server,web -c blue,magenta \"node scripts/dev-server.mjs\" \"vite\"",
     "build": "vite build",
     "start": "NODE_ENV=production tsx server/index.ts",
+    "remote": "tsx server/remote.ts",
     "typecheck": "tsc --noEmit"
   },
   "type": "module",

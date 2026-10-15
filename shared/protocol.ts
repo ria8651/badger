@@ -49,10 +49,42 @@ export interface BackgroundTask {
  */
 export type AttentionState = 'waiting' | 'unread'
 
+/**
+ * A computer chats and terminals run on: the hub's own, or another one whose
+ * runner (`pnpm remote`) connects to the hub. A chat stays on the machine it
+ * started on. The UI calls these runners.
+ */
+export interface Machine {
+  id: string
+  name: string
+  /** The hub's own. It's always there, has no token and can't be removed. */
+  local: boolean
+  online: boolean
+  /** Its host's name and OS (Node's process.platform), as its runner last said. */
+  hostname?: string
+  platform?: string
+  /** Where new chats start on it by default. Known once it has connected. */
+  workspaceDir?: string
+  /** Where its folderless chats run. */
+  scratchDir?: string
+  /** When it was last connected, ms since epoch; absent if it never has been. */
+  lastSeen?: number
+  /** Chats working on it now. */
+  running: number
+  /** Why the hub last turned its runner away, e.g. a version mismatch. Cleared once it connects. */
+  error?: string
+  createdAt: number
+}
+
+/** The hub's own machine's id. */
+export const LOCAL_MACHINE = 'local'
+
 export interface SessionSummary {
   id: string
   title: string
   cwd?: string
+  /** The machine it runs on. */
+  machine?: string
   lastModified: number
   running: boolean
   /** Hidden from the sidebar's main list. Archiving never deletes the transcript. */
@@ -180,8 +212,10 @@ export interface Card {
  * it keeps running across chats, reloads and Badger server restarts.
  */
 export interface TerminalInfo {
-  /** Short hex id. */
+  /** `<machine>.<id>` in the browser: the machine it runs on and its short hex id there. A runner's own list has just the hex id. */
   id: string
+  /** The machine it runs on. Filled in by the hub. */
+  machine?: string
   /** What the program last set as its title (shells usually show the running command), else the command or shell. */
   title: string
   cwd: string
@@ -240,6 +274,8 @@ export type ClientEvent =
       pastes?: string[]
       images?: ImageAttachment[]
       cwd?: string
+      /** Where a new chat runs; an existing one stays on its own machine. Defaults to the hub's. */
+      machine?: string
       mode?: PermissionMode
       /** Used when this starts or resumes the chat's process; a running one keeps its model. */
       model?: string
@@ -293,6 +329,8 @@ export type ServerEvent =
       /** A ModelOption value, or a model id from the transcript. Absent until the chat has run. */
       model?: string
       cwd?: string
+      /** The machine it runs on; absent for a chat that hasn't started. While it's offline the chat is read-only. */
+      machine?: string
       /** Its folder is gone or can't be opened, e.g. a worktree removed after merging, so it can't run. */
       gone?: boolean
       permissions: PendingPermission[]
@@ -337,11 +375,17 @@ export type ServerEvent =
   /** Every chat that needs the user, by id; sent on connect and whenever it changes. Children count as their parent. */
   | { type: 'attention'; chats: Record<string, AttentionState> }
   | { type: 'cards_changed' }
+  /** Every machine; sent on connect and whenever one connects, disconnects or changes. */
+  | { type: 'machines'; machines: Machine[] }
   /** Every terminal; sent on connect and whenever any of them changes. */
   | { type: 'terminals'; terminals: TerminalInfo[] }
   /** The terminal's screen and scrollback as escape sequences; replaces whatever the viewer had. */
   | { type: 'term_snapshot'; id: string; data: string }
   | { type: 'term_output'; id: string; data: string }
-  /** Claude asked to show a port's preview in the workspace's panels. */
-  | { type: 'open_preview'; root: string; port: number; name?: string; path?: string }
+  /**
+   * Claude asked to show a port's preview in the workspace's panels. A port
+   * on a machine other than the hub's opens at plain localhost, so only a
+   * browser on that machine shows it.
+   */
+  | { type: 'open_preview'; root: string; machine?: string; port: number; name?: string; path?: string }
   | { type: 'error'; sessionId?: string; error: string }

@@ -6,10 +6,10 @@ import { z, type ZodRawShape } from 'zod'
 
 /**
  * Badger's operations, each defined once and reachable two ways: as an MCP
- * tool in each chat, and from scripts, where the `badger` command
- * (bin/badger) calls them over HTTP as `badger.<script name>(input)`. A
- * tool answers in text for Claude to read; a script gets the value as data
- * to filter and loop over.
+ * tool in each chat, and from scripts, which the run_script tool runs with
+ * them as `badger.<script name>(input)` (server/scripts.ts). A tool answers
+ * in text for Claude to read; a script gets the value as data to filter and
+ * loop over.
  */
 
 /** Who's calling: the chat, and where its commands run. */
@@ -108,15 +108,34 @@ export async function runForScript(o: Op, input: unknown, ctx: OpContext): Promi
   return r.value === undefined ? file : { ...(r.value as object), file }
 }
 
-/** What the `badger` command's help lists. */
-export function catalog(ops: Op[]) {
-  return ops.map((o) => ({
-    name: o.script,
-    tool: toolName(o),
-    description: o.description,
-    input: z.toJSONSchema(z.object(o.input), { io: 'input', unrepresentable: 'any' }),
-    returns: o.returns,
-  }))
+/**
+ * These ops as tools and scripts here, done somewhere else: on a runner, the
+ * hub's board and the bridge into its previews. Only an op's `run` uses what
+ * `make` is given, so it's given nothing.
+ */
+export function forwarded(make: (deps: never) => Op[], run: (o: Op, args: unknown, ctx: OpContext) => Promise<OpResult>): Op[] {
+  return make({} as never).map((o) => ({ ...o, run: (args, ctx) => run(o, args, ctx) }))
+}
+
+/** How a script calls an op, e.g. `badger.cards.get({ id?: number })`. */
+export function signature(o: Op): string {
+  const schema = z.toJSONSchema(z.object(o.input), { io: 'input', unrepresentable: 'any' }) as { properties?: Record<string, Schema>; required?: string[] }
+  const required = new Set(schema.required ?? [])
+  const args = Object.entries(schema.properties ?? {})
+    .map(([name, s]) => `${name}${required.has(name) ? '' : '?'}: ${typeName(s)}`)
+    .join(', ')
+  return `badger.${o.script}(${args ? `{ ${args} }` : ''})`
+}
+
+type Schema = { type?: string; enum?: unknown[]; anyOf?: Schema[]; items?: Schema }
+
+function typeName(s: Schema | undefined): string {
+  if (!s || typeof s !== 'object') return 'any'
+  if (s.enum) return s.enum.map((v) => JSON.stringify(v)).join(' | ')
+  if (s.anyOf) return s.anyOf.map(typeName).join(' | ')
+  if (s.type === 'integer') return 'number'
+  if (s.type === 'array') return `${typeName(s.items)}[]`
+  return s.type ?? 'any'
 }
 
 export const message = (err: unknown) => (err instanceof Error ? err.message : String(err))

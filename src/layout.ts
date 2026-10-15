@@ -1,5 +1,7 @@
 import { createSignal } from 'solid-js'
 import { api } from './api.ts'
+import { LOCAL } from './machines.ts'
+import { wsKey, type Ws } from './terminals.ts'
 
 /**
  * The panels around a chat. The chat is a fixed leaf of a split tree; the
@@ -211,9 +213,17 @@ export function narrowTree(l: Layout): Node {
   return { type: 'split', dir: 'col', children: [CHAT, merged], sizes: [1 - share, share] }
 }
 
-// ── State, per workspace root ──
+// ── State, per workspace: a root on a machine ──
 
 const KEY = 'badger.layouts'
+
+/** A terminal view with the machine in its id, as the browser's ids are now: `<machine>.<id>`. */
+function withMachine(g: Group): Group {
+  if (!g.views.some((v) => v.kind === 'terminal' && !v.id.includes('.'))) return g
+  const fix = (key: string) => (key.startsWith('terminal:') && !key.includes('.') ? `terminal:${LOCAL}.${key.slice('terminal:'.length)}` : key)
+  const views = g.views.map((v): View => (v.kind === 'terminal' && !v.id.includes('.') ? { ...v, id: `${LOCAL}.${v.id}` } : v))
+  return { ...g, views, active: g.active && fix(g.active) }
+}
 
 function load(storage: Storage): Record<string, Layout> | undefined {
   try {
@@ -221,6 +231,8 @@ function load(storage: Storage): Record<string, Layout> | undefined {
     const all = raw ? (JSON.parse(raw) as Record<string, Layout>) : undefined
     // Anything without its chat is from a bug or an older shape; start that one over.
     for (const root in all) if (!leaves(all[root].tree).some((l) => l.type === 'chat')) delete all[root]
+    // Saved before there were other machines, terminals were their bare ids; those are all the hub's own.
+    for (const root in all) all[root] = { ...all[root], tree: mapGroups(all[root].tree, withMachine) }
     return all
   } catch {
     return undefined
@@ -232,13 +244,13 @@ const [layouts, setLayouts] = createSignal<Record<string, Layout>>(load(sessionS
 localStorage.removeItem('badger.terminalDock')
 localStorage.removeItem('badger.terminalDockHeight')
 
-export const layoutOf = (root: string): Layout => layouts()[root] ?? EMPTY
+export const layoutOf = (ws: Ws): Layout => layouts()[wsKey(ws)] ?? EMPTY
 
-export function updateLayout(root: string, change: (l: Layout) => Layout): void {
-  const before = layoutOf(root)
+export function updateLayout(ws: Ws, change: (l: Layout) => Layout): void {
+  const before = layoutOf(ws)
   const after = change(before)
   if (after === before) return
-  const next = { ...layouts(), [root]: after }
+  const next = { ...layouts(), [wsKey(ws)]: after }
   setLayouts(next)
   const json = JSON.stringify(next)
   sessionStorage.setItem(KEY, json)
@@ -246,12 +258,12 @@ export function updateLayout(root: string, change: (l: Layout) => Layout): void 
 }
 
 /** Whether a workspace's panels are on screen. */
-export const panelsShown = (root: string) => !layoutOf(root).hidden && groupsOf(layoutOf(root).tree).length > 0
+export const panelsShown = (ws: Ws) => !layoutOf(ws).hidden && groupsOf(layoutOf(ws).tree).length > 0
 
 /** Whether a view is on screen: its group's tab showing, with panels shown. */
-export function viewShown(root: string, key: string): boolean {
-  if (!panelsShown(root)) return false
-  const tree = wide() ? layoutOf(root).tree : narrowTree(layoutOf(root))
+export function viewShown(ws: Ws, key: string): boolean {
+  if (!panelsShown(ws)) return false
+  const tree = wide() ? layoutOf(ws).tree : narrowTree(layoutOf(ws))
   return groupsOf(tree).some((g) => activeOf(g) === key)
 }
 
@@ -267,9 +279,9 @@ const pending = new Set<string>()
  * and new ones join the group last worked in, or a new panel under the chat.
  * New ones don't show hidden panels; whoever opened them can.
  */
-export function placeTerminals(root: string, ids: string[]): void {
+export function placeTerminals(ws: Ws, ids: string[]): void {
   for (const id of ids) pending.delete(id)
-  updateLayout(root, (l) => {
+  updateLayout(ws, (l) => {
     const live = new Set(ids)
     let tree = l.tree
     for (const v of viewsOf(tree)) if (v.kind === 'terminal' && !live.has(v.id) && !pending.has(v.id)) tree = removeView(tree, viewKey(v))
@@ -290,17 +302,17 @@ export function placeTerminals(root: string, ids: string[]): void {
  * Opens a shell and shows it: in a group, beside a leaf, or by default in
  * the group last worked in (a new panel under the chat if there's none).
  */
-export async function openTerminal(root: string, cwd: string, where?: { group: string } | { beside: string; edge: Edge }): Promise<void> {
+export async function openTerminal(ws: Ws, cwd: string, where?: { group: string } | { beside: string; edge: Edge }): Promise<void> {
   let id: string
   try {
-    id = (await api.createTerminal({ cwd })).id
+    id = (await api.createTerminal({ cwd, machine: ws.machine })).id
   } catch (err) {
     alert(`Couldn't open a terminal: ${err instanceof Error ? err.message : err}`)
     return
   }
   pending.add(id)
   const view: View = { kind: 'terminal', id }
-  updateLayout(root, (l) => {
+  updateLayout(ws, (l) => {
     // The server's list may have got here first and placed it already.
     const tree = removeView(l.tree, viewKey(view))
     const groups = groupsOf(tree)
@@ -317,9 +329,9 @@ export async function openTerminal(root: string, cwd: string, where?: { group: s
  * Shows a view that needs nothing started, e.g. a task: where it already is,
  * else in the group last worked in, else in a new panel beside the chat.
  */
-export function openView(root: string, view: View): void {
+export function openView(ws: Ws, view: View): void {
   const key = viewKey(view)
-  updateLayout(root, (l) => {
+  updateLayout(ws, (l) => {
     const at = groupOf(l.tree, key)
     if (at) return { ...l, tree: setActive(l.tree, key), focus: at.id, hidden: false }
     const groups = groupsOf(l.tree)
@@ -332,8 +344,8 @@ export function openView(root: string, view: View): void {
 }
 
 /** Takes other chats' tasks and plans out of a workspace's panels: they only show beside their own chat. */
-export function dropOtherChats(root: string, session: string): void {
-  updateLayout(root, (l) => {
+export function dropOtherChats(ws: Ws, session: string): void {
+  updateLayout(ws, (l) => {
     let tree = l.tree
     for (const v of viewsOf(tree)) if (sessionOf(v) && sessionOf(v) !== session) tree = removeView(tree, viewKey(v))
     return tree === l.tree ? l : { ...l, tree }
@@ -346,8 +358,8 @@ export function dropOtherChats(root: string, session: string): void {
  * where a page gets the width it needs. Shows hidden panels: asking for a
  * preview is asking to see it.
  */
-export function openPreview(root: string, port: number, opts: { name?: string; path?: string } = {}): void {
-  updateLayout(root, (l) => {
+export function openPreview(ws: Ws, port: number, opts: { name?: string; path?: string } = {}): void {
+  updateLayout(ws, (l) => {
     const id = String(port)
     const found = viewsOf(l.tree).find((v): v is PreviewView => v.kind === 'preview' && v.id === id)
     if (found) {
@@ -363,16 +375,16 @@ export function openPreview(root: string, port: number, opts: { name?: string; p
 }
 
 /** Loads a preview again from the path it was opened at. */
-export function reloadPreview(root: string, view: PreviewView): void {
-  updateLayout(root, (l) => ({ ...l, tree: replaceView(l.tree, { ...view, nav: (view.nav ?? 0) + 1 }) }))
+export function reloadPreview(ws: Ws, view: PreviewView): void {
+  updateLayout(ws, (l) => ({ ...l, tree: replaceView(l.tree, { ...view, nav: (view.nav ?? 0) + 1 }) }))
 }
 
 /** Show or hide a workspace's panels. Showing with nothing to show opens a shell, like any terminal panel. */
-export function togglePanels(root: string, cwd: string): void {
-  if (panelsShown(root)) return updateLayout(root, (l) => ({ ...l, hidden: true }))
-  const l = layoutOf(root)
-  if (!groupsOf(l.tree).length) return void openTerminal(root, cwd)
-  updateLayout(root, (l) => ({ ...l, hidden: false }))
+export function togglePanels(ws: Ws, cwd: string): void {
+  if (panelsShown(ws)) return updateLayout(ws, (l) => ({ ...l, hidden: true }))
+  const l = layoutOf(ws)
+  if (!groupsOf(l.tree).length) return void openTerminal(ws, cwd)
+  updateLayout(ws, (l) => ({ ...l, hidden: false }))
   const g = groupsOf(l.tree).find((g) => g.id === l.focus) ?? groupsOf(l.tree)[0]
   setFocusRequest(activeOf(g))
 }

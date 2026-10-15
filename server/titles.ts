@@ -1,4 +1,4 @@
-import { getSessionMessages, query } from '@anthropic-ai/claude-agent-sdk'
+import { getSessionMessages, query, type SessionStore } from '@anthropic-ai/claude-agent-sdk'
 import type { Card } from '../shared/protocol.ts'
 
 const FIRST_PROMPT_LIMIT = 1500
@@ -8,9 +8,15 @@ const INSTRUCTIONS = `You name chats in a sidebar. Reply with only the title: 3 
 Describe what the chat is about now, which may have moved on from how it started. Be specific enough to tell it apart from other chats.
 If the chat is on a card, every chat on that card shares its topic, so name this chat's part of it rather than repeating the card title.`
 
-/** A short title for a chat from its transcript, by a one-off model call that doesn't touch the chat itself. */
-export async function suggestTitle(sessionId: string, current: string, card: Pick<Card, 'title' | 'description'> | undefined, cwd: string): Promise<string> {
-  const turns = (await getSessionMessages(sessionId))
+/** A short title for a chat from its transcript (read from `sessionStore`), by a one-off model call that doesn't touch the chat itself. */
+export async function suggestTitle(
+  sessionId: string,
+  current: string,
+  card: Pick<Card, 'title' | 'description'> | undefined,
+  cwd: string,
+  sessionStore: SessionStore,
+): Promise<string> {
+  const turns = (await getSessionMessages(sessionId, { sessionStore }))
     .filter((m) => !m.parent_tool_use_id)
     .flatMap((m) => {
       const text = textOf(m.message)

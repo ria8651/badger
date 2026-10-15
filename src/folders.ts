@@ -1,13 +1,15 @@
 import { createSignal } from 'solid-js'
+import { LOCAL, machineOf, machines } from './machines.ts'
 
-/** Where folderless chats run, from the server's config. */
+/** Where folderless chats run on the hub's own machine, from the server's config. */
 const [scratch, setScratch] = createSignal<string>()
 export { setScratch }
 
-/** Where folderless chats run. */
-export const scratchDir = scratch
+/** Where a machine's folderless chats run: the hub's from its config, another's once its runner has said. */
+export const scratchDir = (machine: string = LOCAL) => machineOf(machine)?.scratchDir ?? (machine === LOCAL ? scratch() : undefined)
 
-export const isScratch = (cwd?: string) => !!cwd && cwd === scratch()
+/** Any machine's folder for folderless chats. */
+export const isScratch = (cwd?: string) => !!cwd && (cwd === scratch() || machines().some((m) => m.scratchDir === cwd))
 
 export const basename = (path: string) => path.split('/').filter(Boolean).pop() ?? path
 
@@ -35,12 +37,14 @@ export function cardWorktreeName(card: { id: number; title: string }): string {
   return slug ? `${card.id}-${slug}` : `card-${card.id}`
 }
 
-/** Where a new chat should start: the repo of the most recent of these chats that ran in one, and whether that was a worktree. */
-export function lastWorkedIn(sessions: { cwd?: string; gone?: boolean; lastModified: number }[]): { cwd: string; worktree: boolean } | undefined {
+/** Where a new chat should start: the repo of the most recent of these chats that ran in one, on its machine, and whether that was a worktree. */
+export function lastWorkedIn(
+  sessions: { cwd?: string; machine?: string; gone?: boolean; lastModified: number }[],
+): { cwd: string; machine: string; worktree: boolean } | undefined {
   const latest = sessions
     .filter((s) => s.cwd && !s.gone && !isScratch(s.cwd))
     .reduce<(typeof sessions)[number] | undefined>((a, s) => (!a || s.lastModified > a.lastModified ? s : a), undefined)
   if (!latest?.cwd) return undefined
   const wt = worktreeOf(latest.cwd)
-  return { cwd: wt?.repo ?? latest.cwd, worktree: !!wt }
+  return { cwd: wt?.repo ?? latest.cwd, machine: latest.machine || LOCAL, worktree: !!wt }
 }

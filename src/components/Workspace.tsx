@@ -37,12 +37,13 @@ import {
   type Rect,
   type View,
 } from '../layout.ts'
+import { LOCAL, isOnline, onMachine } from '../machines.ts'
 import { previewUrl } from '../previews.ts'
-import { terminalLabel, terminals, terminalsLoaded } from '../terminals.ts'
+import { inWs, terminalLabel, terminals, terminalsListed, type Ws } from '../terminals.ts'
 import { PreviewFrame } from './PreviewFrame.tsx'
 import { PortButtons, RestartButton, StatusDot, ghost } from './Terminals.tsx'
 import { TerminalView } from './TerminalView.tsx'
-import { LiveDot } from './ui.tsx'
+import { LiveDot, modalOpen } from './ui.tsx'
 
 /** Height of a group's tab bar, which its views sit under. */
 const BAR = 36
@@ -87,8 +88,8 @@ const BINDINGS: [string, string][] = [
  * moving and resizing never remount a terminal.
  */
 export function Workspace(props: {
-  /** The workspace (git root); panels aren't offered until it's known. */
-  root?: string
+  /** The workspace (git root on the chat's machine); panels aren't offered until it's known. */
+  ws?: Ws
   cwd?: string
   /** The chat's session, whose tasks and plan can show in panels. */
   sessionId: string
@@ -101,9 +102,9 @@ export function Workspace(props: {
   let container!: HTMLDivElement
 
   const tree = createMemo(() => {
-    const root = props.root
-    if (!root || !panelsShown(root)) return CHAT
-    return wide() ? layoutOf(root).tree : narrowTree(layoutOf(root))
+    const ws = props.ws
+    if (!ws || !panelsShown(ws)) return CHAT
+    return wide() ? layoutOf(ws).tree : narrowTree(layoutOf(ws))
   })
   const measured = createMemo(() => measure(tree()))
   const rect = (id: string) => measured().rects.get(id)
@@ -111,25 +112,26 @@ export function Workspace(props: {
   const groupById = (id: string) => groupsOf(tree()).find((g) => g.id === id)
   // Every view in the workspace, shown or not, so hiding or moving one never unmounts it.
   const keys = createMemo(() =>
-    props.root ? viewsOf(layoutOf(props.root).tree).filter((v) => (sessionOf(v) ?? props.sessionId) === props.sessionId).map(viewKey) : [],
+    props.ws ? viewsOf(layoutOf(props.ws).tree).filter((v) => (sessionOf(v) ?? props.sessionId) === props.sessionId).map(viewKey) : [],
   )
 
-  const update = (change: Parameters<typeof updateLayout>[1]) => props.root && updateLayout(props.root, change)
-  const viewOf = (key: string) => (props.root ? viewsOf(layoutOf(props.root).tree).find((v) => viewKey(v) === key) : undefined)
+  const update = (change: Parameters<typeof updateLayout>[1]) => props.ws && updateLayout(props.ws, change)
+  const viewOf = (key: string) => (props.ws ? viewsOf(layoutOf(props.ws).tree).find((v) => viewKey(v) === key) : undefined)
 
   // The server's terminals are the truth: closed ones leave the layout, new ones join it.
+  // Not while their runner is offline, or back but not yet listed: they're missing from the list then, not closed.
   createEffect(() => {
-    const root = props.root
-    if (!root || !terminalsLoaded()) return
+    const ws = props.ws
+    if (!ws || !isOnline(ws.machine) || !terminalsListed(ws.machine)) return
     const ids = terminals()
-      .filter((t) => t.root === root)
+      .filter((t) => inWs(t, ws))
       .sort((a, b) => a.createdAt - b.createdAt)
       .map((t) => t.id)
-    untrack(() => placeTerminals(root, ids))
+    untrack(() => placeTerminals(ws, ids))
   })
 
   // Another chat's tasks and plan don't belong beside this one.
-  createEffect(() => props.root && untrack(() => dropOtherChats(props.root!, props.sessionId)))
+  createEffect(() => props.ws && untrack(() => dropOtherChats(props.ws!, props.sessionId)))
 
   // ── Focus ──
 
@@ -204,7 +206,7 @@ export function Workspace(props: {
     props.onFocusChat()
   }
 
-  const newTerminal = (where?: Parameters<typeof openTerminal>[2]) => props.root && props.cwd && void openTerminal(props.root, props.cwd, where)
+  const newTerminal = (where?: Parameters<typeof openTerminal>[2]) => props.ws && props.cwd && void openTerminal(props.ws, props.cwd, where)
 
   // ── Resizing ──
 
@@ -312,8 +314,10 @@ export function Workspace(props: {
 
   const [leader, setLeader] = createSignal(false)
   const onKey = (e: KeyboardEvent) => {
+    // Behind a modal: its keys aren't for the panels.
+    if (modalOpen()) return setLeader(false)
     if (!leader()) {
-      if (!isLeader(e) || !props.root) return
+      if (!isLeader(e) || !props.ws) return
       // Caught on the way down, so neither the composer nor a terminal sees it.
       e.preventDefault()
       e.stopPropagation()
@@ -347,8 +351,8 @@ export function Workspace(props: {
       case '0':
         return props.onFocusChat()
       case 'p':
-        if (panelsShown(props.root!)) return hide()
-        return props.cwd && togglePanels(props.root!, props.cwd)
+        if (panelsShown(props.ws!)) return hide()
+        return props.cwd && togglePanels(props.ws!, props.cwd)
     }
   }
   const cancelLeader = () => setLeader(false)
@@ -363,6 +367,8 @@ export function Workspace(props: {
 
   // ── Rendering ──
 
+  /** Where the workspace's terminals and ports are, so its previews too. */
+  const machine = () => props.ws?.machine ?? LOCAL
   const tabLabel = (v?: View) => {
     if (v?.kind === 'task') return props.panes.label(v.id)
     if (v?.kind === 'plan') return 'Plan'
@@ -372,10 +378,10 @@ export function Workspace(props: {
   }
   const tabTitle = (v?: View) =>
     v?.kind === 'preview'
-      ? `${tabLabel(v)}\n${previewUrl(v.id, v.path) ?? `Port ${v.id}`}`
+      ? `${tabLabel(v)}\n${previewUrl(v.id, v.path, machine()) ?? `Port ${v.id}`}`
       : v?.kind === 'task' || v?.kind === 'plan'
         ? tabLabel(v)
-        : `${tabLabel(v)}\n${terminalOf(v)?.cwd ?? ''}`
+        : [tabLabel(v), terminalOf(v)?.cwd, onMachine(machine()) && `on ${onMachine(machine())}`].filter(Boolean).join('\n')
 
   const GroupFrame = (p: { group: Group }) => {
     const g = () => p.group
@@ -452,7 +458,7 @@ export function Workspace(props: {
           <Show when={terminalOf(active())}>
             {(t) => (
               <>
-                <PortButtons terminal={t()} onOpen={(port) => props.root && openPreview(props.root, port, { name: terminalLabel(t()) })} />
+                <PortButtons terminal={t()} onOpen={(port) => props.ws && openPreview(props.ws, port, { name: terminalLabel(t()) })} />
                 <RestartButton terminal={t()} />
                 <button onClick={() => props.onOpenPage(t().id)} title="Open on its own page" class={ghost()}>
                   <SquareArrowOutUpRight class="size-3.5" />
@@ -463,10 +469,10 @@ export function Workspace(props: {
           <Show when={preview()}>
             {(v) => (
               <>
-                <button onClick={() => props.root && reloadPreview(props.root, v())} title="Reload from where it was opened" class={ghost()}>
+                <button onClick={() => props.ws && reloadPreview(props.ws, v())} title="Reload from where it was opened" class={ghost()}>
                   <RotateCw class="size-3.5" />
                 </button>
-                <Show when={previewUrl(v().id, v().path)}>
+                <Show when={previewUrl(v().id, v().path, machine())}>
                   {(url) => (
                     <a href={url()} target="_blank" rel="noopener" title="Open in a new browser tab" class={ghost()}>
                       <SquareArrowOutUpRight class="size-3.5" />
@@ -514,7 +520,7 @@ export function Workspace(props: {
                       {(t) => <TerminalView id={t().id} visible={!!place()} onReady={(focus) => ready(key, focus)} class="size-full px-3 py-2" />}
                     </Match>
                     <Match when={v().kind === 'preview' && (v() as PreviewView)}>
-                      {(p) => <PreviewFrame view={p()} onReady={(focus) => ready(key, focus)} class="size-full" />}
+                      {(p) => <PreviewFrame view={p()} machine={machine()} onReady={(focus) => ready(key, focus)} class="size-full" />}
                     </Match>
                     <Match when={taskOf(v())}>{(id) => props.panes.render(id(), (focus) => ready(key, focus))}</Match>
                     <Match when={v().kind === 'plan'}>{props.panes.renderPlan((focus) => ready(key, focus))}</Match>

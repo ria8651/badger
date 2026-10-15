@@ -6,7 +6,7 @@ import type { ImageAttachment } from '../../shared/protocol.ts'
 import { imageUrl } from '../images.ts'
 import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
-import { plural } from './ui.tsx'
+import { modalOpen, plural } from './ui.tsx'
 
 /**
  * Images as thumbnails, and big pastes and the card Claude was told about as
@@ -137,7 +137,7 @@ const chip = 'flex h-7 items-center rounded-lg border text-xs transition-colors'
 function Lightbox(props: { image: ImageAttachment; onClose: () => void }) {
   // Caught first and stopped, so Escape closes this rather than also stopping Claude from the composer.
   const onKey = (e: KeyboardEvent) => {
-    if (e.key !== 'Escape') return
+    if (e.key !== 'Escape' || modalOpen()) return
     e.stopPropagation()
     props.onClose()
   }

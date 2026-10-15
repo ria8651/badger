@@ -8,7 +8,8 @@ import { Columns, STATUS_LABELS } from './Board.tsx'
 import { MarkdownEditor } from './MarkdownEditor.tsx'
 import { RenameChat } from './RenameChat.tsx'
 import { ChatDot, Menu, SearchMenu, Select, type SearchItem } from './ui.tsx'
-import { ChatSummary } from './ChatSummary.tsx'
+import { ChatSummary, MachineName } from './ChatSummary.tsx'
+import { LOCAL, onMachine } from '../machines.ts'
 import { attention } from '../attention.ts'
 
 const STATUS_OPTIONS = CARD_STATUSES.map((value) => ({ value, label: STATUS_LABELS[value] }))
@@ -32,7 +33,7 @@ export function CardView(props: {
   onOpenCard: (id: number | null) => void
   onOpenChat: (id: string) => void
   /** Where the card's work last happened, if anywhere: the repo, and whether it was in the card's worktree. */
-  onNewChat: (from?: { cwd: string; worktree: boolean }) => void
+  onNewChat: (from?: { cwd: string; machine: string; worktree: boolean }) => void
 }) {
   const isProject = () => props.card.parentId === null
   const path = createMemo(() => ancestors(props.cards, props.card.id))
@@ -68,14 +69,17 @@ export function CardView(props: {
     return found.sort((a, b) => rank(a) - rank(b) || b.lastModified - a.lastModified).slice(0, 100).map(item)
   }
   /** Worktrees this card's chats run in. Made by starting a chat in one; nothing else records them. */
-  const worktrees = createMemo(() => [...new Set(chats().flatMap((s) => (s.cwd && !s.gone && worktreeOf(s.cwd) ? [s.cwd] : [])))])
+  // As strings, so the list compares equal across refreshes and rows aren't remade; two machines can have the same path.
+  const worktrees = createMemo(() => [
+    ...new Set(chats().flatMap((s) => (s.cwd && !s.gone && worktreeOf(s.cwd) ? [JSON.stringify([s.machine || LOCAL, s.cwd])] : []))),
+  ])
   // A new chat picks up where the card's latest chat ran, else where its project's work happens, but not in another card's worktree.
   // Its folder can still be changed before the first message.
   const newChat = () => {
     const project = projectOf(props.cards, props.card.id)
     const projectIds = project ? [project, ...descendants(props.cards, project.id)].flatMap((c) => c.sessionIds) : []
     const fallback = lastWorkedIn(props.sessions.filter((s) => projectIds.includes(s.id)))
-    props.onNewChat(lastWorkedIn(chats()) ?? (fallback && { cwd: fallback.cwd, worktree: false }))
+    props.onNewChat(lastWorkedIn(chats()) ?? (fallback && { ...fallback, worktree: false }))
   }
   // A project with nothing on its board yet opens with its brief showing, so there's somewhere to start.
   const [showBrief, setShowBrief] = createSignal(!inside().length)
@@ -189,6 +193,7 @@ export function CardView(props: {
                   <span class="min-w-0 flex-1 truncate text-[13px] text-fg-2 group-hover:text-fg">{s.title}</span>
                   <ChatDot running={s.running} attention={attention()[s.id]} />
                   <span class="max-w-[40%] shrink-0 truncate text-[11px] text-fg-3">{s.cwd && folderLabel(s.cwd)}</span>
+                  <Show when={onMachine(s.machine)}>{(name) => <MachineName machine={s.machine} name={name()} class="text-[11px] text-fg-3" />}</Show>
                 </button>
                 <button
                   onClick={() => setRenaming(s.id)}
@@ -212,7 +217,12 @@ export function CardView(props: {
 
       <Show when={worktrees().length}>
         <h2 class="mt-8 border-b border-line pb-2 text-[13px] font-medium text-fg-2">Worktrees</h2>
-        <For each={worktrees()}>{(path) => <WorktreeRow path={path} sessions={props.sessions} />}</For>
+        <For each={worktrees()}>
+          {(key) => {
+            const [machine, path] = JSON.parse(key) as [string, string]
+            return <WorktreeRow path={path} machine={machine} sessions={props.sessions} />
+          }}
+        </For>
       </Show>
     </>
   )
@@ -284,11 +294,11 @@ export function CardView(props: {
 }
 
 /** One worktree's branch and what's not merged yet, with a way to remove it once the work is in. */
-function WorktreeRow(props: { path: string; sessions: SessionSummary[] }) {
+function WorktreeRow(props: { path: string; machine: string; sessions: SessionSummary[] }) {
   // Refetched whenever the chat list changes, which is roughly whenever work happened.
   const [status, { refetch }] = createResource(
-    () => [props.path, props.sessions] as const,
-    ([path]) => api.worktree(path),
+    () => [props.path, props.machine, props.sessions] as const,
+    ([path, machine]) => api.worktree(path, machine),
   )
   const [error, setError] = createSignal<string>()
   const summary = () => {
@@ -305,7 +315,7 @@ function WorktreeRow(props: { path: string; sessions: SessionSummary[] }) {
     const warning = s?.unmerged ? `\n\nIts branch ${s.branch} has unmerged commits, so it will be kept.` : ''
     if (!confirm(`Remove worktree ${folderLabel(props.path)}?${warning}`)) return
     setError(undefined)
-    api.removeWorktree(props.path).catch((err: Error) => {
+    api.removeWorktree(props.path, props.machine).catch((err: Error) => {
       setError(err.message)
       refetch()
     })
@@ -317,6 +327,7 @@ function WorktreeRow(props: { path: string; sessions: SessionSummary[] }) {
         <span class="min-w-0 truncate font-mono text-xs text-fg-2" title={props.path}>
           {status()?.branch || folderLabel(props.path)}
         </span>
+        <Show when={onMachine(props.machine)}>{(name) => <MachineName machine={props.machine} name={name()} class="text-[11px] text-fg-3" />}</Show>
         <span class="ml-auto shrink-0 text-[11px] text-fg-3">{summary()}</span>
         <button
           onClick={remove}

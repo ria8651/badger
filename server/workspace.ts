@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from 'node:child_process'
-import { accessSync, constants, statSync } from 'node:fs'
+import { accessSync, constants, existsSync, mkdirSync, writeFileSync, statSync } from 'node:fs'
 import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -110,4 +110,15 @@ export async function mergeBlocker(checkout: string): Promise<string | undefined
     return `${checkout} has uncommitted changes (${files.slice(0, 5).join(', ')}${files.length > 5 ? ', …' : ''}).`
   }
   return undefined
+}
+
+/** Folderless chats run here, since Claude Code always needs a directory. It says there's no codebase. */
+export function prepareScratch(dir: string): void {
+  mkdirSync(dir, { recursive: true })
+  if (!existsSync(join(dir, 'CLAUDE.md'))) {
+    writeFileSync(
+      join(dir, 'CLAUDE.md'),
+      'Chats here are general questions, not tied to any project. There is no codebase to explore; just answer. This folder is shared scratch space for every such chat.\n',
+    )
+  }
 }

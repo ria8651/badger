@@ -3,7 +3,8 @@ import { Portal } from 'solid-js/web'
 import { Check, CornerLeftUp, Eye, EyeOff, File, Folder, FolderGit2, FolderPlus, House, Upload, X } from '../icons'
 import type { FileEntry, Listing } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
-import { Button, inputClass, ltr, plural } from './ui.tsx'
+import { LOCAL } from '../machines.ts'
+import { Button, inputClass, ltr, modalOpen, plural } from './ui.tsx'
 
 /** Bytes as a short size, e.g. 1.2 GB. */
 export function formatBytes(bytes: number): string {
@@ -22,13 +23,15 @@ const join = (dir: string, name: string) => `${dir.replace(/\/$/, '')}/${name}`
 const LAST_KEY = 'badger.fileBrowser.'
 
 /**
- * Browses the server's disk in a modal. Picks a folder (`folder` mode: the one open, or a repo in it) or
+ * Browses a machine's disk in a modal. Picks a folder (`folder` mode: the one open, or a repo in it) or
  * files (`files` mode, with an upload from this device beside it). Folders open on click; files toggle.
  */
 export function FileBrowser(props: {
   mode: 'folder' | 'files'
   title: string
-  /** Where to open; otherwise where the last browse of this mode ended, or home. */
+  /** Whose disk; the hub's own if not given. Read once: a browser stays on one machine. */
+  machine?: string
+  /** Where to open; otherwise where the last browse of this mode on this machine ended, or home. */
   start?: string
   onClose: () => void
   onPickFolder?: (path: string) => void | Promise<void>
@@ -36,7 +39,9 @@ export function FileBrowser(props: {
   /** Offered in files mode, to pick from this device instead. */
   onUpload?: () => void
 }) {
-  const [path, setPath] = createSignal<string | undefined>(props.start ?? localStorage.getItem(LAST_KEY + props.mode) ?? undefined)
+  const machine = props.machine && props.machine !== LOCAL ? props.machine : undefined
+  const lastKey = LAST_KEY + props.mode + (machine ? `.${machine}` : '')
+  const [path, setPath] = createSignal<string | undefined>(props.start ?? localStorage.getItem(lastKey) ?? undefined)
   const [hidden, setHidden] = createSignal(false)
   const [filter, setFilter] = createSignal('')
   const [selected, setSelected] = createSignal<string[]>([])
@@ -50,8 +55,8 @@ export function FileBrowser(props: {
     async (q): Promise<Listing | undefined> => {
       setError()
       try {
-        const l = await api.listDir(q.path, q.hidden)
-        localStorage.setItem(LAST_KEY + props.mode, l.path)
+        const l = await api.listDir(q.path, q.hidden, machine)
+        localStorage.setItem(lastKey, l.path)
         return l
       } catch (e) {
         setError((e as Error).message)
@@ -99,7 +104,7 @@ export function FileBrowser(props: {
     name = name.trim()
     if (!name) return
     try {
-      const { path } = await api.makeFolder(join(current(), name))
+      const { path } = await api.makeFolder(join(current(), name), machine)
       go(path)
     } catch (e) {
       setError((e as Error).message)
@@ -107,7 +112,7 @@ export function FileBrowser(props: {
   }
 
   const onKey = (e: KeyboardEvent) => {
-    if (e.key !== 'Escape') return
+    if (e.key !== 'Escape' || modalOpen()) return
     e.stopPropagation()
     if (naming()) setNaming(false)
     else props.onClose()
