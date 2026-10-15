@@ -10,7 +10,7 @@ import { cardWorktreeName, isScratch, worktreeOf } from '../folders.ts'
 import { FileBrowser } from './FileBrowser.tsx'
 import { FolderPicker } from './FolderPicker.tsx'
 import { openView, panelsShown, planView, togglePanels, viewKey, viewShown, wide } from '../layout.ts'
-import { LOCAL, isOnline, machineName, onMachine } from '../machines.ts'
+import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
 import { inWs, terminals, workspaceOf, type Ws } from '../terminals.ts'
 import { ChildChats, createChat } from '../useChat.ts'
 import { Attachments } from './Attachments.tsx'
@@ -22,7 +22,7 @@ import { reveal, revealed, toolLabel } from './ToolCard.tsx'
 import { TaskPane, Transcript, UserMessage, createIndex, detail, runInBackground, setDetail } from './Transcript.tsx'
 import { ContextMeter } from './Usage.tsx'
 import { Workspace, type ChatPanes } from './Workspace.tsx'
-import { IconButton, Loading, Menu, Select, touch, type Option } from './ui.tsx'
+import { IconButton, Loading, Menu, Select, modalOpen, touch, type Option } from './ui.tsx'
 
 const MODES: Option<PermissionMode>[] = [
   { value: 'default', label: 'Ask before edits', description: 'Claude asks before changing files or running commands.' },
@@ -124,6 +124,8 @@ export function Chat(props: {
   const offline = createMemo(() => !isOnline(machine()))
   /** Offline as far as the hub knows. While the hub itself can't be reached, what's typed still queues up for it. */
   const stranded = () => offline() && connected()
+  /** Not started yet, so where it runs is still being picked. */
+  const picking = () => !!props.onPickCwd && !state.cwd && !started()
   // Holds the last one while a new folder's is looked up, so moving into a worktree doesn't drop the terminals button for a moment.
   const ws = createMemo<Ws | undefined>(
     (last) => {
@@ -371,7 +373,7 @@ export function Chat(props: {
     const target = e.target as Node
     if (more() && !morePanel?.contains(target) && !moreButton.contains(target)) setMore(false)
   }
-  const onEscape = (e: KeyboardEvent) => e.key === 'Escape' && more() && setMore(false)
+  const onEscape = (e: KeyboardEvent) => e.key === 'Escape' && !modalOpen() && more() && setMore(false)
   document.addEventListener('pointerdown', onOutside)
   document.addEventListener('keydown', onEscape)
   onCleanup(() => {
@@ -406,7 +408,7 @@ export function Chat(props: {
                   when={state.messages.length}
                   fallback={
                     <Show
-                      when={props.onPickCwd && !state.cwd && !started()}
+                      when={picking()}
                       fallback={
                         <div class="pt-[22vh] text-center">
                           <p class="text-base text-fg-2">What are we working on?</p>
@@ -519,7 +521,17 @@ export function Chat(props: {
                   <div class="flex items-start gap-3 bg-surface rounded-lg px-3 py-2 text-[13px] text-fg-2">
                     <MonitorOff class="size-4 shrink-0 mt-0.5" />
                     <span class="flex-1">
-                      {machineName(machine())} is offline. This chat runs there, so it can't take messages until it's back.
+                      <Show
+                        when={isRemoved(machine())}
+                        fallback={
+                          picking()
+                            ? `${machineName(machine())} is offline. Pick another runner above, or wait for it to come back.`
+                            : `${machineName(machine())} is offline. This chat runs there, so it can't take messages until it's back.`
+                        }
+                      >
+                        {knownName(machine()) ?? 'The runner this chat was on'} was removed.{' '}
+                        {picking() ? 'Pick another runner above to start this chat.' : 'This chat ran there, so it can only be read now.'}
+                      </Show>
                     </span>
                   </div>
                 </Show>

@@ -17,7 +17,7 @@ import { AccountLimits } from './components/Usage.tsx'
 import { StatusDot, TerminalPage } from './components/Terminals.tsx'
 import { ChatSummary, MachineName } from './components/ChatSummary.tsx'
 import { Settings } from './components/Settings.tsx'
-import { Loading, Menu } from './components/ui.tsx'
+import { Loading, Menu, modalOpen } from './components/ui.tsx'
 import { terminalLabel, terminalWs, terminals, terminalsLoaded, wsKey } from './terminals.ts'
 import { accountUsage } from './usage.ts'
 import { isDark, toggleTheme } from './theme.ts'
@@ -143,7 +143,7 @@ export function App() {
       setDrawer(false)
     }
     addEventListener('popstate', onPop)
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setDrawer(false)
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !modalOpen() && setDrawer(false)
     addEventListener('keydown', onKey)
     const offAttention = onAttention((id, state) => {
       const title = sessions().find((s) => s.id === id)?.title ?? 'New chat'

@@ -4,6 +4,10 @@ import { Check, ChevronDown } from '../icons'
 import type { AttentionState } from '../../shared/protocol.ts'
 import { connected } from '../api.ts'
 
+/** A modal, like Settings, is open. Its keys are its own: shortcuts and Escape behind it leave them be. */
+const [modalOpen, setModalOpen] = createSignal(false)
+export { modalOpen, setModalOpen }
+
 /** Ink-filled when primary; otherwise a hairline outline. */
 export function Button(props: JSX.ButtonHTMLAttributes<HTMLButtonElement> & { primary?: boolean }) {
   const [local, rest] = splitProps(props, ['primary', 'class'])

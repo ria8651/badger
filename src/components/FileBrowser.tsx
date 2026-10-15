@@ -4,7 +4,7 @@ import { Check, CornerLeftUp, Eye, EyeOff, File, Folder, FolderGit2, FolderPlus,
 import type { FileEntry, Listing } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { LOCAL } from '../machines.ts'
-import { Button, inputClass, ltr, plural } from './ui.tsx'
+import { Button, inputClass, ltr, modalOpen, plural } from './ui.tsx'
 
 /** Bytes as a short size, e.g. 1.2 GB. */
 export function formatBytes(bytes: number): string {
@@ -112,7 +112,7 @@ export function FileBrowser(props: {
   }
 
   const onKey = (e: KeyboardEvent) => {
-    if (e.key !== 'Escape') return
+    if (e.key !== 'Escape' || modalOpen()) return
     e.stopPropagation()
     if (naming()) setNaming(false)
     else props.onClose()

@@ -1,5 +1,6 @@
 import { createSignal } from 'solid-js'
 import { api } from './api.ts'
+import { LOCAL } from './machines.ts'
 import { wsKey, type Ws } from './terminals.ts'
 
 /**
@@ -216,12 +217,22 @@ export function narrowTree(l: Layout): Node {
 
 const KEY = 'badger.layouts'
 
+/** A terminal view with the machine in its id, as the browser's ids are now: `<machine>.<id>`. */
+function withMachine(g: Group): Group {
+  if (!g.views.some((v) => v.kind === 'terminal' && !v.id.includes('.'))) return g
+  const fix = (key: string) => (key.startsWith('terminal:') && !key.includes('.') ? `terminal:${LOCAL}.${key.slice('terminal:'.length)}` : key)
+  const views = g.views.map((v): View => (v.kind === 'terminal' && !v.id.includes('.') ? { ...v, id: `${LOCAL}.${v.id}` } : v))
+  return { ...g, views, active: g.active && fix(g.active) }
+}
+
 function load(storage: Storage): Record<string, Layout> | undefined {
   try {
     const raw = storage.getItem(KEY)
     const all = raw ? (JSON.parse(raw) as Record<string, Layout>) : undefined
     // Anything without its chat is from a bug or an older shape; start that one over.
     for (const root in all) if (!leaves(all[root].tree).some((l) => l.type === 'chat')) delete all[root]
+    // Saved before there were other machines, terminals were their bare ids; those are all the hub's own.
+    for (const root in all) all[root] = { ...all[root], tree: mapGroups(all[root].tree, withMachine) }
     return all
   } catch {
     return undefined

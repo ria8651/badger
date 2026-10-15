@@ -4,10 +4,10 @@ import type { TerminalInfo } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { LEADER, panelsShown, togglePanels } from '../layout.ts'
 import { previewUrl, previewsAvailable } from '../previews.ts'
-import { LOCAL, onMachine } from '../machines.ts'
-import { inWs, terminalLabel, terminalState, terminals, type Ws } from '../terminals.ts'
+import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
+import { inWs, terminalLabel, terminalState, terminals, terminalsListed, type Ws } from '../terminals.ts'
 import { TerminalView } from './TerminalView.tsx'
-import { ltr } from './ui.tsx'
+import { Loading, ltr } from './ui.tsx'
 
 /** Green while running, red if it failed or was killed, grey once it exited cleanly. */
 export function StatusDot(props: { terminal: TerminalInfo }) {
@@ -83,12 +83,27 @@ export function PortButtons(props: { terminal: TerminalInfo; onOpen?: (port: num
 /** One terminal filling the page, at /t/:id. */
 export function TerminalPage(props: { id: string; onClosed: () => void }) {
   const terminal = () => terminals().find((t) => t.id === props.id)
+  /** The machine it runs on, from its id: `<machine>.<id>`. */
+  const machine = () => props.id.slice(0, Math.max(0, props.id.lastIndexOf('.'))) || LOCAL
+  // Missing from the list while its runner is away, or back but hasn't said what it has: not closed.
+  const missing = () =>
+    isRemoved(machine())
+      ? `${knownName(machine()) ?? 'The runner this terminal ran on'} was removed, so this terminal is gone`
+      : !isOnline(machine())
+        ? `${machineName(machine())} is offline. This terminal runs there, so it's back when that is`
+        : !terminalsListed(machine())
+          ? undefined
+          : 'This terminal is closed'
 
   return (
     <div class="flex h-full min-w-0 flex-1 flex-col">
       <Show
         when={terminal()}
-        fallback={<p class="flex flex-1 items-center justify-center text-[13px] text-fg-3">This terminal is closed</p>}
+        fallback={
+          <Show when={missing()} fallback={<Loading />}>
+            {(text) => <p class="flex flex-1 items-center justify-center px-6 text-center text-[13px] text-fg-3">{text()}</p>}
+          </Show>
+        }
       >
         {(t) => (
           <>

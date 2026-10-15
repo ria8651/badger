@@ -4,7 +4,7 @@ import { Check, CircleCheck, Copy, Ellipsis, Laptop, Loader2, Pencil, Plus, Serv
 import type { Machine } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { machines } from '../machines.ts'
-import { Button, Menu, inputClass, ltr, plural } from './ui.tsx'
+import { Button, Menu, inputClass, ltr, plural, setModalOpen } from './ui.tsx'
 
 interface Section {
   id: string
@@ -36,7 +36,9 @@ export function Settings(props: { onClose: () => void }) {
   }
   addEventListener('keydown', onKey)
   addEventListener('keydown', onKeyOutside, true)
+  setModalOpen(true)
   onCleanup(() => {
+    setModalOpen(false)
     removeEventListener('keydown', onKey)
     removeEventListener('keydown', onKeyOutside, true)
     before?.focus()

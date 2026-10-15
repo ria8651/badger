@@ -39,11 +39,11 @@ import {
 } from '../layout.ts'
 import { LOCAL, isOnline, onMachine } from '../machines.ts'
 import { previewUrl } from '../previews.ts'
-import { inWs, terminalLabel, terminals, terminalsLoaded, type Ws } from '../terminals.ts'
+import { inWs, terminalLabel, terminals, terminalsListed, type Ws } from '../terminals.ts'
 import { PreviewFrame } from './PreviewFrame.tsx'
 import { PortButtons, RestartButton, StatusDot, ghost } from './Terminals.tsx'
 import { TerminalView } from './TerminalView.tsx'
-import { LiveDot } from './ui.tsx'
+import { LiveDot, modalOpen } from './ui.tsx'
 
 /** Height of a group's tab bar, which its views sit under. */
 const BAR = 36
@@ -119,10 +119,10 @@ export function Workspace(props: {
   const viewOf = (key: string) => (props.ws ? viewsOf(layoutOf(props.ws).tree).find((v) => viewKey(v) === key) : undefined)
 
   // The server's terminals are the truth: closed ones leave the layout, new ones join it.
-  // Not while their runner is offline: they're missing from the list then, not closed.
+  // Not while their runner is offline, or back but not yet listed: they're missing from the list then, not closed.
   createEffect(() => {
     const ws = props.ws
-    if (!ws || !terminalsLoaded() || !isOnline(ws.machine)) return
+    if (!ws || !isOnline(ws.machine) || !terminalsListed(ws.machine)) return
     const ids = terminals()
       .filter((t) => inWs(t, ws))
       .sort((a, b) => a.createdAt - b.createdAt)
@@ -314,6 +314,8 @@ export function Workspace(props: {
 
   const [leader, setLeader] = createSignal(false)
   const onKey = (e: KeyboardEvent) => {
+    // Behind a modal: its keys aren't for the panels.
+    if (modalOpen()) return setLeader(false)
     if (!leader()) {
       if (!isLeader(e) || !props.ws) return
       // Caught on the way down, so neither the composer nor a terminal sees it.
