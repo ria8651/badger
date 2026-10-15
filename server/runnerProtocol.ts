@@ -18,6 +18,7 @@ import type {
   WireMessage,
   WorktreeStatus,
 } from '../shared/protocol.ts'
+import { IMAGE_TYPES } from '../shared/protocol.ts'
 import type { OpResult } from './ops.ts'
 import type { Later } from './peer.ts'
 import type { CreateSpec } from './ptyProtocol.ts'
@@ -31,7 +32,7 @@ import type { CreateSpec } from './ptyProtocol.ts'
  * Runners and the hub are updated separately, so bump this when either side
  * would misread the other; the hub turns away runners on another version.
  */
-export const RUNNER_PROTOCOL = 3
+export const RUNNER_PROTOCOL = 4
 
 /** Header a runner sends its protocol version in, so a mismatch is caught before the upgrade. */
 export const PROTOCOL_HEADER = 'x-badger-protocol'
@@ -64,6 +65,8 @@ export interface LiveInfo {
   running: boolean
   /** A permission prompt or question is waiting on the user. */
   waiting: boolean
+  /** How many of its turns have ended (not counting ones queued messages carried on), since the runner started. */
+  turns: number
 }
 
 /** A live chat's state that only its process has: its messages since it started, prompts, running Bash output. */
@@ -94,7 +97,7 @@ export type RunnerEvent =
   /** Anything a live chat emits, for its viewers. */
   | { type: 'session'; event: ServerEvent }
   /** A turn ended. `queued`: Claude Code holds messages that start the next one, so it isn't really over. */
-  | { type: 'turn_end'; sessionId: string; queued: boolean }
+  | { type: 'turn_end'; sessionId: string; queued: boolean; turns: number }
   /** Every terminal, with local ids. */
   | { type: 'terminals'; terminals: TerminalInfo[] }
   | { type: 'term_output'; id: string; data: string }
@@ -220,6 +223,8 @@ export interface TranscriptLines extends TranscriptFile {
   meta?: Record<string, unknown>
   /** The file shrank, so it was rewritten: replace what the hub has. */
   reset?: boolean
+  /** There's more of the file already written, coming next. */
+  more?: boolean
 }
 
 /** A card and its chats, as merging and reviewing need them. */
@@ -250,8 +255,10 @@ export interface HubApi {
   runOp(chat: string, script: string, input: unknown): Promise<OpResult>
   /** The card a chat is on, with where its chats are, for merging and reviewing. Unlike get_card, Claude isn't shown it, so it doesn't count as seen. */
   chatCard(chat: string): Promise<ChatCard | undefined>
-  /** The chat's card for its next turn, or undefined if Claude has already seen this state. A peek doesn't count it as seen. */
-  cardContext(chat: string, peek: boolean): string | undefined
+  /** The chat's card for its next turn, or undefined if Claude has already seen this state. Asking doesn't count it as seen. */
+  cardContext(chat: string): string | undefined
+  /** Claude has been given this card context. */
+  contextSeen(chat: string, text: string): void
   /** Shows a port's preview in the browsers on that workspace. Returns how many tabs are connected, and the preview's URL if it has one. */
   openPreview(chat: string, preview: { root: string; port: number; name?: string; path: string }): { tabs: number; url?: string }
   /** Puts a new chat on this machine as a child of one already here. Returns its id. */
@@ -279,7 +286,8 @@ export const HUB_ARGS = {
   ]),
   runOp: z.tuple([chatId, text(100), z.unknown()]),
   chatCard: z.tuple([chatId]),
-  cardContext: z.tuple([chatId, z.boolean()]),
+  cardContext: z.tuple([chatId]),
+  contextSeen: z.tuple([chatId, text(1_000_000)]),
   openPreview: z.tuple([
     chatId,
     // The browser puts the path after a host, so anything but a path (`@other.host/`) would send it elsewhere.
@@ -297,6 +305,7 @@ export const HUB_ARGS = {
       mtime: z.number(),
       meta: z.record(z.string(), z.unknown()).optional(),
       reset: z.boolean().optional(),
+      more: z.boolean().optional(),
     }),
   ]),
 } satisfies { [K in keyof HubApi]: ZodType<Parameters<HubApi[K]>> }
@@ -333,14 +342,51 @@ const terminalInfo = z.object({
 export const RUNNER_EVENT = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('live'),
-    sessions: z.array(z.object({ id: chatId, cwd: text(4096), running: z.boolean(), waiting: z.boolean() })).max(10_000),
+    sessions: z.array(z.object({ id: chatId, cwd: text(4096), running: z.boolean(), waiting: z.boolean(), turns: count })).max(10_000),
   }),
   // The rest of the event is the chat's own content (messages, prompts), passed on to its viewers as it is.
   z.object({ type: z.literal('session'), event: z.looseObject({ type: z.enum(SESSION_EVENTS), sessionId: chatId }) }),
-  z.object({ type: z.literal('turn_end'), sessionId: chatId, queued: z.boolean() }),
+  z.object({ type: z.literal('turn_end'), sessionId: chatId, queued: z.boolean(), turns: count }),
   z.object({ type: z.literal('terminals'), terminals: z.array(terminalInfo).max(1000) }),
   z.object({ type: z.literal('term_output'), id: z.string().max(32), data: z.string() }),
 ])
+
+const imageAttachment = z.object({ mediaType: z.enum(IMAGE_TYPES), data: z.string() })
+
+/**
+ * What the hub takes back from a runner's methods, where it does more than
+ * pass it on to a browser as JSON. An answer that doesn't match fails the
+ * call, as if the runner had thrown.
+ */
+export const RUNNER_REPLIES = {
+  liveSnapshot: z
+    .looseObject({
+      // The chat's own content, passed on to its viewers as it is.
+      messages: z.array(z.looseObject({ type: z.string() })),
+      running: z.boolean(),
+      makingWorktree: z.boolean(),
+      mode: z.enum(['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions']),
+      model: z.string().optional(),
+      cwd: z.string(),
+      permissions: z.array(z.looseObject({ requestId: z.string() })),
+      bashOutput: z.record(z.string(), z.string()),
+      background: z.array(z.looseObject({})),
+      queued: z.array(z.looseObject({ id: z.string(), text: z.string(), pastes: z.array(z.string()), images: z.array(imageAttachment) })),
+    })
+    .nullable(),
+  unqueue: z.object({ id: z.string(), text: z.string(), pastes: z.array(z.string()), images: z.array(imageAttachment) }).optional(),
+  draftAnswers: z.boolean(),
+  draftPlan: z.boolean(),
+  inaccessible: z.array(z.string()),
+  workspaceRoot: z.string(),
+  makeDir: z.string(),
+  folderSize: z.number(),
+  // Only images keep a type: anything else served as the hub's own page could act as the user.
+  readFile: z.object({ type: z.enum(IMAGE_TYPES).optional(), data: z.string() }),
+  termCreate: terminalInfo,
+  termRestart: terminalInfo,
+  termSnapshot: z.string().optional(),
+} satisfies { [K in keyof RunnerApi]?: ZodType }
 
 // Every runner method listed, so none is unreachable by accident.
 true satisfies Exclude<keyof RunnerApi, (typeof RUNNER_METHODS)[number]> extends never ? true : false

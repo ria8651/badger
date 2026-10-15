@@ -124,7 +124,9 @@ function mergePrompt(p: { dir: string; branch: string; base: string; unmerged: n
  * Whether merging this worktree finishes the card: every other chat on it is
  * archived or ran somewhere that's gone. Cards often hold more than one piece
  * of work, so anything else still around keeps the card open, including
- * chats on other machines, whose folders can't be checked from here.
+ * chats on other machines, whose folders can't be checked from here: even one
+ * the hub doesn't know a folder for yet, e.g. its machine is offline and
+ * hasn't sent its transcript.
  */
 function cardFinished(deps: MergeDeps, card: ChatCard | undefined, dir: string): boolean {
   if (!card) return false
@@ -132,7 +134,7 @@ function cardFinished(deps: MergeDeps, card: ChatCard | undefined, dir: string):
     .filter((c) => !c.archived)
     .every((c) => {
       const cwd = deps.manager.get(c.id)?.cwd ?? c.cwd
-      if (c.machine && c.machine !== deps.machine()) return !cwd
+      if (c.machine && c.machine !== deps.machine()) return false
       return !cwd || cwd === dir || !existsSync(cwd)
     })
 }

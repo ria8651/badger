@@ -3,7 +3,16 @@ import type { DatabaseSync, StatementSync } from 'node:sqlite'
 import { LOCAL_MACHINE, type Machine, type TerminalInfo } from '../shared/protocol.ts'
 import { BadRequest } from './db.ts'
 import { Peer, type Link } from './peer.ts'
-import { HUB_ARGS, RUNNER_EVENT, RUNNER_PROTOCOL, isUuid, type HubApi, type LiveInfo, type RunnerApi, type RunnerEvent, type RunnerHello } from './runnerProtocol.ts'
+import { HUB_ARGS, RUNNER_EVENT, RUNNER_PROTOCOL, RUNNER_REPLIES, isUuid, type HubApi, type LiveInfo, type RunnerApi, type RunnerEvent, type RunnerHello } from './runnerProtocol.ts'
+
+/** A runner that hasn't said hello by then is cut off. */
+const HELLO_TIMEOUT_MS = 30 * 1000
+/**
+ * The longest the hub waits on any runner call, so one that never answers
+ * can't pile them up. Generous: starting a chat in a new worktree, or sizing a
+ * big folder, takes a while.
+ */
+const CALL_TIMEOUT_MS = 10 * 60 * 1000
 
 /** The hub's own machine. */
 export const LOCAL = LOCAL_MACHINE
@@ -99,7 +108,10 @@ export class Machines {
   /** The machine's runner, or an error saying it's offline. */
   require(id: string): Connection {
     const c = this.connections.get(id)
-    if (!c) throw new BadRequest(`${this.name(id)} is offline`)
+    if (!c) {
+      const removed = !this.db.prepare('SELECT 1 FROM machines WHERE id = ? AND removed_at IS NULL').get(id)
+      throw new BadRequest(`${this.name(id)} ${removed ? 'was removed' : 'is offline'}`)
+    }
     return c
   }
 
@@ -203,8 +215,13 @@ export class Machines {
    */
   attach(id: string, link: Link, api: (machine: string) => Omit<HubApi, 'hello'>, token?: string): void {
     let connection: Connection | undefined
+    let greeted = false
     const current = () => !!connection && this.connections.get(id) === connection
+    const silent = setTimeout(() => !greeted && peer.close(true), HELLO_TIMEOUT_MS)
     const hello = (hello: RunnerHello) => {
+      if (greeted) throw new BadRequest('Already said hello')
+      greeted = true
+      clearTimeout(silent)
       if (hello.protocol !== RUNNER_PROTOCOL) {
         setImmediate(() => peer.close())
         const why = mismatch(hello.protocol)
@@ -256,11 +273,13 @@ export class Machines {
         this.events.onEvent(connection, event)
       },
       () => {
+        clearTimeout(silent)
         if (!current()) return
         this.connections.delete(id)
         this.db.prepare('UPDATE machines SET last_seen = ? WHERE id = ?').run(Date.now(), id)
         this.events.onChange(undefined, id)
       },
+      { replies: RUNNER_REPLIES, timeoutMs: CALL_TIMEOUT_MS },
     )
   }
 
@@ -286,6 +305,11 @@ export class Machines {
   assign(sessionId: string, machine: string): string {
     this.db.prepare('INSERT INTO chat_machines (session_id, machine, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING').run(sessionId, machine, Date.now())
     return this.machineOf(sessionId)!
+  }
+
+  /** Takes back a chat that never started where it was put, e.g. its folder wasn't there, so it can start somewhere else. */
+  unassign(sessionId: string, machine: string): void {
+    this.db.prepare('DELETE FROM chat_machines WHERE session_id = ? AND machine = ?').run(sessionId, machine)
   }
 
   /** Every chat on a machine. */

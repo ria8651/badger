@@ -34,15 +34,18 @@ function call(name, input = {}) {
   })
 }
 const known = new Set(workerData.names)
+const missing = (name) => Promise.reject(new Error('No badger.' + name + '; the run_script tool lists them.'))
+// A function, so calling a group that isn't one (\`badger.cardz()\`) says so too.
 const group = (prefix) =>
-  new Proxy({}, {
+  new Proxy(() => {}, {
     get: (_, key) => {
       if (typeof key !== 'string' || key === 'then') return undefined
       const name = prefix ? prefix + '.' + key : key
       if (known.has(name)) return (input) => call(name, input)
       if (!prefix) return group(key)
-      return () => Promise.reject(new Error('No badger.' + name + '; the run_script tool lists them.'))
+      return () => missing(name)
     },
+    apply: () => missing(prefix),
   })
 const show = (v) => (typeof v === 'string' ? v : inspect(v, { depth: 6, breakLength: 120 }))
 const log = (...args) => parentPort.postMessage({ t: 'log', text: args.map(show).join(' ') })
@@ -71,6 +74,8 @@ The code runs as an async function: an expression gives its value, a body can \`
   for (const c of cards) await badger.cards.update({ id: c.id, status: 'done' })
   return cards.map((c) => c.title)`
 
+export const SCRIPT_TOOL = 'run_script'
+
 /**
  * Scripts over the other ops, for a chat. `ops` is every op this chat has;
  * the help lists them with their inputs and what they return.
@@ -79,7 +84,7 @@ export function scriptOp(server: string, ops: () => Op[]): Op {
   const usable = () => ops().filter((o) => o.script !== 'script.run')
   return op({
     server,
-    tool: 'run_script',
+    tool: SCRIPT_TOOL,
     script: 'script.run',
     get description() {
       const list = usable().map((o) => `${signature(o)}\n    ${o.description.split(/(?<=\.)\s+(?=[A-Z])/)[0]} Returns ${o.returns}`)

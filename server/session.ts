@@ -15,6 +15,7 @@ import type { AnswerDraft, BackgroundTask, ImageAttachment, ModelOption, Pending
 import { wrapPaste } from '../shared/pastes.ts'
 import { BashStreams, streamEnv } from './bashStream.ts'
 import type { LiveSnapshot } from './runnerProtocol.ts'
+import { SCRIPT_TOOL } from './scripts.ts'
 import { inaccessible } from './workspace.ts'
 import { MessageQueue } from './queue.ts'
 
@@ -34,8 +35,10 @@ type Listener = (event: ServerEvent) => void
 export interface SessionTools {
   mcpServers: Record<string, McpServerConfig>
   allowedTools: string[]
-  /** Text to add to the conversation alongside the user's next message, if any. A peek doesn't count it as added. */
-  turnContext?: (peek: boolean) => Promise<string | undefined>
+  /** Text to add to the conversation alongside the user's next message, if any. Asking doesn't count it as added. */
+  turnContext?: () => Promise<string | undefined>
+  /** The turn's context has gone in. If this is lost on the way, it goes in again next turn. */
+  contextAdded?: (text: string) => void
   /** Environment for Claude Code and the commands it runs, on top of the server's. */
   env?: Record<string, string>
 }
@@ -90,7 +93,7 @@ export class LiveSession {
   private queued: Held[] = []
   /** Any background work is running, the subagents' own included; closing the process would kill it. */
   busy = false
-  private turnContext?: (peek: boolean) => Promise<string | undefined>
+  private tools: SessionTools
   /** Context already shown with a message that Claude Code hasn't taken in yet, so it isn't shown twice. */
   private shownContext?: Promise<string | undefined>
 
@@ -112,7 +115,7 @@ export class LiveSession {
     this.mode = opts.mode
     this.model = opts.model
     this.makingWorktree = opts.worktree !== undefined && !opts.resume
-    this.turnContext = opts.tools.turnContext
+    this.tools = opts.tools
     this.onClose = opts.onClose
     this.onChange = opts.onChange
     this.onTurnEnd = opts.onTurnEnd
@@ -148,10 +151,11 @@ export class LiveSession {
             {
               hooks: [
                 async () => {
-                  const additionalContext = await this.context(false)
+                  const additionalContext = await this.context()
                   const shown = await this.shownContext
                   this.shownContext = undefined
                   if (!additionalContext) return { continue: true }
+                  this.tools.contextAdded?.(additionalContext)
                   if (additionalContext !== shown) this.record({ type: 'hook_context', uuid: randomUUID(), text: additionalContext })
                   return { continue: true, hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } }
                 },
@@ -249,7 +253,7 @@ export class LiveSession {
       // Echo immediately so every tab shows the message before the SDK replays it.
       this.record({ ...message, timestamp: new Date().toISOString() } as unknown as WireMessage)
       // Shown with the message now rather than when Claude Code takes it in, which can be a while for a new worktree.
-      this.shownContext = this.context(true).then((text) => {
+      this.shownContext = this.context().then((text) => {
         if (text) this.record({ type: 'hook_context', uuid: randomUUID(), text })
         return text
       })
@@ -368,8 +372,10 @@ export class LiveSession {
     this.bash.finishAll(true)
   }
 
-  private canUseTool: CanUseTool = (toolName, input, { signal, suggestions, blockedPath, toolUseID, agentID }) =>
+  private canUseTool: CanUseTool = (toolName, input, { signal, suggestions: offered, blockedPath, toolUseID, agentID }) =>
     new Promise<PermissionResult>((resolve) => {
+      // A script can do what any of Badger's tools can, so allowing scripts for good would allow all of them, unasked.
+      const suggestions = toolName.endsWith(`__${SCRIPT_TOOL}`) ? undefined : offered
       const requestId = randomUUID()
       const done = (result: PermissionResult) => {
         if (!this.pending.delete(requestId)) return
@@ -524,8 +530,8 @@ export class LiveSession {
   }
 
   /** The card context for the next turn. It comes from the hub, which may not answer, and then there's none. */
-  private context(peek: boolean): Promise<string | undefined> {
-    return (this.turnContext?.(peek) ?? Promise.resolve(undefined)).catch((err) => {
+  private context(): Promise<string | undefined> {
+    return (this.tools.turnContext?.() ?? Promise.resolve(undefined)).catch((err) => {
       console.error(`Card context for ${this.id} failed:`, err instanceof Error ? err.message : err)
       return undefined
     })

@@ -71,6 +71,8 @@ export class Runner implements RunnerApi {
   private sync: TranscriptSync
   private contexts: ContextReader
   private roots = new Map<string, string>()
+  /** Per chat, its turns that have ended, as LiveInfo.turns. Kept after it closes, so a chat that starts again counts on. */
+  private turns = new Map<string, number>()
   /** The hub, as whichever link is up now; calls fail while none is. */
   private readonly hub: Remote<HubApi>
   private opList?: Op[]
@@ -112,11 +114,15 @@ export class Runner implements RunnerApi {
             [TERMINAL_SERVER]: mcpServer(TERMINAL_SERVER, [...TERMINAL_INSTRUCTIONS, ...previewInstructions(this.local)].join('\n'), ops, ctx),
           },
           allowedTools: [...ops.filter((o) => o.autoAllow).map(toolName), MERGE_TOOL_NAME, REVIEW_TOOL_NAME],
-          turnContext: (peek) => this.hub.cardContext(sessionId, peek),
+          turnContext: () => this.hub.cardContext(sessionId),
+          contextAdded: (text) => void this.hub.contextSeen(sessionId, text).catch(() => {}),
         }
       },
       (sessionId) => {
-        this.emit({ type: 'turn_end', sessionId, queued: !!this.manager.get(sessionId)?.hasQueued })
+        const queued = !!this.manager.get(sessionId)?.hasQueued
+        const turns = (this.turns.get(sessionId) ?? 0) + (queued ? 0 : 1)
+        this.turns.set(sessionId, turns)
+        this.emit({ type: 'turn_end', sessionId, queued, turns })
         this.sync.touch(sessionId)
       },
       (session) =>
@@ -213,7 +219,13 @@ export class Runner implements RunnerApi {
   }
 
   private sendLive(): void {
-    const sessions: LiveInfo[] = this.manager.all().map((s) => ({ id: s.id, cwd: s.cwd, running: this.manager.isRunning(s.id), waiting: s.waiting }))
+    const sessions: LiveInfo[] = this.manager.all().map((s) => ({
+      id: s.id,
+      cwd: s.cwd,
+      running: this.manager.isRunning(s.id),
+      waiting: s.waiting,
+      turns: this.turns.get(s.id) ?? 0,
+    }))
     this.emit({ type: 'live', sessions })
   }
 

@@ -116,9 +116,13 @@ export class Transcripts {
     return rows.map((r) => r.subpath)
   }
 
-  /** The most recently changed chats, newest first. */
-  list(limit: number): Promise<SDKSessionInfo[]> {
-    return listSessions({ sessionStore: this.store, limit })
+  /** The most recently changed chats, newest first, less the `except` ones: left out before the limit, so they can't crowd others out. */
+  list(limit: number, except: Set<string>): Promise<SDKSessionInfo[]> {
+    const listed = () => this.summaries().filter((s) => !except.has(s.sessionId))
+    return listSessions({
+      sessionStore: { ...this.store, listSessions: async () => listed().map(({ sessionId, mtime }) => ({ sessionId, mtime })), listSessionSummaries: async () => listed() },
+      limit,
+    })
   }
 
   /** One chat's title, folder and so on, without reading its transcript. */

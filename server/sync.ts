@@ -8,10 +8,16 @@ import { RUNNER_MAX_FRAME, isUuid, type HubApi, type TranscriptState } from './r
 const LIVE_POLL_MS = 2000
 /** How often every chat's transcript is checked, for chats resumed outside Badger (the CLI). */
 const SCAN_MS = 60 * 1000
-/** Most bytes of transcript sent in one go. A single longer line still goes whole. */
+/** Most bytes of transcript read in one go. A single longer line is still read whole. */
 const CHUNK_BYTES = 4 * 1024 * 1024
-/** A line longer than this goes as a blank one, which the hub skips: it wouldn't fit in a frame once escaped as JSON. */
-const MAX_LINE_BYTES = RUNNER_MAX_FRAME / 2
+/**
+ * Most bytes of lines in one batch, as escaped in its frame: half a frame, the
+ * rest left for everything else in it. A line bigger than this on its own goes
+ * as a blank one, which the hub skips.
+ */
+const BATCH_BYTES = RUNNER_MAX_FRAME / 2
+/** Times the hub's idea of where a file is up to can differ from this one's before it's left for the next pass. */
+const MAX_MISMATCHES = 5
 /** Files asked about in one call when (re)connecting. */
 const STATE_BATCH = 500
 
@@ -76,8 +82,8 @@ export class TranscriptSync {
 
   /** Queues every chat whose transcript isn't the size the hub has, and the live ones. */
   private async scan(): Promise<void> {
-    const mains = await this.mainFiles()
-    const unknown = mains.filter((f) => !this.known.has(key(f)))
+    const files = await this.localFiles()
+    const unknown = files.filter((f) => !this.known.has(key(f)))
     try {
       for (let i = 0; i < unknown.length; i += STATE_BATCH) {
         const batch = unknown.slice(i, i + STATE_BATCH).map(({ sessionId, subpath }) => ({ sessionId, subpath }))
@@ -88,8 +94,8 @@ export class TranscriptSync {
       if (this.connected) console.error('Asking the hub about transcripts failed:', err instanceof Error ? err.message : err)
     }
     for (const id of this.live()) this.dirty.add(id)
-    // Subagents write to the chat's own transcript too, so a change shows there.
-    for (const f of mains) if (this.known.get(key(f))?.bytes !== f.size) this.dirty.add(f.sessionId)
+    // Subagents' files included: one left half-sent when the connection dropped may be done with, its chat not changing again.
+    for (const f of files) if (this.known.get(key(f))?.bytes !== f.size) this.dirty.add(f.sessionId)
     await this.drain()
   }
 
@@ -127,7 +133,7 @@ export class TranscriptSync {
       this.known.set(k, state)
     }
     let meta = file.subpath ? await this.meta(file, k) : undefined
-    for (let attempts = 0; attempts < 5; attempts++) {
+    for (let mismatches = 0; mismatches < MAX_MISMATCHES; ) {
       const info = await stat(file.path).catch(() => undefined)
       if (!info) return
       const reset = info.size < state.bytes
@@ -146,14 +152,19 @@ export class TranscriptSync {
         mtime: Math.floor(info.mtimeMs),
         ...(meta ? { meta: meta.value } : {}),
         ...(reset ? { reset } : {}),
+        ...(lines?.more ? { more: true } : {}),
       })
       state = result
       this.known.set(k, state)
+      // A mismatch means the hub had a different idea of where the file was up to, and took none of it: go again from there.
+      if (result.bytes !== sent) {
+        mismatches++
+        continue
+      }
       if (meta) this.metas.set(k, meta.raw)
       meta = undefined
-      // A mismatch means the hub had a different idea of where the file was up to: go again from there.
-      // Otherwise there may be more than one chunk's worth.
-      if (result.bytes === sent && sent >= info.size) return
+      // There may be more than one chunk's worth.
+      if (sent >= info.size || !lines) return
     }
   }
 
@@ -168,21 +179,30 @@ export class TranscriptSync {
     }
   }
 
-  /** The main transcripts of this machine's chats, with their sizes. */
-  private async mainFiles(): Promise<(LocalFile & { size: number; mtime: number })[]> {
+  /** Every transcript file of this machine's chats, theirs and their subagents', with their sizes. */
+  private async localFiles(): Promise<(LocalFile & { size: number })[]> {
     const chats = this.chats()
-    const out: (LocalFile & { size: number; mtime: number })[] = []
+    const mains: (LocalFile & { size: number; mtime: number })[] = []
     for (const project of await readdir(this.projects).catch(() => [])) {
       for (const name of await readdir(join(this.projects, project)).catch(() => [])) {
         const sessionId = name.slice(0, -'.jsonl'.length)
         if (!name.endsWith('.jsonl') || !isUuid(sessionId) || !chats.has(sessionId)) continue
         const path = join(this.projects, project, name)
         const info = await stat(path).catch(() => undefined)
-        if (info?.isFile()) out.push({ sessionId, subpath: '', project, path, size: info.size, mtime: info.mtimeMs })
+        if (info?.isFile()) mains.push({ sessionId, subpath: '', project, path, size: info.size, mtime: info.mtimeMs })
       }
     }
     // Newest first, so the chats someone is likely to open are copied first when there's a lot to send.
-    return out.sort((a, b) => b.mtime - a.mtime)
+    mains.sort((a, b) => b.mtime - a.mtime)
+    const out: (LocalFile & { size: number })[] = []
+    for (const main of mains) {
+      out.push(main)
+      for (const file of await nestedFiles(main)) {
+        const info = await stat(file.path).catch(() => undefined)
+        if (info?.isFile()) out.push({ ...file, size: info.size })
+      }
+    }
+    return out
   }
 
   /** A chat's transcript and its subagents', wherever Claude Code put it. */
@@ -190,21 +210,28 @@ export class TranscriptSync {
     for (const project of await readdir(this.projects).catch(() => [])) {
       const path = join(this.projects, project, `${sessionId}.jsonl`)
       if (!(await stat(path).then((s) => s.isFile(), () => false))) continue
-      const dir = join(this.projects, project, sessionId)
-      const nested = (await readdir(dir, { recursive: true }).catch(() => [] as string[])).filter((p) => p.endsWith('.jsonl'))
-      return [
-        { sessionId, subpath: '', project, path },
-        ...nested.map((p) => ({ sessionId, subpath: relative(dir, join(dir, p)).slice(0, -'.jsonl'.length).split(sep).join('/'), project, path: join(dir, p) })),
-      ]
+      const main = { sessionId, subpath: '', project, path }
+      return [main, ...(await nestedFiles(main))]
     }
     return []
   }
 }
 
+/** The subagents' transcripts in a chat's folder, beside its own. */
+async function nestedFiles(main: LocalFile): Promise<LocalFile[]> {
+  const dir = main.path.slice(0, -'.jsonl'.length)
+  const nested = (await readdir(dir, { recursive: true }).catch(() => [] as string[])).filter((p) => p.endsWith('.jsonl'))
+  return nested.map((p) => ({ ...main, subpath: relative(dir, join(dir, p)).slice(0, -'.jsonl'.length).split(sep).join('/'), path: join(dir, p) }))
+}
+
 const key = (f: { sessionId: string; subpath: string }) => `${f.sessionId}\0${f.subpath}`
 
-/** The whole lines between two offsets, and where the last one ends; undefined if there's no whole line yet. Over-long lines come back blank. */
-async function readLines(path: string, from: number, size: number): Promise<{ lines: string[]; bytes: number } | undefined> {
+/**
+ * Whole lines from an offset, no more than fit in a batch, and where the last
+ * one ends; undefined if there's no whole line yet. Over-long lines come back
+ * blank. `more`: there are whole lines after these.
+ */
+async function readLines(path: string, from: number, size: number): Promise<{ lines: string[]; bytes: number; more: boolean } | undefined> {
   if (size <= from) return undefined
   const fh = await open(path, 'r')
   try {
@@ -213,9 +240,23 @@ async function readLines(path: string, from: number, size: number): Promise<{ li
       const { bytesRead } = await fh.read(buf, 0, want, from)
       const end = buf.subarray(0, bytesRead).lastIndexOf(0x0a)
       if (end >= 0) {
-        const text = buf.subarray(0, end).toString('utf8')
-        const lines = text.split('\n').map((l) => (Buffer.byteLength(l) > MAX_LINE_BYTES ? '' : l))
-        return { lines, bytes: from + end + 1 }
+        const lines: string[] = []
+        let at = 0
+        let total = 0
+        while (at <= end) {
+          const nl = buf.indexOf(0x0a, at)
+          const line = buf.subarray(at, nl).toString('utf8')
+          // As it goes in the frame: quotes and backslashes, of which JSON lines have plenty, take two bytes there.
+          const escaped = Buffer.byteLength(JSON.stringify(line))
+          const taken = escaped > BATCH_BYTES ? '' : line
+          const cost = taken ? escaped : 2
+          if (lines.length && total + cost > BATCH_BYTES) break
+          lines.push(taken)
+          total += cost
+          at = nl + 1
+        }
+        // Not all read, the rest may be whole lines; all read, only a line still being written may be left.
+        return { lines, bytes: from + at, more: at <= end || from + bytesRead < size }
       }
       // No newline yet: either the line is still being written, or it's longer than a chunk.
       if (want >= size - from) return undefined

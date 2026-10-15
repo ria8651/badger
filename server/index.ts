@@ -8,7 +8,7 @@ import { z } from 'zod'
 import { IMAGE_TYPES, type AnswerDraft, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
 import { Attention } from './attention.ts'
 import { BRIDGE_PATH, Bridges } from './bridge.ts'
-import { boardOps, cardContext, type ChatInfo } from './boardTools.ts'
+import { boardOps, cardContext, contextSeen, type ChatInfo } from './boardTools.ts'
 import { type Actor, BadRequest, type Draft, Store } from './db.ts'
 import { LOCAL, Machines, mismatch, type Connection } from './machines.ts'
 import { OpError, type Op } from './ops.ts'
@@ -41,6 +41,10 @@ loadDotEnv()
 const ACCOUNT_POLL_MS = 5 * 60 * 1000
 /** How long the chat list waits on a machine to say which folders are gone. */
 const GONE_TIMEOUT_MS = 3000
+/** How long a machine's answer about a folder being gone is used for, rather than asking again on every list. */
+const GONE_TTL_MS = 30 * 1000
+/** A running chat's transcript changes the list (its time, now and then its title) at most this often; starting and stopping show at once. */
+const LIVE_LIST_MS = 15 * 1000
 /**
  * How long opening a chat or terminal waits on its machine before showing what
  * the hub has. A laptop gone to sleep can leave its connection half-open,
@@ -159,7 +163,7 @@ setInterval(() => sockets.size && void account.refresh(), ACCOUNT_POLL_MS).unref
 /** A chat's event from a runner (already checked to be a kind a chat emits), if the chat is on that runner's machine. */
 function sessionEvent(machine: string, event: ServerEvent): ServerEvent | undefined {
   if (!('sessionId' in event) || !SESSION_EVENTS.includes(event.type as never) || !machines.owns(machine, event.sessionId)) return undefined
-  if (event.type === 'child_started' && store.parentOf(event.childId) !== event.sessionId) return undefined
+  if (event.type === 'child_started' && (!isUuid(event.childId) || store.parentOf(event.childId) !== event.sessionId)) return undefined
   return event
 }
 
@@ -173,6 +177,8 @@ function runnerEvent(machine: Connection, event: RunnerEvent): void {
       return
     }
     case 'live':
+      // Turns that ended while the hub wasn't listening, e.g. with the runner offline, still want reading.
+      for (const s of event.sessions) if (machines.owns(machine.id, s.id)) turnsEnded(s.id, s.turns)
       // A chat started, closed, or started or finished working.
       sessionsChanged()
       machinesChanged()
@@ -180,6 +186,7 @@ function runnerEvent(machine: Connection, event: RunnerEvent): void {
       return
     case 'turn_end':
       if (!machines.owns(machine.id, event.sessionId)) return
+      turnsSeen.set(event.sessionId, event.turns)
       attention.turnEnded(event.sessionId, event.queued)
       sendContext(event.sessionId)
       void account.refresh()
@@ -193,6 +200,17 @@ function runnerEvent(machine: Connection, event: RunnerEvent): void {
       return
     }
   }
+}
+
+/** Per live chat, how many of its turns had ended when the hub last heard. */
+const turnsSeen = new Map<string, number>()
+
+/** A chat's runner says this many of its turns have ended; any the hub missed mark it unread. */
+function turnsEnded(sessionId: string, turns: number): void {
+  const seen = turnsSeen.get(sessionId)
+  turnsSeen.set(sessionId, turns)
+  // Unknown since the hub started; fewer since the runner restarted. Either way there's nothing to compare.
+  if (seen !== undefined && turns > seen) attention.turnEnded(sessionId, false)
 }
 
 /** Machines whose runner was connected, last we looked. */
@@ -255,6 +273,7 @@ function hubApi(machine: string): Omit<HubApi, 'hello'> {
         return await o.run(parsed.data, { sessionId: chat, cwd: () => machines.live(chat)?.cwd ?? '' })
       } catch (err) {
         if (err instanceof OpError) throw new BadRequest(err.message)
+        console.error(`badger.${script} failed for ${chat}:`, err)
         throw err
       }
     },
@@ -265,7 +284,8 @@ function hubApi(machine: string): Omit<HubApi, 'hello'> {
       const chats = await chatInfo(card.sessionIds)
       return { ...card, chats: chats.map(({ id, cwd, machine }) => ({ id, cwd, machine, archived: archived.has(id) })) }
     },
-    cardContext: (chat, peek) => cardContext(store, own(chat), peek),
+    cardContext: (chat) => cardContext(store, own(chat)),
+    contextSeen: (chat, text) => contextSeen(store, own(chat), text),
     openPreview: (chat, { root, port, name, path }) => {
       own(chat)
       broadcast({ type: 'open_preview', root, machine, port, name, path })
@@ -308,12 +328,15 @@ async function chatInfo(ids: string[]): Promise<ChatInfo[]> {
 
 /** A runner's transcript lines, already checked to be for one of its own chats. */
 function takeLines(batch: TranscriptLines) {
+  // Chats sort by this, so one from the future would sit at the top of the sidebar for good.
+  batch.mtime = Math.min(batch.mtime, Date.now())
   const result = store.transaction(() => transcripts.append(batch))
-  if (result.bytes === batch.bytes && (batch.lines.length || batch.reset)) transcriptChanged(batch.sessionId)
+  if (result.bytes === batch.bytes && (batch.lines.length || batch.reset)) transcriptChanged(batch.sessionId, !!batch.more, !batch.subpath && batch.fromLine === 0)
   return result
 }
 
 const listChanged = debounced(sessionsChanged, 1000)
+const liveListChanged = debounced(sessionsChanged, LIVE_LIST_MS)
 const stale = new Set<string>()
 const resendStale = debounced(() => {
   for (const id of stale) for (const ws of viewers.get(id) ?? []) void sendSnapshot(ws, id)
@@ -326,9 +349,12 @@ const resendStale = debounced(() => {
  * after its machine reconnects, so they get it again; a live chat's viewers
  * already have it from the process.
  */
-function transcriptChanged(sessionId: string): void {
+function transcriptChanged(sessionId: string, more: boolean, fresh: boolean): void {
+  // Its first lines give a new chat its title, though.
+  if (machines.live(sessionId)) return fresh ? listChanged() : liveListChanged()
   listChanged()
-  if (machines.live(sessionId) || !viewers.get(sessionId)?.size) return
+  // Mid-way through a long transcript: they get it all once the rest is here.
+  if (more || !viewers.get(sessionId)?.size) return
   stale.add(sessionId)
   resendStale()
 }
@@ -426,7 +452,14 @@ async function sendSnapshot(ws: WebSocket, sessionId: string): Promise<void> {
   }
   if (!runner) return done(null, false)
   const gone = info?.cwd ? (await runner.peer.within(QUICK_TIMEOUT_MS).inaccessible([info.cwd]).catch(() => [])).length > 0 : false
-  runner.peer.request('liveSnapshot', [sessionId], (err, live) => done(err ? null : live, gone), QUICK_TIMEOUT_MS)
+  // A runner slow to answer doesn't hold up the history; its answer, when it comes, puts the live part right.
+  let shown = false
+  const slow = setTimeout(() => ((shown = true), done(null, gone)), QUICK_TIMEOUT_MS)
+  runner.peer.request('liveSnapshot', [sessionId], (err, live) => {
+    clearTimeout(slow)
+    if (!err) done(live, gone)
+    else if (!shown) done(null, gone)
+  })
 }
 
 /** Stores parts of a chat's draft and shows them to the chat's other viewers; the one editing it already has them. */
@@ -481,7 +514,8 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       if (event.machine !== undefined && typeof event.machine !== 'string') throw new BadRequest('machine must be a string')
       if (!isUuid(event.sessionId)) throw new BadRequest('sessionId must be a UUID')
       // A chat stays where it started; a new one goes where it was asked to.
-      const machine = machines.machineOf(event.sessionId) ?? (event.machine || LOCAL)
+      const placed = machines.machineOf(event.sessionId)
+      const machine = placed ?? (event.machine || LOCAL)
       const runner = machines.require(machine)
       // Picking an archived chat back up brings it back to the sidebar.
       store.setArchived(event.sessionId, false, UI)
@@ -489,13 +523,25 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       // Sending empties the composer in every tab, not just the one that sent.
       saveDraft(ws, event.sessionId, { text: '', attachments: { pastes: [], images: [] } })
       machines.assign(event.sessionId, machine)
-      await runner.peer.remote.send(
-        event.sessionId,
-        { cwd: event.cwd, mode: event.mode, model: event.model, worktree: event.worktree },
-        event.text,
-        pastes,
-        images,
-      )
+      try {
+        await runner.peer.remote.send(
+          event.sessionId,
+          { cwd: event.cwd, mode: event.mode, model: event.model, worktree: event.worktree },
+          event.text,
+          pastes,
+          images,
+        )
+      } catch (err) {
+        // Turned away, so it never started: it can go elsewhere. Anything else, e.g. the connection dropping, it may have.
+        if (!placed && err instanceof BadRequest) machines.unassign(event.sessionId, machine)
+        // The message goes back in the composer, unless something's been typed since.
+        if (!store.draft(event.sessionId).text) {
+          const change = { text: event.text, attachments: { pastes, images } }
+          store.setDraft(event.sessionId, change)
+          for (const other of viewers.get(event.sessionId) ?? []) send(other, { type: 'draft', sessionId: event.sessionId, ...change })
+        }
+        throw err
+      }
       return
     }
     case 'draft':
@@ -590,11 +636,10 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
 // ── HTTP ──
 
 async function sessionList(): Promise<SessionSummary[]> {
-  const infos = await transcripts.list(200)
-  const archived = store.archivedIds()
   // Children show inside the chat that started them.
   const childIds = store.childIds()
-  const listed = infos.filter((s) => !childIds.has(s.sessionId))
+  const listed = await transcripts.list(200, childIds)
+  const archived = store.archivedIds()
   const where = machines.machinesOf(listed.map((s) => s.sessionId))
   const gone = await goneFolders(listed.flatMap((s) => (s.cwd && !machines.live(s.sessionId) ? [{ machine: where.get(s.sessionId), cwd: s.cwd }] : [])))
   const summaries: SessionSummary[] = listed.map((s) => {
@@ -622,16 +667,33 @@ async function sessionList(): Promise<SessionSummary[]> {
   return summaries
 }
 
-/** Which of these folders are gone, by machine, asking each connected machine once. Offline machines' folders can't be checked, so they aren't. */
+/** Per runner connection, which folders it said were gone, and when. */
+const goneAnswers = new WeakMap<Connection, Map<string, { gone: boolean; at: number }>>()
+
+/**
+ * Which of these folders are gone, by machine, asking each connected machine
+ * once about those it hasn't answered for lately. Offline machines' folders
+ * can't be checked, so they aren't.
+ */
 async function goneFolders(folders: { machine?: string; cwd: string }[]): Promise<Map<string, Set<string>>> {
   const byMachine = new Map<string, Set<string>>()
   for (const f of folders) if (f.machine) byMachine.set(f.machine, (byMachine.get(f.machine) ?? new Set()).add(f.cwd))
   const out = new Map<string, Set<string>>()
+  const now = Date.now()
   await Promise.all(
     [...byMachine].map(async ([machine, dirs]) => {
       const runner = machines.get(machine)
       if (!runner) return
-      out.set(machine, new Set(await runner.peer.within(GONE_TIMEOUT_MS).inaccessible([...dirs]).catch(() => [])))
+      let answers = goneAnswers.get(runner)
+      if (!answers) goneAnswers.set(runner, (answers = new Map()))
+      for (const [dir, a] of answers) if (now - a.at > GONE_TTL_MS) answers.delete(dir)
+      const ask = [...dirs].filter((d) => !answers.has(d))
+      if (ask.length) {
+        const gone = await runner.peer.within(GONE_TIMEOUT_MS).inaccessible(ask).catch(() => undefined)
+        // No answer isn't an answer: asked again next time.
+        if (gone) for (const d of ask) answers.set(d, { gone: gone.includes(d), at: now })
+      }
+      out.set(machine, new Set([...dirs].filter((d) => answers.get(d)?.gone)))
     }),
   )
   return out
@@ -914,6 +976,8 @@ const server = createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream' })
     createReadStream(file).pipe(res)
   } catch (err) {
+    // Failed partway through a response: too late to say why.
+    if (res.headersSent) return void res.destroy()
     if (err instanceof BadRequest) return json(400, { error: err.message })
     json(500, { error: err instanceof Error ? err.message : String(err) })
   }
@@ -1014,6 +1078,9 @@ runner.connect(runnerEnd).catch((err) => console.error('The hub’s own runner f
 server.listen(PORT, HOST, () => {
   console.log(`badger server on http://${HOST}:${PORT} (workspace ${WORKSPACE_DIR})`)
 })
+
+// A promise nobody caught, e.g. from a runner's odd answer, is a bug to fix, not a reason to drop every chat.
+process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', err))
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {

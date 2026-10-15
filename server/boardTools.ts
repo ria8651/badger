@@ -23,23 +23,22 @@ const status = z.enum(CARD_STATUSES)
  * The chat's card as context for the next turn, or undefined when Claude has
  * already seen this exact state. Appended to the turn rather than the system
  * prompt, so it never invalidates the prompt cache; it lands in the transcript
- * and survives resumes, and the stored hash stops it being repeated. A peek
- * leaves the hash alone, for showing what's about to go in.
+ * and survives resumes, and the stored hash stops it being repeated. Asking
+ * doesn't count it as seen: `contextSeen` does, once it's gone in, so a reply
+ * lost on the way can't lose it.
  */
-export function cardContext(store: Store, sessionId: string, peek = false): string | undefined {
+export function cardContext(store: Store, sessionId: string): string | undefined {
   const cards = store.cards()
   const card = cards.find((c) => c.sessionIds.includes(sessionId))
   const last = store.contextHash(sessionId)
-  if (!card) {
-    if (last === undefined) return undefined
-    if (!peek) store.setContextHash(sessionId, null)
-    return NO_CARD_CONTEXT
-  }
+  if (!card) return last === undefined ? undefined : NO_CARD_CONTEXT
   const rendered = renderCardContext(card, ancestors(cards, card.id))
-  const hash = hashOf(rendered)
-  if (hash === last) return undefined
-  if (!peek) store.setContextHash(sessionId, hash)
-  return rendered
+  return hashOf(rendered) === last ? undefined : rendered
+}
+
+/** Claude has been given this card context, so it isn't repeated. */
+export function contextSeen(store: Store, sessionId: string, text: string): void {
+  store.setContextHash(sessionId, text === NO_CARD_CONTEXT ? null : hashOf(text))
 }
 
 const hashOf = (text: string) => createHash('sha1').update(text).digest('hex')

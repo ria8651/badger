@@ -71,6 +71,9 @@ type Handler = (...args: any[]) => unknown
  */
 export type Served = readonly string[] | Readonly<Record<string, ZodType<unknown[]>>>
 
+/** For a side that doesn't trust the other's answers: a schema of what each method returns. Methods that aren't listed are taken as they come. */
+export type Replies = Readonly<Record<string, ZodType>>
+
 /** Every method of T, called remotely: same arguments, always a promise. */
 export type Remote<T> = {
   [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<R extends Later<infer V> ? V : Awaited<R>> : never
@@ -87,21 +90,33 @@ export class Peer<Theirs> {
   private waiting = new Map<number, (reply: Extract<Frame, { t: 'reply' }>) => void>()
   private closed = false
 
-  /** `methods` are served by name, but only those listed in `served`. */
+  /**
+   * `methods` are served by name, but only those listed in `served`. A side
+   * that doesn't trust the other also checks its replies against
+   * `opts.replies`, and gives up on every call after `opts.timeoutMs`, so one
+   * that never answers can't pile them up.
+   */
   constructor(
     private link: Link,
     private methods: object,
     private served: Served,
     onEvent: (event: any) => void,
     onClose: () => void = () => {},
+    private opts: { replies?: Replies; timeoutMs?: number } = {},
   ) {
     link.onFrame((frame) => {
-      if (frame.t === 'event') onEvent(frame.event)
-      else if (frame.t === 'call') void this.serve(frame)
-      else {
-        const done = this.waiting.get(frame.id)
-        this.waiting.delete(frame.id)
-        done?.(frame)
+      // Nothing the other side sends may throw out of here: it would take the whole process down.
+      try {
+        if (typeof frame !== 'object' || frame === null) return
+        if (frame.t === 'event') onEvent(frame.event)
+        else if (frame.t === 'call') void this.serve(frame)
+        else if (frame.t === 'reply') {
+          const done = this.waiting.get(frame.id)
+          this.waiting.delete(frame.id)
+          done?.(frame)
+        }
+      } catch (err) {
+        console.error('Handling a frame failed:', err)
       }
     })
     link.onClose(() => {
@@ -137,8 +152,10 @@ export class Peer<Theirs> {
    * that arrived just behind the reply, e.g. terminal output that the reply's
    * snapshot doesn't include.
    */
-  request(method: string, args: unknown[], done: (err: Error | null, result?: any) => void, timeoutMs?: number): void {
+  request(method: string, args: unknown[], done: (err: Error | null, result?: any) => void, timeoutMs = this.opts.timeoutMs): void {
     if (this.closed) return done(new Error('Disconnected'))
+    const replies = this.opts.replies
+    const schema = replies && Object.hasOwn(replies, method) ? replies[method] : undefined
     const id = this.next++
     // A reply after this is dropped: it's no longer waited for.
     const timer =
@@ -150,7 +167,10 @@ export class Peer<Theirs> {
           }, timeoutMs)
     this.waiting.set(id, (r) => {
       clearTimeout(timer)
-      done(r.error === undefined ? null : r.bad ? new BadRequest(r.error) : new Error(r.error), r.result)
+      if (r.error !== undefined) return done(r.bad ? new BadRequest(String(r.error)) : new Error(String(r.error)))
+      if (!schema) return done(null, r.result)
+      const parsed = schema.safeParse(r.result)
+      done(parsed.success ? null : new Error(`Bad answer to ${method}: ${parsed.error.issues[0]?.message ?? 'invalid'}`), parsed.data)
     })
     this.link.send({ t: 'call', id, method, args })
   }

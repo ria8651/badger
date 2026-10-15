@@ -45,6 +45,8 @@ export class Children {
           finish(ok, String(m.result ?? (ok ? '' : `Stopped: ${m.subtype}`)))
         } else if (e.type === 'error') finish(false, e.error)
       })
+      // Stopped while the child was being set up: it never gets its prompt.
+      if (opts.signal?.aborted) return finish(false, 'Stopped before it started.')
       opts.signal?.addEventListener('abort', onAbort, { once: true })
       if (!child.send(opts.prompt)) finish(false, 'The chat closed before it could start.')
     })
