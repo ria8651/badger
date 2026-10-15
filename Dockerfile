@@ -1,7 +1,11 @@
 # syntax=docker/dockerfile:1
 
+# Pinned by digest: the floating tag moves every day or two, and each move
+# rebuilds (and re-pushes) the big apt layer below. Dependabot bumps it.
+ARG NODE_IMAGE=node:26-slim@sha256:0d1e33586362bb9e608c4e751e7a9e7edb55c9ac11461ed5666af696cc461dd4
+
 # ── Build the client ──
-FROM node:26-slim AS build
+FROM ${NODE_IMAGE} AS build
 # Node 25+ no longer ships corepack.
 RUN npm install -g pnpm@11.21.0
 WORKDIR /app
@@ -15,7 +19,7 @@ RUN pnpm build
 # carries the tools they'll reach for. Add your projects' toolchains here.
 # Chromium (with fonts, or pages render without text) and Playwright are
 # for Claude to check pages itself, headless.
-FROM node:26-slim
+FROM ${NODE_IMAGE}
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     tini bash git openssh-client ca-certificates curl procps less ripgrep jq \
