@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { socket } from '../api.ts'
-import { isDark } from '../theme.ts'
+import { isDark, palette } from '../theme.ts'
 
 /** ANSI colours tuned to sit on the palette in index.css; the rest of the theme comes from its variables. */
 const ANSI = {
@@ -98,7 +98,7 @@ export function TerminalView(props: {
     createEffect(() => props.visible && queueMicrotask(resize))
 
     // A tick late, so the page's colours have switched before they're read.
-    createEffect(on(isDark, () => queueMicrotask(() => (term.options.theme = theme())), { defer: true }))
+    createEffect(on(palette, () => queueMicrotask(() => (term.options.theme = theme())), { defer: true }))
 
     props.onReady?.(() => term.focus())
 

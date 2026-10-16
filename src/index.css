@@ -4,7 +4,9 @@
  * The whole palette. Tailwind's stock colours are removed so every colour in
  * the UI comes from this list.
  *
- *   bg       page background
+ *   canvas   behind the panes, showing in the gutters between them (set by the frame, below)
+ *   bg       a pane's background
+ *   well     the canvas when panes are tiles: a step back from bg
  *   surface  hover, selection, user messages, code
  *   line     dividers
  *   edge     borders on interactive controls
@@ -17,7 +19,9 @@
  */
 @theme {
   --color-*: initial;
+  --color-canvas: #e6e4df;
   --color-bg: #fafaf8;
+  --color-well: #ecebe6;
   --color-surface: #f0efeb;
   --color-line: #e6e4df;
   --color-edge: #d5d3cd;
@@ -32,9 +36,28 @@
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
-/* Dark is a class rather than a media query so it can be picked by hand; src/theme.ts sets it. */
-:root.dark {
+/*
+ * A theme is a palette and a frame, set as data-palette and data-frame by
+ * src/theme.ts. They're attributes rather than :root rules so any element can
+ * carry its own: the previews in Settings are drawn in their theme that way.
+ */
+[data-palette="light"] {
+  --color-bg: #fafaf8;
+  --color-well: #ecebe6;
+  --color-surface: #f0efeb;
+  --color-line: #e6e4df;
+  --color-edge: #d5d3cd;
+  --color-fg: #1b1a18;
+  --color-fg-2: #5f5d58;
+  --color-fg-3: #9a9892;
+  --color-accent: #c15f3c;
+  --color-danger: #c13a2e;
+  --color-ok: #3d7a4a;
+  --pane-ring: rgb(0 0 0 / 0.07);
+}
+[data-palette="dark"] {
   --color-bg: #1e1d1b;
+  --color-well: #151413;
   --color-surface: #2a2927;
   --color-line: #33322f;
   --color-edge: #45443f;
@@ -44,6 +67,46 @@
   --color-accent: #d97757;
   --color-danger: #e26d5f;
   --color-ok: #7cb08a;
+  --pane-ring: rgb(255 255 255 / 0.05);
+}
+/* True dark: near-black, as the dark theme first was. */
+[data-palette="black"] {
+  --color-bg: #141413;
+  --color-well: #0a0a09;
+  --color-surface: #1f1e1c;
+  --color-line: #282725;
+  --color-edge: #3a3936;
+  --color-fg: #e9e7e2;
+  --color-fg-2: #a3a19b;
+  --color-fg-3: #6f6d68;
+  --color-accent: #d97757;
+  --color-danger: #e26d5f;
+  --color-ok: #7cb08a;
+  --pane-ring: rgb(255 255 255 / 0.05);
+}
+
+/*
+ * The frame: how the big panes (sidebar, chat, panels) sit together. Panes
+ * are laid out with a gutter between them and a margin around them, and the
+ * canvas shows through both. Classic's gutter is a hairline of line colour,
+ * so the panes look divided; modern's is wide, so they look like tiles.
+ * .pane and the layout in src/components/Workspace.tsx read these.
+ */
+[data-frame="classic"] {
+  --color-canvas: var(--color-line);
+  --pane-gutter: 1px;
+  --pane-margin: 0px;
+  --pane-radius: 0px;
+  --pane-border: transparent;
+  --pane-shadow: none;
+}
+[data-frame="modern"] {
+  --color-canvas: var(--color-well);
+  --pane-gutter: 6px;
+  --pane-margin: 6px;
+  --pane-radius: 10px;
+  --pane-border: var(--pane-ring);
+  --pane-shadow: 0 1px 3px rgb(0 0 0 / 0.04);
 }
 
 @layer base {
@@ -60,6 +123,17 @@
   :focus-visible { outline: 1.5px solid var(--color-fg-3); outline-offset: 2px; }
   .lucide { stroke-width: 1.75; }
   .theme-switching, .theme-switching * { transition: none !important; }
+}
+
+/* One of the big panes, clipped to its corners. A layer down so utilities can override it. */
+@layer components {
+  .pane {
+    overflow: clip;
+    background-color: var(--color-bg);
+    outline: 1px solid var(--pane-border);
+    border-radius: var(--pane-radius);
+    box-shadow: var(--pane-shadow);
+  }
 }
 
 /* Popovers: in, and a quicker out. Reduced motion keeps the fade only. */

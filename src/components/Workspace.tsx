@@ -29,12 +29,14 @@ import {
   viewKey,
   viewsOf,
   wide,
+  part,
+  type Box,
   type Divider,
   type Drop,
   type Edge,
   type Group,
+  type Len,
   type PreviewView,
-  type Rect,
   type View,
 } from '../layout.ts'
 import { LOCAL, isOnline, onMachine } from '../machines.ts'
@@ -50,13 +52,12 @@ const BAR = 36
 /** No pane is dragged smaller than this. */
 const MIN = 120
 
-const pct = (n: number) => `${n * 100}%`
-const box = (r: Rect, top = 0): JSX.CSSProperties => ({
-  left: pct(r.x),
-  top: `calc(${pct(r.y)} + ${top}px)`,
-  width: pct(r.w),
-  height: `calc(${pct(r.h)} - ${top}px)`,
-})
+/** A length as CSS: its share of the container and its gutters, plus some pixels. */
+const css = (l: Len, px = 0) => `calc(${l.f * 100}% + ${l.g} * var(--pane-gutter) + ${px}px)`
+/** The middle of a gutter that starts here. */
+const mid = (l: Len): Len => ({ f: l.f, g: l.g + 0.5 })
+/** Placed over a box, less `top` pixels off the top. */
+const place = (b: Box, top = 0): JSX.CSSProperties => ({ left: css(b.x), top: css(b.y, top), width: css(b.w), height: css(b.h, -top) })
 
 const taskOf = (v?: View) => (v?.kind === 'task' ? v.id : undefined)
 const terminalOf = (v?: View) => (v?.kind === 'terminal' ? terminals().find((t) => t.id === v.id) : undefined)
@@ -108,6 +109,7 @@ export function Workspace(props: {
   })
   const measured = createMemo(() => measure(tree()))
   const rect = (id: string) => measured().rects.get(id)
+  const boxOf = (id: string) => measured().boxes.get(id)
   const groupIds = createMemo(() => groupsOf(tree()).map((g) => g.id))
   const groupById = (id: string) => groupsOf(tree()).find((g) => g.id === id)
   // Every view in the workspace, shown or not, so hiding or moving one never unmounts it.
@@ -211,29 +213,33 @@ export function Workspace(props: {
   // ── Resizing ──
 
   /** What's being dragged, for a cover over the page that keeps the cursor and stops terminals taking the pointer. */
-  const [dragging, setDragging] = createSignal<'col-resize' | 'row-resize' | 'grabbing'>()
+  const [dragging, setDragging] = createSignal<'col-resize' | 'row-resize' | 'move' | 'grabbing'>()
 
-  const resize = (d: Divider, sizes: number[]) =>
-    update((l) => (wide() ? { ...l, tree: setSizes(l.tree, d.path, sizes) } : { ...l, narrow: sizes[1] }))
-
-  const startResize = (e: PointerEvent, d: Divider) => {
+  /** Drags gutters: one, or two where they meet. Each keeps the pair of panes either side of it the same size together. */
+  const startResize = (e: PointerEvent, ds: Divider[]) => {
     if (e.button !== 0) return
     e.preventDefault()
     const bounds = container.getBoundingClientRect()
-    const row = d.dir === 'row'
-    const span = row ? d.split.w * bounds.width : d.split.h * bounds.height
-    const start = row ? e.clientX : e.clientY
-    const i = d.index
-    const pair = d.sizes[i - 1] + d.sizes[i]
-    const min = Math.min(MIN / span, pair / 2)
-    setDragging(row ? 'col-resize' : 'row-resize')
-    const move = (m: PointerEvent) => {
-      const before = Math.max(min, Math.min(pair - min, d.sizes[i - 1] + ((row ? m.clientX : m.clientY) - start) / span))
-      const sizes = [...d.sizes]
-      sizes[i - 1] = before
-      sizes[i] = pair - before
-      resize(d, sizes)
-    }
+    const gutter = parseFloat(getComputedStyle(container).getPropertyValue('--pane-gutter')) || 0
+    const drags = ds.map((d) => {
+      const row = d.dir === 'row'
+      const span = d.room.f * (row ? bounds.width : bounds.height) + d.room.g * gutter
+      const pair = d.sizes[d.index - 1] + d.sizes[d.index]
+      return { d, row, span, pair, start: row ? e.clientX : e.clientY, min: Math.min(MIN / span, pair / 2) }
+    })
+    const cursors = new Set(drags.map((g) => g.row))
+    setDragging(cursors.size > 1 ? 'move' : cursors.has(true) ? 'col-resize' : 'row-resize')
+    const move = (m: PointerEvent) =>
+      update((l) =>
+        drags.reduce((l, { d, row, span, pair, start, min }) => {
+          const i = d.index
+          const before = Math.max(min, Math.min(pair - min, d.sizes[i - 1] + ((row ? m.clientX : m.clientY) - start) / span))
+          const sizes = [...d.sizes]
+          sizes[i - 1] = before
+          sizes[i] = pair - before
+          return wide() ? { ...l, tree: setSizes(l.tree, d.path, sizes) } : { ...l, narrow: sizes[1] }
+        }, l),
+      )
     const up = () => {
       setDragging()
       removeEventListener('pointermove', move)
@@ -263,21 +269,21 @@ export function Workspace(props: {
   }
 
   /** Where a drop would put the tab, to outline it. */
-  const dropRect = (d: Drop): Rect | undefined => {
-    const r = rect(d.target)
-    if (!r) return
+  const dropBox = (d: Drop): Box | undefined => {
+    const b = boxOf(d.target)
+    if (!b) return
     const share = d.target === 'chat' ? 0.4 : 0.5
     switch (d.zone) {
       case 'center':
-        return r
+        return b
       case 'left':
-        return { ...r, w: r.w * share }
+        return part(b, 'row', 0, share)
       case 'right':
-        return { ...r, x: r.x + r.w * (1 - share), w: r.w * share }
+        return part(b, 'row', 1 - share, 1)
       case 'top':
-        return { ...r, h: r.h * share }
+        return part(b, 'col', 0, share)
       case 'bottom':
-        return { ...r, y: r.y + r.h * (1 - share), h: r.h * share }
+        return part(b, 'col', 1 - share, 1)
     }
   }
 
@@ -392,7 +398,7 @@ export function Workspace(props: {
     }
     const focused = () => current() === g().id
     return (
-      <div class="absolute flex flex-col bg-bg" style={box(rect(g().id)!)} onPointerDown={() => focusLeaf(g().id)}>
+      <div class="pane absolute flex flex-col" style={place(boxOf(g().id)!)} onPointerDown={() => focusLeaf(g().id)}>
         <div class="flex shrink-0 items-center gap-0.5 px-1.5" style={{ height: `${BAR}px` }}>
           {/* A mouse wheel only scrolls vertically, so turn that into scrolling along the tabs. */}
           <div
@@ -491,8 +497,8 @@ export function Workspace(props: {
   }
 
   return (
-    <div ref={container} class="relative h-full min-w-0 flex-1 overflow-hidden">
-      <div class="absolute flex flex-col" style={box(rect('chat')!)} onFocusIn={() => focusIn('chat')}>
+    <div ref={container} class="relative h-full min-w-0 flex-1">
+      <div class="pane absolute flex flex-col" style={place(boxOf('chat')!)} onFocusIn={() => focusIn('chat')}>
         {chat()}
       </div>
 
@@ -501,23 +507,23 @@ export function Workspace(props: {
       <For each={keys()}>
         {(key) => {
           const view = () => viewOf(key)
-          const place = createMemo(() => {
+          const at = createMemo(() => {
             const g = groupOf(tree(), key)
-            const r = g && rect(g.id)
-            return r && activeOf(g) === key ? { group: g.id, rect: r } : undefined
+            const b = g && boxOf(g.id)
+            return b && activeOf(g) === key ? { group: g.id, box: b } : undefined
           })
           return (
             <div
-              class="absolute"
-              classList={{ hidden: !place() }}
-              style={place() ? box(place()!.rect, BAR) : undefined}
-              onFocusIn={() => place() && focusIn(place()!.group)}
+              class="absolute overflow-hidden rounded-b-(--pane-radius)"
+              classList={{ hidden: !at() }}
+              style={at() ? place(at()!.box, BAR) : undefined}
+              onFocusIn={() => at() && focusIn(at()!.group)}
             >
               <Show when={view()}>
                 {(v) => (
                   <Switch>
                     <Match when={v().kind === 'terminal' && (v() as { id: string })}>
-                      {(t) => <TerminalView id={t().id} visible={!!place()} onReady={(focus) => ready(key, focus)} class="size-full px-3 py-2" />}
+                      {(t) => <TerminalView id={t().id} visible={!!at()} onReady={(focus) => ready(key, focus)} class="size-full px-3 py-2" />}
                     </Match>
                     <Match when={v().kind === 'preview' && (v() as PreviewView)}>
                       {(p) => <PreviewFrame view={p()} machine={machine()} onReady={(focus) => ready(key, focus)} class="size-full" />}
@@ -532,24 +538,35 @@ export function Workspace(props: {
         }}
       </For>
 
+      {/* The gutters are the handles, grown a little each way so a thin one is easy to catch. */}
       <Index each={measured().dividers}>
         {(d) => (
           <div
-            onPointerDown={(e) => startResize(e, d())}
-            class={`absolute z-10 flex justify-center ${d().dir === 'row' ? '-ml-1 w-2 cursor-col-resize' : '-mt-1 h-2 cursor-row-resize flex-col'}`}
-            style={
-              d().dir === 'row'
-                ? { left: pct(d().at), top: pct(d().split.y), height: pct(d().split.h) }
-                : { top: pct(d().at), left: pct(d().split.x), width: pct(d().split.w) }
-            }
-          >
-            <div class={d().dir === 'row' ? 'h-full w-px bg-line' : 'h-px w-full bg-line'} />
-          </div>
+            onPointerDown={(e) => startResize(e, [d()])}
+            class={`absolute z-10 rounded-full transition-colors delay-150 hover:bg-edge after:absolute after:content-[""] ${
+              d().dir === 'row' ? 'cursor-col-resize after:inset-y-0 after:-inset-x-1' : 'cursor-row-resize after:inset-x-0 after:-inset-y-1'
+            }`}
+            style={place(d().gutter)}
+          />
+        )}
+      </Index>
+      <Index each={measured().junctions}>
+        {(j) => (
+          <div
+            onPointerDown={(e) => startResize(e, [j().vertical, j().horizontal])}
+            class="absolute z-20 size-4 -translate-1/2 cursor-move"
+            style={{ left: css(mid(j().vertical.gutter.x)), top: css(mid(j().horizontal.gutter.y)) }}
+          />
         )}
       </Index>
 
-      <Show when={drag()?.drop && dropRect(drag()!.drop!)}>
-        {(r) => <div class="pointer-events-none absolute z-20 rounded-md border-2 border-accent/60 bg-accent/10 transition-all duration-100" style={box(r())} />}
+      <Show when={drag()?.drop && dropBox(drag()!.drop!)}>
+        {(b) => (
+          <div
+            class="pointer-events-none absolute z-20 rounded-[max(6px,var(--pane-radius))] border-2 border-accent/60 bg-accent/10 transition-all duration-100"
+            style={place(b())}
+          />
+        )}
       </Show>
       <Show when={dragging()}>
         <div class="fixed inset-0 z-40" style={{ cursor: dragging() }} />

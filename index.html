@@ -7,12 +7,17 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Badger</title>
     <script>
-      // Before first paint, so the page doesn't flash the other theme. src/theme.ts takes over after.
+      // Before first paint, so the page doesn't flash another theme. src/theme.ts takes over after.
       {
-        const t = localStorage.getItem('badger.theme')
-        const dark = t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches
-        document.documentElement.classList.toggle('dark', dark)
-        document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+        const raw = localStorage.getItem('badger.theme')
+        const c = { mode: 'system', frame: 'classic' }
+        if (raw === 'light' || raw === 'dark') c.mode = raw
+        else try { Object.assign(c, JSON.parse(raw || '{}')) } catch {}
+        const palette = c.mode === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : c.mode
+        const root = document.documentElement
+        root.dataset.palette = palette
+        root.dataset.frame = c.frame
+        root.style.colorScheme = palette === 'light' ? 'light' : 'dark'
       }
     </script>
   </head>

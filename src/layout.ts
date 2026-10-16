@@ -63,6 +63,27 @@ export interface Rect {
   h: number
 }
 
+/** A length on screen: a fraction of the container plus a number of gutters, the theme's space between panes. */
+export interface Len {
+  f: number
+  g: number
+}
+/** Where a pane or gutter is drawn, gutters included; Rect leaves them out. */
+export interface Box {
+  x: Len
+  y: Len
+  w: Len
+  h: Len
+}
+const len = (f: number, g = 0): Len => ({ f, g })
+const plus = (a: Len, b: Len): Len => ({ f: a.f + b.f, g: a.g + b.g })
+const times = (a: Len, k: number): Len => ({ f: a.f * k, g: a.g * k })
+
+/** A share of a box, from `from` to `to` along x or y, as fractions of it. */
+export function part(b: Box, dir: 'row' | 'col', from: number, to: number): Box {
+  return dir === 'row' ? { ...b, x: plus(b.x, times(b.w, from)), w: times(b.w, to - from) } : { ...b, y: plus(b.y, times(b.h, from)), h: times(b.h, to - from) }
+}
+
 export const CHAT: Leaf = { type: 'chat' }
 const EMPTY: Layout = { tree: CHAT, hidden: true }
 
@@ -180,27 +201,71 @@ export interface Divider {
   /** The whole split, so a drag can be turned into its sizes. */
   split: Rect
   sizes: number[]
+  /** The room the split's children share along its direction: the split less its gutters. */
+  room: Len
   /** Where the boundary is, as a fraction of the container along the split's direction. */
   at: number
+  /** The gutter itself, which is what's dragged. */
+  gutter: Box
 }
 
-/** Every leaf's rectangle and every boundary between them, as fractions of the container. */
-export function measure(tree: Node): { rects: Map<string, Rect>; dividers: Divider[] } {
+/** Where a vertical and a horizontal gutter meet, for dragging both at once. */
+export interface Junction {
+  /** The gutter between side-by-side panes. */
+  vertical: Divider
+  /** The gutter between stacked ones. */
+  horizontal: Divider
+}
+
+/**
+ * Every leaf's rectangle and every boundary between them. Rects are fractions
+ * of the container, for finding panes; boxes are where they're drawn, with a
+ * gutter between each pair of siblings.
+ */
+export function measure(tree: Node): { rects: Map<string, Rect>; boxes: Map<string, Box>; dividers: Divider[]; junctions: Junction[] } {
   const rects = new Map<string, Rect>()
+  const boxes = new Map<string, Box>()
   const dividers: Divider[] = []
-  const walk = (n: Node, r: Rect, path: number[]) => {
-    if (n.type !== 'split') return void rects.set(leafId(n), r)
+  const walk = (n: Node, r: Rect, b: Box, path: number[]) => {
+    if (n.type !== 'split') {
+      rects.set(leafId(n), r)
+      boxes.set(leafId(n), b)
+      return
+    }
+    const row = n.dir === 'row'
+    const start = row ? b.x : b.y
+    const room = plus(row ? b.w : b.h, len(0, 1 - n.children.length))
     let offset = 0
     n.children.forEach((c, i) => {
       const s = n.sizes[i]
-      const child = n.dir === 'row' ? { ...r, x: r.x + offset * r.w, w: s * r.w } : { ...r, y: r.y + offset * r.h, h: s * r.h }
-      if (i > 0) dividers.push({ path, index: i, dir: n.dir, split: r, sizes: n.sizes, at: n.dir === 'row' ? child.x : child.y })
-      walk(c, child, [...path, i])
+      const child = row ? { ...r, x: r.x + offset * r.w, w: s * r.w } : { ...r, y: r.y + offset * r.h, h: s * r.h }
+      const from = plus(plus(start, times(room, offset)), len(0, i))
+      const size = times(room, s)
+      const box = row ? { ...b, x: from, w: size } : { ...b, y: from, h: size }
+      if (i > 0) {
+        const at = plus(from, len(0, -1))
+        const gutter = row ? { ...b, x: at, w: len(0, 1) } : { ...b, y: at, h: len(0, 1) }
+        dividers.push({ path, index: i, dir: n.dir, split: r, sizes: n.sizes, room, at: row ? child.x : child.y, gutter })
+      }
+      walk(c, child, box, [...path, i])
       offset += s
     })
   }
-  walk(tree, { x: 0, y: 0, w: 1, h: 1 }, [])
-  return { rects, dividers }
+  walk(tree, { x: 0, y: 0, w: 1, h: 1 }, { x: len(0), y: len(0), w: len(1), h: len(1) }, [])
+
+  // A horizontal gutter meets a vertical one where each reaches the other's line, ends included.
+  const e = 1e-6
+  const junctions: Junction[] = []
+  for (const vertical of dividers.filter((d) => d.dir === 'row'))
+    for (const horizontal of dividers.filter((d) => d.dir === 'col'))
+      if (
+        horizontal.at >= vertical.split.y - e &&
+        horizontal.at <= vertical.split.y + vertical.split.h + e &&
+        vertical.at >= horizontal.split.x - e &&
+        vertical.at <= horizontal.split.x + horizontal.split.w + e
+      )
+        junctions.push({ vertical, horizontal })
+  return { rects, boxes, dividers, junctions }
 }
 
 /** On narrow screens: the chat, and under it one group holding every view, showing the focused group's tab. */
