@@ -46,7 +46,6 @@ export function CardView(props: {
   })
   // Linked ids with no transcript yet (a chat opened but never sent) are left out.
   const chats = createMemo(() => props.sessions.filter((s) => props.card.sessionIds.includes(s.id)))
-  const [renaming, setRenaming] = createSignal<string>()
   /**
    * Chats that could go on this card: ones on no card first, then ones it would take off another card, then archived
    * ones, greyed. Newest first in each.
@@ -185,24 +184,22 @@ export function CardView(props: {
         <For each={chats()}>
           {(s) => (
             <div class="group -mx-2 flex items-center gap-2 rounded-lg px-2 transition-colors hover:bg-surface/60">
-              <Show
-                when={renaming() !== s.id}
-                fallback={<RenameChat session={s} onDone={() => setRenaming()} class="flex min-w-0 flex-1 items-center gap-3 py-2.5" />}
-              >
-                <button onClick={() => props.onOpenChat(s.id)} class="flex min-w-0 flex-1 items-center gap-2 py-2.5 text-left">
-                  <span class="min-w-0 flex-1 truncate text-[13px] text-fg-2 group-hover:text-fg">{s.title}</span>
-                  <ChatDot running={s.running} attention={attention()[s.id]} />
-                  <span class="max-w-[40%] shrink-0 truncate text-[11px] text-fg-3">{s.cwd && folderLabel(s.cwd)}</span>
-                  <Show when={onMachine(s.machine)}>{(name) => <MachineName machine={s.machine} name={name()} class="text-[11px] text-fg-3" />}</Show>
-                </button>
-                <button
-                  onClick={() => setRenaming(s.id)}
-                  title="Rename chat"
-                  class="grid size-6 place-items-center rounded-md text-fg-3 opacity-0 transition hover:bg-surface hover:text-fg group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:size-9 pointer-coarse:opacity-100"
-                >
-                  <Pencil class="size-3.5" />
-                </button>
-              </Show>
+              <button onClick={() => props.onOpenChat(s.id)} class="flex min-w-0 flex-1 items-center gap-2 py-2.5 text-left">
+                <span class="min-w-0 flex-1 truncate text-[13px] text-fg-2 group-hover:text-fg">{s.title}</span>
+                <ChatDot running={s.running} attention={attention()[s.id]} />
+                <span class="max-w-[40%] shrink-0 truncate text-[11px] text-fg-3">{s.cwd && folderLabel(s.cwd)}</span>
+                <Show when={onMachine(s.machine)}>{(name) => <MachineName machine={s.machine} name={name()} class="text-[11px] text-fg-3" />}</Show>
+              </button>
+              <RenameChat
+                session={s}
+                title="Rename chat"
+                triggerClass={(open) =>
+                  `grid size-6 place-items-center rounded-md transition hover:bg-surface hover:text-fg group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:size-9 pointer-coarse:opacity-100 ${
+                    open ? 'bg-surface text-fg opacity-100' : 'text-fg-3 opacity-0'
+                  }`
+                }
+                trigger={() => <Pencil class="size-3.5" />}
+              />
               <button
                 onClick={() => api.unlinkSession(props.card.id, s.id)}
                 title="Unlink chat"

@@ -1,21 +1,34 @@
-import { Show, createSignal, onMount } from 'solid-js'
+import { Show, createSignal, onCleanup, type JSX } from 'solid-js'
+import { Portal } from 'solid-js/web'
 import { RefreshCw, Sparkles } from '../icons'
 import type { SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
+import { floatBy } from './ui.tsx'
 
 /**
- * Edits a chat's title in place, with a title from Claude offered alongside
- * as soon as it opens. Clicking the suggestion saves it; Tab copies it into
- * the box to tweak. Enter saves, Escape cancels, clicking away keeps what you typed.
- * Laid out by the caller's class: stacked in the sidebar, inline on a card.
+ * A trigger that opens a box to rename a chat, floating over the page, with a
+ * title from Claude offered as soon as it opens. Clicking the suggestion saves
+ * it; Tab copies it into the box to tweak. Enter saves, Escape cancels, clicking
+ * away keeps what you typed. The same wherever a chat can be renamed.
  */
-export function RenameChat(props: { session: SessionSummary; onSaved?: (title: string) => void; onDone: () => void; class?: string }) {
-  let input!: HTMLInputElement
-  let typed = false
-  let done = false
+export function RenameChat(props: {
+  session: SessionSummary
+  onSaved?: (title: string) => void
+  trigger: (open: () => boolean) => JSX.Element
+  triggerClass: (open: boolean) => string
+  title?: string
+  onOpenChange?: (open: boolean) => void
+}) {
+  const [open, setOpen] = createSignal(false)
+  const [place, setPlace] = createSignal<JSX.CSSProperties>({})
   const [suggestion, setSuggestion] = createSignal<string>()
   const [suggesting, setSuggesting] = createSignal(false)
   const [error, setError] = createSignal<string>()
+  let trigger!: HTMLButtonElement
+  let panel: HTMLDivElement | undefined
+  let input: HTMLInputElement | undefined
+  let typed = false
+  const width = 352
 
   const suggest = () => {
     if (suggesting()) return
@@ -27,72 +40,114 @@ export function RenameChat(props: { session: SessionSummary; onSaved?: (title: s
       .finally(() => setSuggesting(false))
   }
 
-  const finish = (title?: string) => {
-    if (done) return
-    done = true
+  const show = () => {
+    setPlace(floatBy(trigger, width))
+    typed = false
+    setSuggestion()
+    setOpen(true)
+    props.onOpenChange?.(true)
+    suggest()
+  }
+  const close = (title?: string, refocus = true) => {
+    if (!open()) return
+    setOpen(false)
+    props.onOpenChange?.(false)
     title = title?.trim()
     if (title && title !== props.session.title) {
       props.onSaved?.(title)
       api.rename(props.session.id, title).catch((e: Error) => alert(`Couldn't rename: ${e.message}`))
     }
-    props.onDone()
+    if (refocus) trigger.focus()
   }
 
-  onMount(() => {
-    input.focus()
-    input.select()
-    suggest()
+  const onOutside = (e: PointerEvent) => {
+    const target = e.target as Node
+    if (open() && !panel?.contains(target) && !trigger.contains(target)) close(typed ? input?.value : undefined, false)
+  }
+  const onResize = () => close(typed ? input?.value : undefined, false)
+  document.addEventListener('pointerdown', onOutside)
+  addEventListener('resize', onResize)
+  onCleanup(() => {
+    document.removeEventListener('pointerdown', onOutside)
+    removeEventListener('resize', onResize)
+    if (open()) props.onOpenChange?.(false)
   })
 
   return (
-    // Buttons keep focus in the box, so clicking them doesn't end the edit.
-    <div class={props.class} onMouseDown={(e) => e.target !== input && e.preventDefault()}>
-      <input
-        ref={input}
-        value={props.session.title}
-        onInput={() => (typed = true)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') finish(input.value)
-          if (e.key === 'Escape') finish()
-          if (e.key === 'Tab' && suggestion()) {
-            e.preventDefault()
-            input.value = suggestion()!
-            typed = true
-          }
-        }}
-        onBlur={() => finish(typed ? input.value : undefined)}
-        class="-mx-1 min-w-0 flex-1 rounded bg-bg px-1 text-[13px] text-fg ring-1 pointer-coarse:text-base ring-edge outline-none"
-      />
-      <div class="flex min-w-0 items-center gap-1 text-[11px] text-fg-3">
-        <Show
-          when={suggestion() && !suggesting()}
-          fallback={
-            <span class={`flex items-center gap-1 truncate ${error() ? 'text-danger' : ''}`}>
-              <Sparkles class={`size-3 shrink-0 ${error() ? '' : 'animate-pulse'}`} />
-              {error() ?? 'Suggesting a title…'}
-            </span>
-          }
-        >
-          <button
-            type="button"
-            onClick={() => finish(suggestion())}
-            title="Use this title (Tab to edit it first)"
-            class="flex min-w-0 items-center gap-1 rounded text-fg-2 hover:text-fg"
+    <>
+      <button
+        ref={trigger}
+        type="button"
+        title={props.title}
+        aria-haspopup="dialog"
+        aria-expanded={open()}
+        onClick={() => (open() ? close() : show())}
+        class={props.triggerClass(open())}
+      >
+        {props.trigger(open)}
+      </button>
+      <Show when={open()}>
+        <Portal>
+          <div
+            ref={panel}
+            role="dialog"
+            aria-label="Rename chat"
+            style={{ ...place(), width: `${width}px` }}
+            class="fixed z-40 flex animate-[pop-in_120ms_ease-out] flex-col rounded-xl border border-edge bg-bg shadow-[0_12px_32px_-12px_rgb(0_0_0/0.35)]"
           >
-            <Sparkles class="size-3 shrink-0" />
-            <span class="truncate">{suggestion()}</span>
-          </button>
-        </Show>
-        <button
-          type="button"
-          onClick={suggest}
-          disabled={suggesting()}
-          title="Suggest another"
-          class="grid size-3.5 shrink-0 place-items-center rounded hover:text-fg disabled:invisible"
-        >
-          <RefreshCw class="size-3" />
-        </button>
-      </div>
-    </div>
+            <input
+              ref={(el) => {
+                input = el
+                queueMicrotask(() => (el.focus(), el.select()))
+              }}
+              value={props.session.title}
+              onInput={() => (typed = true)}
+              onKeyDown={(e) => {
+                // Not the page's shortcuts.
+                e.stopPropagation()
+                if (e.key === 'Enter' && !e.isComposing) close(e.currentTarget.value)
+                if (e.key === 'Escape') close()
+                if (e.key === 'Tab' && suggestion()) {
+                  e.preventDefault()
+                  e.currentTarget.value = suggestion()!
+                  typed = true
+                }
+              }}
+              class="h-10 shrink-0 border-b border-line bg-transparent px-3.5 text-[13px] text-fg outline-none pointer-coarse:h-12 pointer-coarse:text-base"
+            />
+            <div class="flex items-center gap-1 p-1">
+              <Show
+                when={suggestion() && !suggesting()}
+                fallback={
+                  <span class={`flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5 text-xs ${error() ? 'text-danger' : 'text-fg-3'}`}>
+                    <Sparkles class={`size-3.5 shrink-0 ${error() ? '' : 'animate-pulse'}`} />
+                    <span class="truncate">{error() ?? 'Suggesting a title…'}</span>
+                  </span>
+                }
+              >
+                <button
+                  type="button"
+                  onClick={() => close(suggestion())}
+                  title="Use this title (Tab to edit it first)"
+                  class="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-fg-2 transition-colors hover:bg-surface hover:text-fg pointer-coarse:py-2.5"
+                >
+                  <Sparkles class="size-3.5 shrink-0 text-fg-3" />
+                  <span class="truncate">{suggestion()}</span>
+                </button>
+              </Show>
+              <button
+                type="button"
+                onClick={suggest}
+                disabled={suggesting()}
+                title="Suggest another"
+                class="grid size-7 shrink-0 place-items-center rounded-lg text-fg-3 transition-colors hover:bg-surface hover:text-fg disabled:invisible"
+              >
+                <RefreshCw class="size-3.5" />
+              </button>
+            </div>
+          </div>
+        </Portal>
+      </Show>
+    </>
   )
 }

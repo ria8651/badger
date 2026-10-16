@@ -138,6 +138,28 @@ export interface ChangesStatus {
   ahead: number
 }
 
+/** Where a checkout stands, for the bar above a chat: what's uncommitted, and how it compares with its upstream and, in a worktree, the main checkout. */
+export interface GitStatus {
+  /** Empty when HEAD is detached. */
+  branch: string
+  /** Files with uncommitted changes, untracked ones included. */
+  changes: number
+  /** Uncommitted lines added and removed, new files' included. */
+  added: number
+  removed: number
+  /** The branch's upstream, e.g. origin/spike, if it has one. */
+  upstream?: string
+  /** Commits on HEAD the upstream doesn't have, and the other way round; 0 without an upstream. */
+  ahead: number
+  behind: number
+  /** Where a branch with no upstream would be pushed: origin, or the only remote. Absent with no remotes. */
+  remote?: string
+  /** In a linked worktree: the main checkout's branch, and the commits each has that the other doesn't. */
+  base?: { branch: string; ahead: number; behind: number }
+  /** When the repo last fetched, ms since epoch; absent if it never has. */
+  fetchedAt?: number
+}
+
 /** A folder new chats can start in. A git repo's is its main checkout, with its worktrees alongside. */
 export interface Folder {
   path: string
@@ -152,15 +174,11 @@ export interface Folder {
 /** One working tree of a repo. */
 export interface Checkout {
   path: string
-  /** Empty when HEAD is detached. */
-  branch: string
   main: boolean
-  /** Files with uncommitted changes, untracked ones included. */
-  changes: number
-  /** Commits on HEAD that no remote has. Null when the repo has no remotes. */
+  /** As the chat header shows it, without fetching first. */
+  git: GitStatus
+  /** Commits on HEAD that no remote has, upstream or not. Null when the repo has no remotes. */
   unpushed: number | null
-  /** Commits on HEAD that the main checkout's HEAD doesn't have; 0 for the main checkout. */
-  unmerged: number
   /** The last commit, ms since epoch; 0 before the first. */
   committedAt: number
 }

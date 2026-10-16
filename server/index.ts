@@ -1009,9 +1009,17 @@ const server = createServer(async (req, res) => {
         if (!cwd) throw new BadRequest('cwd is required')
         return json(200, { root: await machineParam(url.searchParams.get('machine')).peer.remote.workspaceRoot(cwd) })
       }
-      if (url.pathname === '/api/changes') {
+      if (url.pathname === '/api/git' && method === 'GET') {
         const dir = requirePath(url.searchParams.get('path'))
-        return json(200, (await machineParam(url.searchParams.get('machine')).peer.remote.changesStatus(dir)) ?? null)
+        const runner = machineParam(url.searchParams.get('machine'))
+        return json(200, (await runner.peer.remote.gitStatus(dir, url.searchParams.get('fetch') === '1')) ?? null)
+      }
+      if ((url.pathname === '/api/git/push' || url.pathname === '/api/git/pull') && method === 'POST') {
+        const body = await readJson(req)
+        const runner = machineParam(body.machine)
+        const dir = requirePath(body.path)
+        await (url.pathname === '/api/git/push' ? runner.peer.remote.gitPush(dir) : runner.peer.remote.gitPull(dir))
+        return json(204, null)
       }
       // A file from the file browser, e.g. an image to attach.
       if (url.pathname === '/api/fs/file' && method === 'GET') {

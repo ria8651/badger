@@ -4,7 +4,7 @@ import { readdir, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import type { Checkout, FileEntry, Folder, Listing } from '../shared/protocol.ts'
-import { git, inaccessible } from './workspace.ts'
+import { git, gitStatus, inaccessible } from './workspace.ts'
 
 const run = promisify(execFile)
 
@@ -30,27 +30,24 @@ async function worktrees(main: string): Promise<{ path: string; branch: string; 
   )
 }
 
-async function checkout(path: string, branch: string, main: boolean, base: string | undefined, remotes: boolean): Promise<Checkout> {
-  const [status, unpushed, unmerged, committed] = await Promise.all([
-    tryGit(path, 'status', '--porcelain'),
+async function checkout(path: string, branch: string, main: boolean, remotes: boolean): Promise<Checkout> {
+  const [git, unpushed, committed] = await Promise.all([
+    gitStatus(path).catch(() => undefined),
     remotes ? tryGit(path, 'rev-list', '--count', 'HEAD', '--not', '--remotes') : undefined,
-    !main && base ? tryGit(path, 'rev-list', '--count', `${base}..HEAD`) : undefined,
     tryGit(path, 'log', '-1', '--format=%ct'),
   ])
   return {
     path,
-    branch,
     main,
-    changes: status ? status.split('\n').length : 0,
+    git: git ?? { branch, changes: 0, added: 0, removed: 0, ahead: 0, behind: 0 },
     unpushed: remotes ? Number(unpushed ?? 0) : null,
-    unmerged: Number(unmerged ?? 0),
     committedAt: Number(committed ?? 0) * 1000,
   }
 }
 
 async function repoCheckouts(main: string): Promise<Checkout[]> {
-  const [trees, base, remotes] = await Promise.all([worktrees(main), tryGit(main, 'rev-parse', 'HEAD'), tryGit(main, 'remote')])
-  const all = await Promise.all(trees.map((w) => checkout(w.path, w.branch, w.main, base, !!remotes)))
+  const [trees, remotes] = await Promise.all([worktrees(main), tryGit(main, 'remote')])
+  const all = await Promise.all(trees.map((w) => checkout(w.path, w.branch, w.main, !!remotes)))
   return all.sort((a, b) => Number(b.main) - Number(a.main) || b.committedAt - a.committedAt)
 }
 

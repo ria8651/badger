@@ -1,5 +1,5 @@
 import { createSignal } from 'solid-js'
-import type { Card, CardStatus, ChangesStatus, ClientEvent, Folder, Listing, Machine, ModelOption, ServerEvent, SessionSummary, TerminalInfo, WorktreeStatus } from '../shared/protocol.ts'
+import type { Card, CardStatus, ClientEvent, GitStatus, Folder, Listing, Machine, ModelOption, ServerEvent, SessionSummary, TerminalInfo, WorktreeStatus } from '../shared/protocol.ts'
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -39,8 +39,10 @@ export const api = {
   unlinkSession: (id: number, sessionId: string) => request<Card>('DELETE', `/api/cards/${id}/sessions/${sessionId}`),
   // Folders, files, git and terminals are on a machine: the hub's own unless one is given.
   worktree: (path: string, machine?: string) => get<WorktreeStatus>(`/api/worktree?${on(machine, { path })}`),
-  /** Null outside a git repo. */
-  changes: (path: string, machine?: string) => get<ChangesStatus | null>(`/api/changes?${on(machine, { path })}`),
+  /** Null outside a git repo. Fetching first makes "behind" current, but can take a moment. */
+  git: (path: string, machine?: string, fetch = false) => get<GitStatus | null>(`/api/git?${on(machine, { path, ...(fetch ? { fetch: '1' } : {}) })}`),
+  push: (path: string, machine?: string) => request<void>('POST', '/api/git/push', { path, machine }),
+  pull: (path: string, machine?: string) => request<void>('POST', '/api/git/pull', { path, machine }),
   removeWorktree: (path: string, machine?: string) => request<void>('DELETE', `/api/worktree?${on(machine, { path })}`),
   folders: (machine?: string) => get<Folder[]>(`/api/folders?${on(machine)}`),
   addFolder: (path: string, machine?: string) => request<void>('POST', '/api/folders', { path, machine }),

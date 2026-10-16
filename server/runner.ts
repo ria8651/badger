@@ -33,7 +33,7 @@ import { TranscriptSync, writeTranscript } from './sync.ts'
 import { TERMINAL_INSTRUCTIONS, TERMINAL_SERVER, terminalOps } from './terminalTools.ts'
 import { Terminals } from './terminals.ts'
 import { ContextReader, readAccount } from './usage.ts'
-import { changesStatus, excludeWorktrees, inaccessible, removeWorktree, workspaceRoot, worktreeStatus } from './workspace.ts'
+import { excludeWorktrees, gitPull, gitPush, gitStatus, inaccessible, removeWorktree, workspaceRoot, worktreeStatus } from './workspace.ts'
 
 // Merging only starts a chat in the main checkout, and that chat asks for anything risky itself.
 const MERGE_TOOL_NAME = `mcp__${BOARD_SERVER}__${MERGE_TOOL}`
@@ -330,8 +330,17 @@ export class Runner implements RunnerApi {
     return worktreeStatus(path).catch(badRequest)
   }
 
-  changesStatus(path: string) {
-    return changesStatus(path).catch(badRequest)
+  gitStatus(path: string, fetch: boolean) {
+    return gitStatus(path, fetch).catch(badRequest)
+  }
+
+  gitPush(path: string) {
+    return gitPush(path).catch(badRequest)
+  }
+
+  async gitPull(path: string) {
+    if (this.manager.in(path).some((s) => s.running)) throw new BadRequest('A chat is working here. Pull once it has finished.')
+    await gitPull(path).catch(badRequest)
   }
 
   async removeWorktree(dir: string): Promise<void> {

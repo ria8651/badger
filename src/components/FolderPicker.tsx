@@ -5,6 +5,7 @@ import { api } from '../api.ts'
 import { basename, scratchDir } from '../folders.ts'
 import { machineOf, machines, severalMachines } from '../machines.ts'
 import { FileBrowser, formatBytes } from './FileBrowser.tsx'
+import { GitSummary } from './GitSummary.tsx'
 import { ltr, plural } from './ui.tsx'
 
 /** How many folders show before "Show more": the most recently used. */
@@ -76,7 +77,8 @@ export function FolderPicker(props: {
     api.hideFolder(folder.path, props.machine).then(refetch, (e: Error) => alert(`Couldn't remove it: ${e.message}`))
   }
   const removeWorktree = (folder: Folder, c: Checkout) => {
-    const kept = c.unmerged ? `\n\nIts branch ${c.branch} has ${plural(c.unmerged, 'unmerged commit')}, so it will be kept.` : ''
+    const unmerged = c.git.base?.ahead ?? 0
+    const kept = unmerged ? `\n\nIts branch ${c.git.branch} has ${plural(unmerged, 'unmerged commit')}, so it will be kept.` : ''
     const unpushed = c.unpushed ? `\n\n${plural(c.unpushed, 'commit')} on it aren't on any remote.` : ''
     if (!confirm(`Delete worktree ${basename(c.path)}?${kept}${unpushed}`)) return
     const machine = props.machine
@@ -154,7 +156,7 @@ export function FolderPicker(props: {
                             {/* The status drops under the name when the row's too narrow for both. */}
                             <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3">
                               <FolderName folder={folder} onHide={() => hide(folder)} />
-                              <Status checkout={c} />
+                              <GitSummary git={c.git} branch class="shrink-0 text-[11px]" />
                             </div>
                             <Size path={c.path} machine={props.machine} />
                           </Row>
@@ -165,21 +167,21 @@ export function FolderPicker(props: {
                           <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3">
                             <span class="flex min-w-32 flex-1 items-baseline gap-2" title={c.path}>
                               <span class="truncate font-mono text-xs text-fg-2">{basename(c.path)}</span>
-                              <Show when={c.branch && !c.branch.endsWith(basename(c.path))}>
-                                <span class="min-w-8 truncate font-mono text-[11px] text-fg-3">{c.branch}</span>
+                              <Show when={c.git.branch && !c.git.branch.endsWith(basename(c.path))}>
+                                <span class="min-w-8 truncate font-mono text-[11px] text-fg-3">{c.git.branch}</span>
                               </Show>
                             </span>
-                            <Status checkout={c} />
+                            <GitSummary git={c.git} class="shrink-0 text-[11px]" />
                           </div>
                           <Size path={c.path} machine={props.machine} />
                           <button
                             type="button"
-                            disabled={c.changes > 0}
+                            disabled={c.git.changes > 0}
                             onClick={(e) => {
                               e.stopPropagation()
                               removeWorktree(folder, c)
                             }}
-                            title={c.changes ? 'Commit or discard its changes before deleting it' : 'Delete worktree (its branch goes too, if merged)'}
+                            title={c.git.changes ? 'Commit or discard its changes before deleting it' : 'Delete worktree (its branch goes too, if merged)'}
                             class="grid size-6 shrink-0 place-items-center rounded-md text-fg-3 opacity-0 transition group-hover/row:opacity-100 hover:bg-bg hover:text-danger focus-visible:opacity-100 disabled:hover:bg-transparent disabled:hover:text-fg-3 pointer-coarse:size-8 pointer-coarse:opacity-100"
                           >
                             <Trash2 class="size-3.5" />
@@ -289,38 +291,6 @@ function FolderName(props: { folder: Folder; onHide: () => void }) {
       </div>
       <div class="truncate text-left font-mono text-[11px] text-fg-3 [direction:rtl]">{ltr(props.folder.path)}</div>
     </div>
-  )
-}
-
-/** What's not safe yet in a checkout: uncommitted changes, commits no remote has, commits not merged into the main checkout. */
-function Status(props: { checkout: Checkout }) {
-  const c = () => props.checkout
-  return (
-    <span class="flex shrink-0 items-center gap-2 text-[11px] whitespace-nowrap">
-      <Show when={c().branch && c().main}>
-        <span class="max-w-28 truncate font-mono text-fg-3" title="Branch">
-          {c().branch}
-        </span>
-      </Show>
-      <Show when={c().changes} fallback={<span class="text-ok">clean</span>}>
-        <span class="text-accent" title="Uncommitted changes">
-          {c().changes} changed
-        </span>
-      </Show>
-      <Show when={c().unpushed}>
-        <span class="text-fg-2" title="Commits no remote has">
-          {c().unpushed} unpushed
-        </span>
-      </Show>
-      <Show when={!c().main}>
-        {/* "merged" only once nothing's left in it, so it reads as safe to delete. */}
-        <Show when={c().unmerged} fallback={<Show when={!c().changes}><span class="text-fg-3">merged</span></Show>}>
-          <span class="text-fg-2" title="Commits the main checkout doesn't have">
-            {c().unmerged} unmerged
-          </span>
-        </Show>
-      </Show>
-    </span>
   )
 }
 

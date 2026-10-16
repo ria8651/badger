@@ -268,80 +268,71 @@ export function App() {
     ;(s.archived ? api.unarchive(s.id) : api.archive(s.id)).catch(refresh)
   }
 
-  const [renaming, setRenaming] = createSignal<string>()
-  /** The chat whose project picker is open, so its row keeps its buttons showing. */
+  /** The chat whose project picker or rename box is open, so its row keeps its buttons showing. */
   const [filing, setFiling] = createSignal<string>()
+  const keepOpen = (id: string) => (open: boolean) => setFiling(open ? id : (current) => (current === id ? undefined : current))
   const renamed = (id: string, title: string) => setSessions((all) => all.map((x) => (x.id === id ? { ...x, title } : x)))
 
   const SessionRow = (props: { session: SessionSummary }) => {
     const s = () => props.session
     return (
-      <Show
-        when={renaming() !== s().id}
-        fallback={
+      <div class="group relative mb-px">
+        <button
+          onClick={() => go({ kind: 'chat', id: s().id })}
+          class={`block w-full rounded-lg px-2 py-1.5 text-left transition-colors pointer-coarse:py-2.5 ${
+            s().id === current() ? 'bg-surface' : 'hover:bg-surface/60'
+          }`}
+        >
+          <ChatSummary
+            session={s()}
+            card={cardOf().get(s().id)}
+            titleClass={
+              s().id === current() || attention()[s().id]
+                ? 'text-fg'
+                : s().archived
+                  ? 'text-fg-3 group-hover:text-fg'
+                  : 'text-fg-2 group-hover:text-fg'
+            }
+            timeClass={`group-hover:invisible ${filing() === s().id ? 'invisible' : ''} ${s().id === current() ? 'pointer-coarse:invisible' : ''}`}
+          />
+        </button>
+        {/* Touch has no hover, so there the open chat's row shows them instead. */}
+        <div
+          class={`absolute right-1.5 bottom-1 gap-0.5 group-hover:flex ${s().id === current() ? 'pointer-coarse:flex' : ''} ${
+            filing() === s().id ? 'flex' : 'hidden'
+          }`}
+        >
+          <FileChat
+            session={s()}
+            cards={cards()}
+            title={cardOf().has(s().id) ? 'Move to another project or card' : 'Put in a project'}
+            onOpenChange={keepOpen(s().id)}
+            triggerClass={(open) =>
+              `grid size-5 place-items-center rounded transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-6 ${open ? 'bg-surface text-fg' : 'text-fg-3'}`
+            }
+            trigger={() => <FolderInput class="size-3.5" />}
+          />
           <RenameChat
             session={s()}
             onSaved={(title) => renamed(s().id, title)}
-            onDone={() => setRenaming()}
-            class="mb-px flex flex-col gap-0.5 rounded-lg bg-surface px-2 py-1.5"
+            title="Rename"
+            onOpenChange={keepOpen(s().id)}
+            triggerClass={(open) =>
+              `grid size-5 place-items-center rounded transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-6 ${open ? 'bg-surface text-fg' : 'text-fg-3'}`
+            }
+            trigger={() => <Pencil class="size-3.5" />}
           />
-        }
-      >
-        <div class="group relative mb-px">
           <button
-            onClick={() => go({ kind: 'chat', id: s().id })}
-            class={`block w-full rounded-lg px-2 py-1.5 text-left transition-colors pointer-coarse:py-2.5 ${
-              s().id === current() ? 'bg-surface' : 'hover:bg-surface/60'
-            }`}
+            onClick={() => toggleArchived(s())}
+            title={s().archived ? 'Unarchive' : 'Archive'}
+            class="grid size-5 place-items-center rounded text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-6"
           >
-            <ChatSummary
-              session={s()}
-              card={cardOf().get(s().id)}
-              titleClass={
-                s().id === current() || attention()[s().id]
-                  ? 'text-fg'
-                  : s().archived
-                    ? 'text-fg-3 group-hover:text-fg'
-                    : 'text-fg-2 group-hover:text-fg'
-              }
-              timeClass={`group-hover:invisible ${filing() === s().id ? 'invisible' : ''} ${s().id === current() ? 'pointer-coarse:invisible' : ''}`}
-            />
+            <Show when={s().archived} fallback={<Archive class="size-3.5" />}>
+              <ArchiveRestore class="size-3.5" />
+            </Show>
           </button>
-          {/* Touch has no hover, so there the open chat's row shows them instead. */}
-          <div
-            class={`absolute right-1.5 bottom-1 gap-0.5 group-hover:flex ${s().id === current() ? 'pointer-coarse:flex' : ''} ${
-              filing() === s().id ? 'flex' : 'hidden'
-            }`}
-          >
-            <FileChat
-              session={s()}
-              cards={cards()}
-              title={cardOf().has(s().id) ? 'Move to another project or card' : 'Put in a project'}
-              onOpenChange={(open) => setFiling(open ? s().id : (id) => (id === s().id ? undefined : id))}
-              triggerClass={(open) =>
-                `grid size-5 place-items-center rounded transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-6 ${open ? 'bg-surface text-fg' : 'text-fg-3'}`
-              }
-              trigger={() => <FolderInput class="size-3.5" />}
-            />
-            <button
-              onClick={() => setRenaming(s().id)}
-              title="Rename"
-              class="grid size-5 place-items-center rounded text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-6"
-            >
-              <Pencil class="size-3.5" />
-            </button>
-            <button
-              onClick={() => toggleArchived(s())}
-              title={s().archived ? 'Unarchive' : 'Archive'}
-              class="grid size-5 place-items-center rounded text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-6"
-            >
-              <Show when={s().archived} fallback={<Archive class="size-3.5" />}>
-                <ArchiveRestore class="size-3.5" />
-              </Show>
-            </button>
-          </div>
         </div>
-      </Show>
+      </div>
     )
   }
   const cardOf = createMemo(() => new Map(cards().flatMap((c) => c.sessionIds.map((id) => [id, c] as const))))
@@ -695,6 +686,13 @@ export function App() {
                   }}
                   onPickWorktree={(on) => setWorktreeDrafts((w) => ({ ...w, [id]: on }))}
                   card={cardOf().get(id)}
+                  session={sessions().find((s) => s.id === id)}
+                  cards={cards()}
+                  onRenamed={(title) => renamed(id, title)}
+                  onToggleArchived={() => {
+                    const s = sessions().find((s) => s.id === id)
+                    if (s) toggleArchived(s)
+                  }}
                   onStart={() => home() && startHomeChat(id, drafts()[id] ?? defaultCwd(), draftMachine(id))}
                   onOpenTerminal={(tid) => go({ kind: 'terminal', id: tid })}
                 />

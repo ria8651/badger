@@ -1,8 +1,8 @@
-import { For, Show, createEffect, createMemo, createResource, createSignal, mapArray, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
-import { ArrowUp, FolderX, GitBranch, MonitorOff, Paperclip, Pencil, ListChevronsDownUp, ListChevronsUpDown, SlidersHorizontal, Square, SquareTerminal, WifiOff, X, Zap } from '../icons'
+import { For, Show, createEffect, createMemo, createSignal, mapArray, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
+import { ArrowUp, FolderX, GitBranch, MonitorOff, Paperclip, Pencil, ListChevronsDownUp, ListChevronsUpDown, SlidersHorizontal, Square, WifiOff, X } from '../icons'
 import { isLongPaste } from '../../shared/pastes.ts'
-import { IMAGE_EXTENSIONS, type Card, type DraftAttachments, type PermissionMode, type QueuedMessage } from '../../shared/protocol.ts'
-import { chatActions, type ChatAction } from '../actions.ts'
+import { IMAGE_EXTENSIONS, type Card, type DraftAttachments, type PermissionMode, type QueuedMessage, type SessionSummary } from '../../shared/protocol.ts'
+import { chatActions } from '../actions.ts'
 import { api, connected, socket } from '../api.ts'
 import { readImage } from '../images.ts'
 import { lastModel, modelValue, models, setLastModel } from '../models.ts'
@@ -10,20 +10,20 @@ import { cardWorktreeName, isScratch, worktreeOf } from '../folders.ts'
 import { FileBrowser } from './FileBrowser.tsx'
 import { FolderPicker } from './FolderPicker.tsx'
 import { ForkDialog } from './ForkDialog.tsx'
-import { openView, panelsShown, planView, togglePanels, viewKey, viewShown, wide } from '../layout.ts'
+import { openView, planView, viewKey, viewShown, wide } from '../layout.ts'
 import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
-import { inWs, terminals, workspaceOf, type Ws } from '../terminals.ts'
+import { workspaceOf, type Ws } from '../terminals.ts'
 import { Checking, ChildChats, createChat } from '../useChat.ts'
 import { Attachments } from './Attachments.tsx'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
 import { PlanPane, latestPlan } from './Plan.tsx'
-import { TerminalButton } from './Terminals.tsx'
+import { ChatHeader, createGitStatus } from './ChatHeader.tsx'
 import { TaskTray, trayItems, waitingOnTask } from './TaskTray.tsx'
 import { reveal, revealed, toolLabel } from './ToolCard.tsx'
 import { TaskPane, Transcript, UserMessage, createIndex, detail, runInBackground, setDetail } from './Transcript.tsx'
 import { ContextMeter } from './Usage.tsx'
 import { Workspace, type ChatPanes } from './Workspace.tsx'
-import { IconButton, Loading, Menu, Select, modalOpen, touch, type Option } from './ui.tsx'
+import { IconButton, Loading, Select, modalOpen, touch, type Option } from './ui.tsx'
 
 const MODES: Option<PermissionMode>[] = [
   { value: 'default', label: 'Ask before edits', description: 'Claude asks before changing files or running commands.' },
@@ -49,6 +49,11 @@ export function Chat(props: {
   onPickWorktree?: (worktree: boolean) => void
   /** Called once, when the first message is sent. */
   onStart?: () => void
+  /** The chat as the sidebar lists it, for the header's title, move, rename and archive. Absent until it's listed. */
+  session?: SessionSummary
+  cards: Card[]
+  onRenamed: (title: string) => void
+  onToggleArchived: () => void
   onOpenTerminal: (id: string) => void
 }) {
   const { state, clearError } = createChat(props.sessionId)
@@ -228,27 +233,10 @@ export function Chat(props: {
     return ''
   }
 
-  // Fetched on opening and again each time a turn ends, since that's when commits happen.
-  const [worktree, { refetch: refetchWorktree }] = createResource(
-    () => state.loaded && !offline() && worktreeOf(cwd()) && { dir: cwd()!, machine: machine() },
-    (q) => api.worktree(q.dir, q.machine).catch(() => undefined),
-  )
-  const [changes, { refetch: refetchChanges }] = createResource(
-    () => state.loaded && !offline() && !!cwd() && { dir: cwd()!, machine: machine() },
-    (q) => api.changes(q.dir, q.machine).then((c) => c ?? undefined, () => undefined),
-  )
-  createEffect(
-    on(
-      () => state.running,
-      (running) => {
-        if (running) return
-        refetchWorktree()
-        refetchChanges()
-      },
-      { defer: true },
-    ),
-  )
-  const actions = () => chatActions({ worktree: worktree(), changes: changes() })
+  // Read again each time a turn ends too, since that's when commits happen.
+  const git = createGitStatus(() => (state.loaded && !offline() && cwd() && !isScratch(cwd()) ? { dir: cwd()!, machine: machine() } : undefined))
+  createEffect(on(() => state.running, (running) => !running && void git.refresh(), { defer: true }))
+  const actions = () => chatActions(git.status(), cwd())
 
   // Unsent text and attachments are saved on the server, so they survive leaving
   // the chat or reloading, and every tab on this chat shows the same draft.
@@ -399,6 +387,22 @@ export function Chat(props: {
       onOpenPage={props.onOpenTerminal}
     >
       <div class="flex h-full min-w-0 flex-1 flex-col">
+        <Show when={!picking() && cwd()}>
+          <ChatHeader
+            session={props.session}
+            cards={props.cards}
+            onRenamed={props.onRenamed}
+            onToggleArchived={props.onToggleArchived}
+            cwd={cwd()}
+            machine={machine()}
+            ws={ws()}
+            git={git.status()}
+            fetching={git.fetching()}
+            onRefresh={git.refresh}
+            actions={actions()}
+            onAsk={(prompt) => send(prompt)}
+          />
+        </Show>
         <div
           ref={scroller}
           onScroll={onScroll}
@@ -586,10 +590,6 @@ export function Chat(props: {
                       model={models()?.length ? modelValue(model(), models()!) : undefined}
                       models={modelOptions()}
                       onModel={changeModel}
-                      ws={ws()}
-                      cwd={cwd()}
-                      actions={actions()}
-                      onAction={(a) => send(a.prompt)}
                       onClose={() => setMore(false)}
                     />
                   </Show>
@@ -677,16 +677,6 @@ export function Chat(props: {
                       }}
                     />
                     <div class="hidden items-center gap-2 @md:flex">
-                      <Show when={ws()}>{(w) => <TerminalButton ws={w()} cwd={cwd()!} />}</Show>
-                      <Menu
-                        items={actions().map((a) => ({ label: a.label, description: a.description }))}
-                        onPick={(i) => send(actions()[i].prompt)}
-                        title="Chat actions"
-                        triggerClass={(open) =>
-                          `flex h-7 items-center rounded-md px-2 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 ${open ? 'bg-surface text-fg-2' : 'text-fg-3'}`
-                        }
-                        trigger={() => <Zap class="size-3.5" />}
-                      />
                       <button
                         type="button"
                         onClick={() => setDetail(detail() === 'full' ? 'result' : 'full')}
@@ -756,7 +746,7 @@ function Queued(props: { message: QueuedMessage; onEdit: () => void; onRemove: (
 
 /**
  * What a narrow composer's toolbar has no room for, in a panel above it as wide as the composer:
- * mode, model, terminals, how much work to show, and the chat's actions.
+ * mode, model and how much work to show. Terminals and the chat's actions are in the header.
  */
 function ComposerPanel(props: {
   ref: (el: HTMLDivElement) => void
@@ -766,17 +756,12 @@ function ComposerPanel(props: {
   model?: string
   models: Option<string>[]
   onModel: (model: string) => void
-  ws?: Ws
-  cwd?: string
-  actions: ChatAction[]
-  onAction: (action: ChatAction) => void
   onClose: () => void
 }) {
   const pick = (f: () => void) => () => {
     f()
     props.onClose()
   }
-  const running = () => terminals().filter((t) => props.ws && inWs(t, props.ws) && t.running).length
   return (
     <div
       ref={props.ref}
@@ -787,31 +772,12 @@ function ComposerPanel(props: {
         {(model) => <PanelChoices label="Model" options={props.models} value={model()} onPick={props.onModel} />}
       </Show>
       <div class="mx-2.5 my-1 border-t border-line" />
-      <Show when={props.ws}>
-        {(ws) => (
-          <PanelButton onClick={pick(() => togglePanels(ws(), props.cwd!))}>
-            <SquareTerminal class="size-4" />
-            {panelsShown(ws()) ? 'Hide terminals' : 'Show terminals'}
-            <Show when={running()}>
-              <span class="ml-auto text-xs text-fg-3 tabular-nums">{running()} running</span>
-            </Show>
-          </PanelButton>
-        )}
-      </Show>
       <PanelButton onClick={pick(() => setDetail(detail() === 'full' ? 'result' : 'full'))}>
         <Show when={detail() === 'full'} fallback={<ListChevronsUpDown class="size-4" />}>
           <ListChevronsDownUp class="size-4" />
         </Show>
         {detail() === 'full' ? 'Show results only' : 'Show all work'}
       </PanelButton>
-      <For each={props.actions}>
-        {(a) => (
-          <PanelButton onClick={pick(() => props.onAction(a))}>
-            <Zap class="size-4" />
-            {a.label}
-          </PanelButton>
-        )}
-      </For>
     </div>
   )
 }

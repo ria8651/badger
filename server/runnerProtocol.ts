@@ -4,7 +4,7 @@ import type {
   AnswerDraft,
   BackgroundTask,
   Card,
-  ChangesStatus,
+  GitStatus,
   ContextUsage,
   Folder,
   ImageAttachment,
@@ -163,8 +163,11 @@ export interface RunnerApi {
   inaccessible(dirs: string[]): string[]
   workspaceRoot(cwd: string): string
   worktreeStatus(path: string): Promise<WorktreeStatus>
-  /** Undefined outside a git repo. */
-  changesStatus(path: string): Promise<ChangesStatus | undefined>
+  /** Undefined outside a git repo. Fetches first if asked, at most once a minute. */
+  gitStatus(path: string, fetch: boolean): Promise<GitStatus | undefined>
+  gitPush(path: string): Promise<void>
+  /** Fast-forward only; refused while a chat is working there. */
+  gitPull(path: string): Promise<void>
   /** Refused while a chat is working in it or it has terminals. */
   removeWorktree(path: string): Promise<void>
   /** The folders new chats can start in: these, from where its chats ran and what was added by hand, less the hidden ones. */
@@ -202,7 +205,9 @@ export const RUNNER_METHODS = [
   'inaccessible',
   'workspaceRoot',
   'worktreeStatus',
-  'changesStatus',
+  'gitStatus',
+  'gitPush',
+  'gitPull',
   'removeWorktree',
   'listFolders',
   'folderSize',

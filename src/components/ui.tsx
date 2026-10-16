@@ -87,6 +87,27 @@ export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' :
 /** A count in few characters, e.g. 12.3K. */
 export const compact = (n: number) => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
 
+/**
+ * What's uncommitted in a checkout, as a diff counts it: lines added and removed, and nothing at all when
+ * there's nothing. Changes with no lines to count, like a binary file or a rename, show as files.
+ */
+export function DiffCount(props: { files: number; added: number; removed: number; class?: string }) {
+  return (
+    <Show when={props.files}>
+      <span class={`inline-flex items-center gap-1.5 whitespace-nowrap tabular-nums ${props.class ?? ''}`}>
+        <Show when={props.added || props.removed} fallback={<span class="text-accent">{plural(props.files, 'file')} changed</span>}>
+          <Show when={props.added}>
+            <span class="text-ok">+{compact(props.added)}</span>
+          </Show>
+          <Show when={props.removed}>
+            <span class="text-danger">−{compact(props.removed)}</span>
+          </Show>
+        </Show>
+      </span>
+    </Show>
+  )
+}
+
 export interface MenuItem {
   label: string
   description?: string
@@ -109,6 +130,8 @@ export function Menu(props: {
   triggerClass: (open: boolean) => string
   title?: string
   placement?: 'top' | 'bottom'
+  /** Which edge of the trigger the list lines up with; left by default. */
+  align?: 'left' | 'right'
   class?: string
 }) {
   const id = createUniqueId()
@@ -187,7 +210,7 @@ export function Menu(props: {
           tabindex={-1}
           aria-activedescendant={`${id}-${active()}`}
           onKeyDown={onListKey}
-          class={`absolute left-0 z-10 max-h-[60vh] overflow-y-auto rounded-xl border border-edge bg-bg p-1 shadow-[0_12px_32px_-12px_rgb(0_0_0/0.35)] outline-none ${
+          class={`absolute ${props.align === 'right' ? 'right-0' : 'left-0'} z-10 max-h-[60vh] overflow-y-auto rounded-xl border border-edge bg-bg p-1 shadow-[0_12px_32px_-12px_rgb(0_0_0/0.35)] outline-none ${
             props.placement === 'bottom' ? 'top-full mt-1.5 origin-top' : 'bottom-full mb-1.5 origin-bottom'
           } ${open() ? 'animate-[pop-in_120ms_ease-out]' : 'pointer-events-none animate-[pop-out_80ms_ease-in_forwards]'} ${props.class ?? 'w-72'}`}
         >
@@ -269,6 +292,20 @@ export interface SearchItem extends MenuItem {
 }
 
 /**
+ * Where a panel floating over the page goes, as fixed-position styles: lined up with the trigger's left edge
+ * and kept on screen, below it if there's room, otherwise on whichever side has more, and no taller than that side.
+ */
+export function floatBy(trigger: Element, width: number): JSX.CSSProperties {
+  const r = trigger.getBoundingClientRect()
+  const left = `${Math.max(8, Math.min(r.left, innerWidth - width - 8))}px`
+  const below = innerHeight - r.bottom - 14
+  const above = r.top - 14
+  return below > 320 || below >= above
+    ? { left, top: `${r.bottom + 6}px`, 'max-height': `${Math.min(416, below)}px` }
+    : { left, bottom: `${innerHeight - r.top + 6}px`, 'max-height': `${Math.min(416, above)}px` }
+}
+
+/**
  * A trigger that opens a list with a search box, for picking from more than fits a Menu. The caller filters,
  * so it can add items for what's typed, like creating something new. The list floats over the page, so a
  * scrolling sidebar doesn't clip it.
@@ -296,16 +333,7 @@ export function SearchMenu(props: {
   const width = () => props.width ?? 288
 
   const show = () => {
-    const r = trigger.getBoundingClientRect()
-    const left = `${Math.max(8, Math.min(r.left, innerWidth - width() - 8))}px`
-    // Below the trigger if there's room, otherwise on whichever side has more, and no taller than that side.
-    const below = innerHeight - r.bottom - 14
-    const above = r.top - 14
-    setPlace(
-      below > 320 || below >= above
-        ? { left, top: `${r.bottom + 6}px`, 'max-height': `${Math.min(416, below)}px` }
-        : { left, bottom: `${innerHeight - r.top + 6}px`, 'max-height': `${Math.min(416, above)}px` },
-    )
+    setPlace(floatBy(trigger, width()))
     setQuery('')
     setOpen(true)
     props.onOpenChange?.(true)
