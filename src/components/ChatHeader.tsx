@@ -9,6 +9,7 @@ import { FileChat } from './FileChat.tsx'
 import { RenameChat } from './RenameChat.tsx'
 import { TerminalButton } from './Terminals.tsx'
 import { GitSummary } from './GitSummary.tsx'
+import { showError } from './Popover.tsx'
 import { Menu, plural, type MenuItem } from './ui.tsx'
 
 /**
@@ -92,14 +93,16 @@ export function ChatHeader(props: {
     return basename(worktreeOf(dir)?.repo ?? dir)
   }
 
-  const transfer = async (kind: 'push' | 'pull') => {
+  let gitMenu!: HTMLDivElement
+  /** Pushes or pulls, saying what git said by the button or the git menu if it fails. */
+  const transfer = async (kind: 'push' | 'pull', from: Element = gitMenu) => {
     const dir = props.cwd
     if (!dir || busy()) return
     setBusy(kind)
     try {
       await (kind === 'push' ? api.push(dir, props.machine) : api.pull(dir, props.machine))
     } catch (e) {
-      alert(`Couldn't ${kind}: ${(e as Error).message}`)
+      showError(`Couldn't ${kind}`, (e as Error).message, from)
     } finally {
       await props.onRefresh(false)
       setBusy(undefined)
@@ -230,7 +233,7 @@ export function ChatHeader(props: {
         {(g) => (
           <>
             {/* Wrapped so the branch name gives way on narrow screens, rather than the buttons. */}
-            <div class="min-w-0">
+            <div ref={gitMenu} class="min-w-0">
               <Menu
                 items={gitItems()}
                 onPick={(i) => gitItems()[i].run()}
@@ -246,7 +249,7 @@ export function ChatHeader(props: {
                 <button
                   type="button"
                   disabled={!!busy()}
-                  onClick={() => transfer(kind())}
+                  onClick={(e) => transfer(kind(), e.currentTarget)}
                   title={
                     kind() === 'push'
                       ? g().upstream

@@ -7,6 +7,7 @@ import { previewUrl, previewsAvailable } from '../previews.ts'
 import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
 import { inWs, terminalLabel, terminalState, terminalTooltip, terminals, terminalsListed, type Ws } from '../terminals.ts'
 import { TerminalView } from './TerminalView.tsx'
+import { showError } from './Popover.tsx'
 import { Loading, ltr } from './ui.tsx'
 
 /** Green while running, red if it failed or was killed, grey once it exited cleanly. */
@@ -86,18 +87,24 @@ export function PortButtons(props: { terminal: TerminalInfo; onOpen?: (port: num
  */
 export function RenameTerminal(props: { terminal: TerminalInfo; onDone: () => void; class?: string }) {
   let done = false
+  let input!: HTMLInputElement
   const finish = (name?: string) => {
     if (done) return
     done = true
     name = name?.trim()
     if (name !== undefined && name !== (props.terminal.name ?? '')) {
-      api.renameTerminal(props.terminal.id, name).catch((e: Error) => alert(`Couldn't rename: ${e.message}`))
+      // The tab it's in, since the box goes once it's done.
+      const tab = input.parentElement ?? undefined
+      api.renameTerminal(props.terminal.id, name).catch((e: Error) => showError("Couldn't rename it", e.message, tab))
     }
     props.onDone()
   }
   return (
     <input
-      ref={(el) => queueMicrotask(() => (el.focus(), el.select()))}
+      ref={(el) => {
+        input = el
+        queueMicrotask(() => (el.focus(), el.select()))
+      }}
       value={props.terminal.name ?? ''}
       placeholder={props.terminal.command ?? 'Name'}
       onKeyDown={(e) => {

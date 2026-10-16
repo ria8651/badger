@@ -8,14 +8,18 @@ import { connected } from '../api.ts'
 const [modalOpen, setModalOpen] = createSignal(false)
 export { modalOpen, setModalOpen }
 
-/** Ink-filled when primary; otherwise a hairline outline. */
-export function Button(props: JSX.ButtonHTMLAttributes<HTMLButtonElement> & { primary?: boolean }) {
-  const [local, rest] = splitProps(props, ['primary', 'class'])
+/** Ink-filled when primary, red when it destroys something; otherwise a hairline outline. */
+export function Button(props: JSX.ButtonHTMLAttributes<HTMLButtonElement> & { primary?: boolean; danger?: boolean }) {
+  const [local, rest] = splitProps(props, ['primary', 'danger', 'class'])
   return (
     <button
       {...rest}
       class={`h-8 px-3 text-[13px] font-medium transition-colors rounded-lg disabled:pointer-events-none disabled:opacity-40 ${
-        local.primary ? 'bg-fg text-bg hover:bg-fg/85' : 'border border-edge text-fg-2 hover:bg-surface hover:text-fg'
+        local.primary
+          ? 'bg-fg text-bg hover:bg-fg/85'
+          : local.danger
+            ? 'bg-danger text-white hover:bg-danger/85'
+            : 'border border-edge text-fg-2 hover:bg-surface hover:text-fg'
       } ${local.class ?? ''}`}
     />
   )
@@ -295,8 +299,8 @@ export interface SearchItem extends MenuItem {
  * Where a panel floating over the page goes, as fixed-position styles: lined up with the trigger's left edge
  * and kept on screen, below it if there's room, otherwise on whichever side has more, and no taller than that side.
  */
-export function floatBy(trigger: Element, width: number): JSX.CSSProperties {
-  const r = trigger.getBoundingClientRect()
+export function floatBy(trigger: Element | DOMRect, width: number): JSX.CSSProperties {
+  const r = trigger instanceof Element ? trigger.getBoundingClientRect() : trigger
   const left = `${Math.max(8, Math.min(r.left, innerWidth - width - 8))}px`
   const below = innerHeight - r.bottom - 14
   const above = r.top - 14

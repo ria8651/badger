@@ -7,6 +7,7 @@ import { folderLabel, lastWorkedIn, worktreeOf } from '../folders.ts'
 import { Columns, STATUS_LABELS } from './Board.tsx'
 import { MarkdownEditor } from './MarkdownEditor.tsx'
 import { RenameChat } from './RenameChat.tsx'
+import { confirmBy } from './Popover.tsx'
 import { ChatDot, Menu, SearchMenu, Select, type SearchItem } from './ui.tsx'
 import { ChatSummary, MachineName } from './ChatSummary.tsx'
 import { LOCAL, onMachine } from '../machines.ts'
@@ -89,11 +90,12 @@ export function CardView(props: {
     api.updateCard(props.card.id, { title })
   }
 
-  const remove = () => {
+  const remove = async (e: MouseEvent) => {
     const n = descendants(props.cards, props.card.id).length
     const what = isProject() ? `project "${props.card.title}"` : `card #${props.card.id}`
     const inside = n ? ` and the ${n === 1 ? 'card' : `${n} cards`} inside it` : ''
-    if (!confirm(`Delete ${what}${inside}? Chats are kept.`)) return
+    const ask = { message: `Delete ${what}${inside}?`, notes: ['Its chats are kept.'], action: 'Delete' }
+    if (!(await confirmBy(e.currentTarget as Element, ask))) return
     const parent = props.card.parentId
     api.deleteCard(props.card.id).then(() => props.onOpenCard(parent))
   }
@@ -307,10 +309,10 @@ function WorktreeRow(props: { path: string; machine: string; sessions: SessionSu
     ].filter(Boolean)
     return parts.length ? parts.join(' · ') : `Merged into ${s.base || 'HEAD'}`
   }
-  const remove = () => {
+  const remove = async (e: MouseEvent) => {
     const s = status()
-    const warning = s?.unmerged ? `\n\nIts branch ${s.branch} has unmerged commits, so it will be kept.` : ''
-    if (!confirm(`Remove worktree ${folderLabel(props.path)}?${warning}`)) return
+    const notes = s?.unmerged ? [`Its branch ${s.branch} has unmerged commits, so it will be kept.`] : []
+    if (!(await confirmBy(e.currentTarget as Element, { message: `Remove worktree ${folderLabel(props.path)}?`, notes, action: 'Remove' }))) return
     setError(undefined)
     api.removeWorktree(props.path, props.machine).catch((err: Error) => {
       setError(err.message)

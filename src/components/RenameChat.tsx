@@ -3,6 +3,7 @@ import { Portal } from 'solid-js/web'
 import { RefreshCw, Sparkles } from '../icons'
 import type { SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
+import { showError } from './Popover.tsx'
 import { floatBy } from './ui.tsx'
 
 /**
@@ -55,7 +56,7 @@ export function RenameChat(props: {
     title = title?.trim()
     if (title && title !== props.session.title) {
       props.onSaved?.(title)
-      api.rename(props.session.id, title).catch((e: Error) => alert(`Couldn't rename: ${e.message}`))
+      api.rename(props.session.id, title).catch((e: Error) => showError("Couldn't rename it", e.message, trigger))
     }
     if (refocus) trigger.focus()
   }
