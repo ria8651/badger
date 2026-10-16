@@ -1,4 +1,4 @@
-import { For, Index, Match, Show, Switch, children, createEffect, createMemo, createSignal, on, onCleanup, untrack, type JSX } from 'solid-js'
+import { For, Index, Match, Show, Switch, children, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
 import { Globe, Minimize2, NotebookPen, Plus, RotateCw, SquareArrowOutUpRight, X } from '../icons'
 import { api } from '../api.ts'
 import {
@@ -389,6 +389,15 @@ export function Workspace(props: {
         ? tabLabel(v)
         : [tabLabel(v), terminalOf(v)?.cwd, onMachine(machine()) && `on ${onMachine(machine())}`].filter(Boolean).join('\n')
 
+  /** Scroll the tab strip, and only it, so a tab is fully in view. */
+  const reveal = (tab: HTMLElement) => {
+    const strip = tab.parentElement!
+    const s = strip.getBoundingClientRect()
+    const t = tab.getBoundingClientRect()
+    const by = t.left < s.left ? t.left - s.left : t.right > s.right ? t.right - s.right : 0
+    if (by) strip.scrollBy({ left: by, behavior: 'smooth' })
+  }
+
   const GroupFrame = (p: { group: Group }) => {
     const g = () => p.group
     const active = () => viewOf(activeOf(g()))
@@ -414,8 +423,15 @@ export function Workspace(props: {
               {(key) => {
                 const v = () => viewOf(key)
                 const isActive = () => activeOf(g()) === key
+                let tab!: HTMLDivElement
+                createEffect(() => isActive() && reveal(tab))
+                // Its label can change after it's shown, a new terminal's from "Starting…".
+                const resized = new ResizeObserver(() => untrack(isActive) && reveal(tab))
+                onMount(() => resized.observe(tab))
+                onCleanup(() => resized.disconnect())
                 return (
                   <div
+                    ref={tab}
                     class={`group flex h-7 max-w-56 shrink-0 items-center rounded-md transition-colors ${
                       isActive() ? (focused() ? 'bg-surface text-fg' : 'bg-surface/60 text-fg-2') : 'text-fg-3 hover:bg-surface/60 hover:text-fg-2'
                     } ${drag()?.key === key ? 'opacity-50' : ''}`}
