@@ -1,6 +1,6 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup, on, onMount, untrack } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
-import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, FolderInput, PanelLeft, Pencil, Plus, Radar as RadarIcon, Settings as SettingsIcon } from './icons'
+import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, FolderInput, PanelLeft, Pencil, Plus, Radar as RadarIcon, Settings as SettingsIcon, Trash2 } from './icons'
 import { descendants, projectOf } from '../shared/cardTree.ts'
 import type { Card, SessionSummary } from '../shared/protocol.ts'
 import { api, socket } from './api.ts'
@@ -589,24 +589,40 @@ export function App() {
             <div class="px-2 pb-1 text-[11px] text-fg-3">Terminals</div>
             <For each={sortedTerminals()}>
               {(t) => (
-                <button
-                  onClick={() => go({ kind: 'terminal', id: t.id })}
-                  title={`${terminalLabel(t)}\n${t.cwd}`}
-                  class={`group mb-px flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left transition-colors pointer-coarse:h-9 ${
-                    t.id === currentTerminal() ? 'bg-surface' : 'hover:bg-surface/60'
-                  }`}
-                >
-                  <StatusDot terminal={t} />
-                  <span
-                    class={`min-w-0 flex-1 truncate text-[13px] ${
-                      t.id === currentTerminal() ? 'text-fg' : 'text-fg-2 group-hover:text-fg'
+                <div class="group relative mb-px">
+                  <button
+                    onClick={() => go({ kind: 'terminal', id: t.id })}
+                    title={`${terminalLabel(t)}\n${t.cwd}`}
+                    class={`flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left transition-colors pointer-coarse:h-9 ${
+                      t.id === currentTerminal() ? 'bg-surface' : 'hover:bg-surface/60'
                     }`}
                   >
-                    {terminalLabel(t)}
-                  </span>
-                  <span class="shrink-0 text-[11px] text-fg-3">{basename(t.root)}</span>
-                  <Show when={onMachine(t.machine)}>{(name) => <MachineName machine={t.machine} name={name()} class="text-[11px] text-fg-3" />}</Show>
-                </button>
+                    <StatusDot terminal={t} />
+                    <span
+                      class={`min-w-0 flex-1 truncate text-[13px] ${
+                        t.id === currentTerminal() ? 'text-fg' : 'text-fg-2 group-hover:text-fg'
+                      }`}
+                    >
+                      {terminalLabel(t)}
+                    </span>
+                    <span
+                      class={`flex shrink-0 items-center gap-2 group-hover:invisible ${t.id === currentTerminal() ? 'pointer-coarse:invisible' : ''}`}
+                    >
+                      <span class="text-[11px] text-fg-3">{basename(t.root)}</span>
+                      <Show when={onMachine(t.machine)}>{(name) => <MachineName machine={t.machine} name={name()} class="text-[11px] text-fg-3" />}</Show>
+                    </span>
+                  </button>
+                  {/* Touch has no hover, so there the open terminal's row shows it instead. */}
+                  <button
+                    onClick={() => api.closeTerminal(t.id).then(() => t.id === currentTerminal() && newHomeChat())}
+                    title="Delete terminal: stops it and everything it started"
+                    class={`absolute top-1/2 right-1.5 hidden size-5 -translate-y-1/2 place-items-center rounded text-fg-3 transition-colors group-hover:grid hover:bg-surface hover:text-fg pointer-coarse:size-6 ${
+                      t.id === currentTerminal() ? 'pointer-coarse:grid' : ''
+                    }`}
+                  >
+                    <Trash2 class="size-3.5" />
+                  </button>
+                </div>
               )}
             </For>
           </div>
