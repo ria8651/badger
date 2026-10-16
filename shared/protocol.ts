@@ -218,6 +218,8 @@ export interface TerminalInfo {
   machine?: string
   /** What the program last set as its title (shells usually show the running command), else the command or shell. */
   title: string
+  /** What it's called in the list: Claude's or the user's name for it, or for a shell its program and number, e.g. "fish 2". */
+  name?: string
   cwd: string
   /** Git root of cwd (each worktree is its own), or cwd outside a repo. Terminals are grouped by this. */
   root: string

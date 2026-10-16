@@ -100,8 +100,11 @@ export function workspaceOf(machine: string, cwd: string): Accessor<string | und
   return root
 }
 
-/** What a terminal is: the command it runs, else whatever the shell last titled it. */
-export const terminalLabel = (t: TerminalInfo) => t.command ?? t.title
+/** What a terminal is called: its name, else the command it runs, else (from older hosts) whatever the shell last titled it. */
+export const terminalLabel = (t: TerminalInfo) => t.name ?? t.command ?? t.title
+
+/** For a tooltip: its label, and the command too when a name stands in for it. */
+export const terminalTooltip = (t: TerminalInfo) => [terminalLabel(t), t.name && t.command && `$ ${t.command}`].filter(Boolean).join('\n')
 
 /** 'running', or how it ended. */
 export function terminalState(t: TerminalInfo): string {

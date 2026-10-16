@@ -6,11 +6,13 @@ import type { TerminalInfo } from '../shared/protocol.ts'
  * started by older code; bump this when the messages or the host's behaviour
  * change, and the server replaces an outdated host once it has no terminals.
  */
-export const PTY_HOST_VERSION = 3
+export const PTY_HOST_VERSION = 4
 
 export interface CreateSpec {
   cwd: string
   command?: string
+  /** Defaults to the shell's numbered name for a shell, and none (so the command shows) for a command. */
+  name?: string
   sessionId?: string
   cols?: number
   rows?: number
@@ -22,6 +24,8 @@ export type HostRequest =
   | { type: 'resize'; id: string; cols: number; rows: number }
   | { type: 'stop'; reqId: number; id: string }
   | { type: 'restart'; reqId: number; id: string }
+  /** No name, or a blank one, puts the default back. */
+  | { type: 'rename'; reqId: number; id: string; name?: string }
   | { type: 'remove'; reqId: number; id: string }
   | { type: 'snapshot'; reqId: number; id: string }
   | { type: 'text'; reqId: number; id: string; lines: number }

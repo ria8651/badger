@@ -175,6 +175,8 @@ export interface RunnerApi {
   readFile(path: string): Promise<FileData>
   termCreate(spec: CreateSpec): Promise<TerminalInfo>
   termRestart(id: string): Promise<TerminalInfo>
+  /** No name, or a blank one, puts the default back. */
+  termRename(id: string, name?: string): Promise<TerminalInfo>
   termRemove(id: string): Promise<void>
   /** The screen as escape sequences, settled in order with the terminal's output. */
   termSnapshot(id: string): Later<string | undefined>
@@ -209,6 +211,7 @@ export const RUNNER_METHODS = [
   'readFile',
   'termCreate',
   'termRestart',
+  'termRename',
   'termRemove',
   'termSnapshot',
 ] as const satisfies readonly (keyof RunnerApi)[]
@@ -346,6 +349,7 @@ export const SESSION_EVENTS = [
 const terminalInfo = z.object({
   id: z.string().regex(/^[0-9a-f]{1,32}$/),
   title: text(1000),
+  name: text(1000).optional(),
   cwd: text(4096),
   root: text(4096),
   command: text(100_000).optional(),
@@ -406,6 +410,7 @@ export const RUNNER_REPLIES = {
   readFile: z.object({ type: z.enum(IMAGE_TYPES).optional(), data: z.string() }),
   termCreate: terminalInfo,
   termRestart: terminalInfo,
+  termRename: terminalInfo,
   termSnapshot: z.string().optional(),
 } satisfies { [K in keyof RunnerApi]?: ZodType }
 

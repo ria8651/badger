@@ -917,6 +917,11 @@ async function terminalsApi(method: string, path: string, req: IncomingMessage):
   const t = machines.terminal(id)
   if (!t || !t.machine.terminals.some((x) => x.id === t.id)) return [404, { error: 'No such terminal' }]
   if (method === 'POST' && action === 'restart') return [200, machines.upsertTerminal(t.machine, await t.machine.peer.remote.termRestart(t.id))]
+  if (method === 'PATCH' && !action) {
+    const { name } = await readJson(req)
+    if (name !== undefined && typeof name !== 'string') throw new BadRequest('name must be a string')
+    return [200, machines.upsertTerminal(t.machine, await t.machine.peer.remote.termRename(t.id, name || undefined))]
+  }
   if (method === 'DELETE' && !action) {
     await t.machine.peer.remote.termRemove(t.id)
     t.machine.terminals = t.machine.terminals.filter((x) => x.id !== t.id)

@@ -26,7 +26,7 @@ const waitFor = z
   .describe('Regex to wait for in output that arrives after this call, e.g. "ready in|listening on". Matched without colours.')
 const timeout = z.number().min(1).max(600).optional().describe('Seconds to wait for wait_for (default 30)')
 
-const TERMINAL = 'Terminal = { id, title, cwd, root, command?, sessionId?, running, pid?, ports?, exitCode?, signal?, createdAt }'
+const TERMINAL = 'Terminal = { id, title, name?, cwd, root, command?, sessionId?, running, pid?, ports?, exitCode?, signal?, createdAt }'
 const ACTED = `{ outcome, terminal?: Terminal, output }. ${TERMINAL}`
 
 /**
@@ -134,7 +134,7 @@ export function terminalOps(terminals: Terminals): Op[] {
 
   const describe = (t: TerminalInfo, ctx: OpContext) => {
     const state = t.running ? 'running' : t.signal ? `killed (signal ${t.signal})` : `exited ${t.exitCode ?? '?'}`
-    const what = t.command ? `$ ${t.command}` : `shell, showing "${t.title}"`
+    const what = `${t.name ? `"${t.name}" ` : ''}${t.command ? `$ ${t.command}` : `shell, showing "${t.title}"`}`
     const here = root(ctx)
     const where = t.root === here ? (t.cwd === here ? '' : ` in ${t.cwd}`) : ` in ${t.cwd} (another workspace)`
     const ports = t.ports?.length ? `, listening on ${t.ports.join(', ')}` : ''
@@ -178,6 +178,11 @@ export function terminalOps(terminals: Terminals): Op[] {
         "Run a command in a new terminal the user can see, e.g. a dev server. It runs with bash -c and keeps running after this chat ends. Returns its first output; use wait_for to wait until it's ready.",
       input: {
         command: z.string().min(1),
+        name: z
+          .string()
+          .max(40)
+          .optional()
+          .describe('What it\'s called in the terminal list: a word or two for what it is, e.g. "Dev server" or "Storybook". Without one, the command shows.'),
         cwd: z.string().optional().describe("Directory to run in, absolute or relative to this chat's directory. Defaults to this chat's directory."),
         lines,
         wait_for: waitFor,
@@ -186,7 +191,7 @@ export function terminalOps(terminals: Terminals): Op[] {
       returns: ACTED,
       async run(args, ctx) {
         const dir = args.cwd ? (isAbsolute(args.cwd) ? args.cwd : resolve(ctx.cwd(), args.cwd)) : ctx.cwd()
-        return act(ctx, () => terminals.create({ cwd: dir, command: args.command, sessionId: ctx.sessionId || undefined }), args)
+        return act(ctx, () => terminals.create({ cwd: dir, command: args.command, name: args.name, sessionId: ctx.sessionId || undefined }), args)
       },
     }),
     op({

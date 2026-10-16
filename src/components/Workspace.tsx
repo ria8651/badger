@@ -41,9 +41,9 @@ import {
 } from '../layout.ts'
 import { LOCAL, isOnline, onMachine } from '../machines.ts'
 import { previewUrl } from '../previews.ts'
-import { inWs, terminalLabel, terminals, terminalsListed, type Ws } from '../terminals.ts'
+import { inWs, terminalLabel, terminalTooltip, terminals, terminalsListed, type Ws } from '../terminals.ts'
 import { PreviewFrame } from './PreviewFrame.tsx'
-import { PortButtons, RestartButton, StatusDot, ghost } from './Terminals.tsx'
+import { PortButtons, RenameTerminal, RestartButton, StatusDot, ghost } from './Terminals.tsx'
 import { TerminalView } from './TerminalView.tsx'
 import { LiveDot, modalOpen } from './ui.tsx'
 
@@ -252,6 +252,8 @@ export function Workspace(props: {
   // ── Dragging tabs ──
 
   const [drag, setDrag] = createSignal<{ key: string; label: string; x: number; y: number; drop?: Drop }>()
+  /** The tab whose terminal is being renamed. */
+  const [renaming, setRenaming] = createSignal<string>()
 
   /** Over a group's tab bar or middle drops into it; anywhere else, beside the pane on the nearest side. */
   const dropAt = (x: number, y: number): Drop | undefined => {
@@ -387,7 +389,14 @@ export function Workspace(props: {
       ? `${tabLabel(v)}\n${previewUrl(v.id, v.path, machine()) ?? `Port ${v.id}`}`
       : v?.kind === 'task' || v?.kind === 'plan'
         ? tabLabel(v)
-        : [tabLabel(v), terminalOf(v)?.cwd, onMachine(machine()) && `on ${onMachine(machine())}`].filter(Boolean).join('\n')
+        : [
+            terminalOf(v) ? terminalTooltip(terminalOf(v)!) : tabLabel(v),
+            terminalOf(v)?.cwd,
+            onMachine(machine()) && `on ${onMachine(machine())}`,
+            terminalOf(v) && 'Double-click to rename',
+          ]
+            .filter(Boolean)
+            .join('\n')
 
   const GroupFrame = (p: { group: Group }) => {
     const g = () => p.group
@@ -420,28 +429,41 @@ export function Workspace(props: {
                       isActive() ? (focused() ? 'bg-surface text-fg' : 'bg-surface/60 text-fg-2') : 'text-fg-3 hover:bg-surface/60 hover:text-fg-2'
                     } ${drag()?.key === key ? 'opacity-50' : ''}`}
                   >
-                    <button
-                      onPointerDown={(e) => startTabDrag(e, key, tabLabel(v()))}
-                      onClick={(e) => (e.stopPropagation(), activate(key))}
-                      title={tabTitle(v())}
-                      class="flex h-full min-w-0 items-center gap-1.5 pl-2 text-xs"
+                    <Show
+                      when={renaming() === key && terminalOf(v())}
+                      fallback={
+                        <button
+                          onPointerDown={(e) => startTabDrag(e, key, tabLabel(v()))}
+                          onClick={(e) => (e.stopPropagation(), activate(key))}
+                          onDblClick={() => terminalOf(v()) && setRenaming(key)}
+                          title={tabTitle(v())}
+                          class="flex h-full min-w-0 items-center gap-1.5 pl-2 text-xs"
+                        >
+                          <Show when={v()?.kind === 'preview'}>
+                            <Globe class="size-3 shrink-0" />
+                          </Show>
+                          <Show when={terminalOf(v())}>{(t) => <StatusDot terminal={t()} />}</Show>
+                          <Show when={taskOf(v()) && props.panes.live(taskOf(v())!)}>
+                            <LiveDot />
+                          </Show>
+                          <Show when={v()?.kind === 'plan'}>
+                            <NotebookPen class="size-3 shrink-0" />
+                            {/* Waiting on you, like the prompts' dot. */}
+                            <Show when={props.panes.planWaiting()}>
+                              <span class="size-1.5 shrink-0 rounded-full bg-accent" />
+                            </Show>
+                          </Show>
+                          <span class="truncate">{tabLabel(v())}</span>
+                        </button>
+                      }
                     >
-                      <Show when={v()?.kind === 'preview'}>
-                        <Globe class="size-3 shrink-0" />
-                      </Show>
-                      <Show when={terminalOf(v())}>{(t) => <StatusDot terminal={t()} />}</Show>
-                      <Show when={taskOf(v()) && props.panes.live(taskOf(v())!)}>
-                        <LiveDot />
-                      </Show>
-                      <Show when={v()?.kind === 'plan'}>
-                        <NotebookPen class="size-3 shrink-0" />
-                        {/* Waiting on you, like the prompts' dot. */}
-                        <Show when={props.panes.planWaiting()}>
-                          <span class="size-1.5 shrink-0 rounded-full bg-accent" />
-                        </Show>
-                      </Show>
-                      <span class="truncate">{tabLabel(v())}</span>
-                    </button>
+                      {(t) => (
+                        <div class="flex h-full min-w-0 items-center gap-1.5 pl-2 text-xs">
+                          <StatusDot terminal={t()} />
+                          <RenameTerminal terminal={t()} onDone={() => setRenaming()} class="w-36" />
+                        </div>
+                      )}
+                    </Show>
                     <button
                       onPointerDown={(e) => e.stopPropagation()}
                       onClick={() => close(key)}

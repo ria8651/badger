@@ -80,12 +80,14 @@ function create(spec: CreateSpec): TerminalInfo {
   const screen = new Terminal({ cols, rows, scrollback: SCROLLBACK, allowProposedApi: true })
   const serializer = new SerializeAddon()
   screen.loadAddon(serializer)
+  const root = workspaceRoot(spec.cwd)
   const t: Term = {
     info: {
       id: randomBytes(4).toString('hex'),
       title: spec.command ?? basename(SHELL),
+      name: defaultName(root, spec.command, spec.name),
       cwd: spec.cwd,
-      root: workspaceRoot(spec.cwd),
+      root,
       command: spec.command,
       sessionId: spec.sessionId,
       running: false,
@@ -110,6 +112,24 @@ function create(spec: CreateSpec): TerminalInfo {
   })
   terms.set(t.info.id, t)
   start(t)
+  return t.info
+}
+
+/** The name asked for, else for a shell its program and the lowest number free in its workspace, e.g. "fish 2". */
+function defaultName(root: string, command?: string, name?: string): string | undefined {
+  if (name?.trim()) return name.trim()
+  if (command) return undefined
+  const taken = new Set([...terms.values()].filter((t) => t.info.root === root).map((t) => t.info.name))
+  let n = 1
+  while (taken.has(`${basename(SHELL)} ${n}`)) n++
+  return `${basename(SHELL)} ${n}`
+}
+
+function rename(t: Term, name?: string): TerminalInfo {
+  // Off first, so its own name doesn't count as taken.
+  t.info.name = undefined
+  t.info.name = defaultName(t.info.root, t.info.command, name)
+  changed()
   return t.info
 }
 
@@ -284,6 +304,8 @@ async function handle(client: Socket, req: HostRequest): Promise<void> {
         return reply(await stop(t))
       case 'restart':
         return reply(await restart(t))
+      case 'rename':
+        return reply(rename(t, req.name))
       case 'remove':
         await remove(t)
         return reply()

@@ -381,6 +381,10 @@ export class Runner implements RunnerApi {
     return this.terminals.restart(id)
   }
 
+  termRename(id: string, name?: string) {
+    return this.terminals.rename(id, name).catch(badRequest)
+  }
+
   termRemove(id: string) {
     return this.terminals.remove(id)
   }

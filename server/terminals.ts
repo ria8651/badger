@@ -32,6 +32,8 @@ export class Terminals {
   private pending = new Map<number, (reply: Reply) => void>()
   private nextReq = 1
   private greeted = () => {}
+  /** The host runs older code than this server, so may not know every request. */
+  private outdated = false
   /** Set while an outdated host with no terminals is shutting down so a current one can replace it. */
   private replacing = false
   private readonly socketPath: string
@@ -76,6 +78,13 @@ export class Terminals {
 
   async restart(id: string): Promise<TerminalInfo> {
     return this.upsert((await this.call((reqId) => ({ type: 'restart', reqId, id }))) as TerminalInfo)
+  }
+
+  async rename(id: string, name?: string): Promise<TerminalInfo> {
+    await this.connect()
+    // An older host never answers a request it doesn't know.
+    if (this.outdated) throw new Error('Terminals here run on older code that can’t rename them. Close them all to update it.')
+    return this.upsert((await this.call((reqId) => ({ type: 'rename', reqId, id, name }))) as TerminalInfo)
   }
 
   async remove(id: string): Promise<void> {
@@ -244,6 +253,7 @@ export class Terminals {
   private handle(event: HostEvent): void {
     switch (event.type) {
       case 'hello':
+        this.outdated = event.version < PTY_HOST_VERSION
         if (event.version !== PTY_HOST_VERSION) {
           if (event.terminals.length === 0) {
             this.replacing = true

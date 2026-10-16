@@ -18,7 +18,7 @@ import { StatusDot, TerminalPage } from './components/Terminals.tsx'
 import { ChatSummary, MachineName } from './components/ChatSummary.tsx'
 import { Settings } from './components/Settings.tsx'
 import { Loading, Menu, modalOpen } from './components/ui.tsx'
-import { terminalLabel, terminalWs, terminals, terminalsLoaded, wsKey } from './terminals.ts'
+import { terminalLabel, terminalTooltip, terminalWs, terminals, terminalsLoaded, wsKey } from './terminals.ts'
 import { accountUsage } from './usage.ts'
 
 /** crypto.randomUUID needs a secure context; fall back for plain-http hosts. */
@@ -591,7 +591,7 @@ export function App() {
               {(t) => (
                 <button
                   onClick={() => go({ kind: 'terminal', id: t.id })}
-                  title={`${terminalLabel(t)}\n${t.cwd}`}
+                  title={`${terminalTooltip(t)}\n${t.cwd}`}
                   class={`group mb-px flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left transition-colors pointer-coarse:h-9 ${
                     t.id === currentTerminal() ? 'bg-surface' : 'hover:bg-surface/60'
                   }`}
