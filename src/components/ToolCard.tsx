@@ -93,14 +93,19 @@ export function resultText(content: unknown): string {
 /** Images in a tool's result, e.g. a screenshot Claude read, as URLs to show. */
 export function resultImages(content: unknown): string[] {
   if (!Array.isArray(content)) return []
-  return content.flatMap((b) => (b?.type === 'image' && b.source?.type === 'base64' ? [`data:${b.source.media_type};base64,${b.source.data}`] : []))
+  return content.flatMap((b) => {
+    if (b?.type !== 'image') return []
+    // History's images are served at a URL; live ones arrive inline.
+    if (b.source?.type === 'url') return [b.source.url]
+    return b.source?.type === 'base64' ? [`data:${b.source.media_type};base64,${b.source.data}`] : []
+  })
 }
 
 /** What Claude saw: the images it was shown, small. */
 function ResultImages(props: { urls: string[]; class: string }) {
   return (
     <div class="flex flex-wrap gap-2">
-      <For each={props.urls}>{(url) => <img src={url} alt="" class={`w-auto rounded-lg border border-line ${props.class}`} />}</For>
+      <For each={props.urls}>{(url) => <img src={url} alt="" loading="lazy" class={`w-auto rounded-lg border border-line ${props.class}`} />}</For>
     </div>
   )
 }

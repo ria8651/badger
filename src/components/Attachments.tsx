@@ -3,9 +3,8 @@ import { Portal } from 'solid-js/web'
 import { Columns3, FileText, GitFork, X } from '../icons'
 import type { CardContext } from '../../shared/cardContext.ts'
 import type { Move, Place } from '../../shared/forkNote.ts'
-import type { ImageAttachment } from '../../shared/protocol.ts'
 import { basename } from '../folders.ts'
-import { imageUrl } from '../images.ts'
+import { imageUrl, type ShownImage } from '../images.ts'
 import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
 import { modalOpen, plural } from './ui.tsx'
@@ -17,7 +16,7 @@ import { modalOpen, plural } from './ui.tsx'
  */
 export function Attachments(props: {
   pastes: string[]
-  images: ImageAttachment[]
+  images: ShownImage[]
   card?: CardContext
   /** Where a fork moved to, as Claude was told. */
   move?: Move
@@ -26,7 +25,7 @@ export function Attachments(props: {
   class?: string
 }) {
   const [open, setOpen] = createSignal<number | 'card' | 'move'>()
-  const [viewing, setViewing] = createSignal<ImageAttachment>()
+  const [viewing, setViewing] = createSignal<ShownImage>()
   const openText = () => {
     const i = open()
     return typeof i === 'number' ? props.pastes[i] : undefined
@@ -83,7 +82,7 @@ export function Attachments(props: {
           {(image, i) => (
             <div class="group relative">
               <button type="button" onClick={() => setViewing(image)} title="View image">
-                <img src={imageUrl(image)} alt="" class="block h-14 max-w-40 rounded-lg border border-edge object-cover" />
+                <img src={imageUrl(image)} alt="" loading="lazy" class="block h-14 max-w-40 rounded-lg border border-edge object-cover" />
               </button>
               <Show when={props.onRemoveImage}>
                 <button
@@ -161,7 +160,7 @@ const chip = 'flex h-7 items-center rounded-lg border text-xs transition-colors'
 
 const place = (p: Place) => `${p.worktree ? 'a new worktree of ' : ''}${p.cwd} on ${p.machine}`
 
-function Lightbox(props: { image: ImageAttachment; onClose: () => void }) {
+function Lightbox(props: { image: ShownImage; onClose: () => void }) {
   // Caught first and stopped, so Escape closes this rather than also stopping Claude from the composer.
   const onKey = (e: KeyboardEvent) => {
     if (e.key !== 'Escape' || modalOpen()) return

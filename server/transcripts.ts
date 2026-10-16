@@ -12,6 +12,7 @@ import {
   type SessionSummaryEntry,
 } from '@anthropic-ai/claude-agent-sdk'
 import type { WireMessage } from '../shared/protocol.ts'
+import { IMAGE_LINE, IMAGE_LINE_UUID } from './db.ts'
 import type { TranscriptFile, TranscriptLines, TranscriptState } from './runnerProtocol.ts'
 
 /**
@@ -114,6 +115,19 @@ export class Transcripts {
   private subpaths(sessionId: string): string[] {
     const rows = this.db.prepare("SELECT subpath FROM transcript_files WHERE session_id = ? AND subpath != ''").all(sessionId) as { subpath: string }[]
     return rows.map((r) => r.subpath)
+  }
+
+  /** The entry for one of a chat's messages with images, its subagents' included, or undefined if it hasn't been copied here. */
+  imageEntry(sessionId: string, uuid: string): Record<string, unknown> | undefined {
+    const row = this.db
+      .prepare(`SELECT entry FROM transcript_lines INDEXED BY transcript_lines_images WHERE session_id = ? AND ${IMAGE_LINE_UUID} = ? AND ${IMAGE_LINE} LIMIT 1`)
+      .get(sessionId, uuid) as { entry: string } | undefined
+    return row ? (parse([row.entry])[0] as Record<string, unknown> | undefined) : undefined
+  }
+
+  /** Whether a message with images has been copied here, so they can be served from here. */
+  hasImageEntry(sessionId: string, uuid: string): boolean {
+    return !!this.db.prepare(`SELECT 1 FROM transcript_lines INDEXED BY transcript_lines_images WHERE session_id = ? AND ${IMAGE_LINE_UUID} = ? AND ${IMAGE_LINE} LIMIT 1`).get(sessionId, uuid)
   }
 
   /** A chat's subagents' transcripts, as their lines, with each one's metadata. */

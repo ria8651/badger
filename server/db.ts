@@ -4,6 +4,14 @@ import { DatabaseSync } from 'node:sqlite'
 import { descendants } from '../shared/cardTree.ts'
 import { CARD_STATUSES, type Card, type CardStatus, type DraftAttachments } from '../shared/protocol.ts'
 
+/**
+ * Transcript lines holding images, and the uuid the SDK's reader gives each one's message: a message sent while
+ * Claude was busy is written as an attachment under a uuid of its own, and read back under its `source_uuid`.
+ * Queries must use these exactly, to use the index on them.
+ */
+export const IMAGE_LINE = `instr(entry, '"type":"base64"') > 0`
+export const IMAGE_LINE_UUID = `(CASE WHEN json_valid(entry) THEN coalesce(json_extract(entry, '$.attachment.source_uuid'), json_extract(entry, '$.uuid')) END)`
+
 /** Each entry runs once, in order; PRAGMA user_version counts how many have run. Never edit one that has shipped. */
 const MIGRATIONS = [
   `CREATE TABLE cards (
@@ -157,6 +165,8 @@ const MIGRATIONS = [
      note TEXT,
      created_at INTEGER NOT NULL
    );`,
+  // So a chat's images can be served one at a time, without reading the chat.
+  `CREATE INDEX transcript_lines_images ON transcript_lines (session_id, ${IMAGE_LINE_UUID}) WHERE ${IMAGE_LINE};`,
 ]
 
 /**
