@@ -81,8 +81,8 @@ export function ChatHeader(props: {
   fetching: boolean
   onRefresh: (fetch: boolean) => Promise<void>
   actions: ChatAction[]
-  /** Sends a prompt to the chat. */
-  onAsk: (prompt: string) => void
+  /** Sends a prompt to the chat. Absent before it's started, so the header only does what needs no chat. */
+  onAsk?: (prompt: string) => void
 }) {
   const [busy, setBusy] = createSignal<'push' | 'pull'>()
   const card = () => props.session && props.cards.find((c) => c.sessionIds.includes(props.session!.id))
@@ -145,25 +145,26 @@ export function ChatHeader(props: {
         run: () => transfer('pull'),
       })
     }
-    if (g.behind && g.ahead) {
+    const ask = props.onAsk
+    if (ask && g.behind && g.ahead) {
       items.push({
         label: `Bring up to date with ${g.upstream}`,
         description: `${g.ahead} here and ${g.behind} there that the other doesn't have. Claude merges or rebases.`,
-        run: () => props.onAsk(`Bring this branch up to date with ${g.upstream}.`),
+        run: () => ask(`Bring this branch up to date with ${g.upstream}.`),
       })
     }
-    if (g.base?.behind) {
+    if (ask && g.base?.behind) {
       items.push({
         label: `Update from ${g.base.branch}`,
         description: `${g.base.branch} has ${plural(g.base.behind, 'commit')} this worktree doesn't. Claude brings them in.`,
-        run: () => props.onAsk(`Bring this worktree up to date with ${g.base!.branch}.`),
+        run: () => ask(`Bring this worktree up to date with ${g.base!.branch}.`),
       })
     }
-    if (g.changes) {
+    if (ask && g.changes) {
       items.push({
         label: 'Commit',
         description: `${uncommitted(g)}. Claude writes the message.`,
-        run: () => props.onAsk('Commit the changes here.'),
+        run: () => ask('Commit the changes here.'),
       })
     }
     items.push({
@@ -283,10 +284,10 @@ export function ChatHeader(props: {
             </>
           )}
         </Show>
-        <Show when={props.actions.length}>
+        <Show when={props.onAsk && props.actions.length}>
           <Menu
             items={props.actions.map((a) => ({ label: a.label, description: a.description }))}
-            onPick={(i) => props.onAsk(props.actions[i].prompt)}
+            onPick={(i) => props.onAsk!(props.actions[i].prompt)}
             placement="bottom"
             align="right"
             title="Chat actions"

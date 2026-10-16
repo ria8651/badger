@@ -387,7 +387,7 @@ export function Chat(props: {
       onOpenPage={props.onOpenTerminal}
     >
       <div class="flex h-full min-w-0 flex-1 flex-col">
-        <Show when={!picking() && cwd()}>
+        <Show when={cwd()}>
           <ChatHeader
             session={props.session}
             cards={props.cards}
@@ -400,7 +400,7 @@ export function Chat(props: {
             fetching={git.fetching()}
             onRefresh={git.refresh}
             actions={actions()}
-            onAsk={(prompt) => send(prompt)}
+            onAsk={picking() ? undefined : (prompt) => send(prompt)}
           />
         </Show>
         <div
