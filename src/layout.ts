@@ -128,10 +128,19 @@ export function removeView(tree: Node, key: string): Node {
   return normalize(mapGroups(tree, (g) => (g.views.some((v) => viewKey(v) === key) ? { ...g, views: g.views.filter((v) => viewKey(v) !== key) } : g)))
 }
 
-export function addToGroup(tree: Node, groupId: string, view: View, activate = true): Node {
-  return mapGroups(tree, (g) =>
-    g.id !== groupId ? g : { ...g, views: g.views.some((v) => viewKey(v) === viewKey(view)) ? g.views : [...g.views, view], active: activate ? viewKey(view) : g.active },
-  )
+/** Adds a view to a group, at the end or before the tab at `index`; one already there only moves if given an index. */
+export function addToGroup(tree: Node, groupId: string, view: View, activate = true, index?: number): Node {
+  const key = viewKey(view)
+  return mapGroups(tree, (g) => {
+    if (g.id !== groupId) return g
+    const i = g.views.findIndex((v) => viewKey(v) === key)
+    if (i >= 0 && index === undefined) return { ...g, active: activate ? key : g.active }
+    const views = g.views.filter((v) => viewKey(v) !== key)
+    // The index counts the tab itself, if it was here: past it, that's one less.
+    const at = index === undefined ? views.length : Math.min(i >= 0 && index > i ? index - 1 : index, views.length)
+    views.splice(at, 0, i >= 0 ? g.views[i] : view)
+    return { ...g, views, active: activate ? key : g.active }
+  })
 }
 
 function replaceView(tree: Node, view: View): Node {
@@ -172,16 +181,17 @@ export function splitWith(tree: Node, target: string, edge: Edge, views: View[])
   return { tree: insertBeside(tree, target, edge, group, target === 'chat' ? 0.4 : 0.5), group: group.id }
 }
 
-/** Where a dragged tab was dropped: into a group, or beside a leaf to make a new one. */
-export type Drop = { target: string; zone: Edge | 'center' }
+/** Where a dragged tab was dropped: into a group, before its tab at `index` if on its tab bar, or beside a leaf to make a new one. */
+export type Drop = { target: string; zone: Edge | 'center'; index?: number }
 
 export function moveView(tree: Node, key: string, drop: Drop): { tree: Node; group?: string } {
   const from = groupOf(tree, key)
   if (!from) return { tree }
   const view = from.views.find((v) => viewKey(v) === key)!
-  if (drop.target === from.id && (drop.zone === 'center' || from.views.length === 1)) return { tree }
+  if (drop.target === from.id && drop.zone === 'center') return { tree: addToGroup(tree, from.id, view, true, drop.index), group: from.id }
+  if (drop.target === from.id && from.views.length === 1) return { tree }
   const rest = removeView(tree, key)
-  if (drop.zone === 'center') return { tree: addToGroup(rest, drop.target, view), group: drop.target }
+  if (drop.zone === 'center') return { tree: addToGroup(rest, drop.target, view, true, drop.index), group: drop.target }
   return splitWith(rest, drop.target, drop.zone, [view])
 }
 

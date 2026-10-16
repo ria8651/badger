@@ -253,7 +253,28 @@ export function Workspace(props: {
 
   const [drag, setDrag] = createSignal<{ key: string; label: string; x: number; y: number; drop?: Drop }>()
 
-  /** Over a group's tab bar or middle drops into it; anywhere else, beside the pane on the nearest side. */
+  /** A group's tabs as drawn, in order. */
+  const tabsOf = (group: string) => [...container.querySelectorAll<HTMLElement>(`[data-tabs="${group}"] > [data-tab]`)]
+  const tabMid = (t: HTMLElement) => {
+    const r = t.getBoundingClientRect()
+    return r.left + r.width / 2
+  }
+
+  /** Where in a tab bar a drop would go, as a line between tabs, relative to the container. */
+  const tabMark = (d: Drop) => {
+    if (d.index === undefined) return
+    const tabs = tabsOf(d.target)
+    const before = tabs[d.index]?.getBoundingClientRect()
+    const after = tabs[d.index - 1]?.getBoundingClientRect()
+    const r = before ?? after
+    if (!r) return
+    const b = container.getBoundingClientRect()
+    // Halfway across the gap between tabs; at either end, just inside the first or last.
+    const x = before && after ? (after.right + before.left) / 2 : before ? before.left : after!.right
+    return { left: `${x - b.left - 1}px`, top: `${r.top - b.top}px`, height: `${r.height}px` }
+  }
+
+  /** Over a group's tab bar drops into it beside the nearest tabs, or over its middle, at the end; anywhere else, beside the pane on the nearest side. */
   const dropAt = (x: number, y: number): Drop | undefined => {
     const b = container.getBoundingClientRect()
     const fx = (x - b.left) / b.width
@@ -262,7 +283,8 @@ export function Workspace(props: {
       if (fx < r.x || fx > r.x + r.w || fy < r.y || fy > r.y + r.h) continue
       const px = (fx - r.x) / r.w
       const py = (fy - r.y) / r.h
-      if (id !== 'chat' && (y - b.top - r.y * b.height < BAR || (px > 0.25 && px < 0.75 && py > 0.25 && py < 0.75))) return { target: id, zone: 'center' }
+      if (id !== 'chat' && y - b.top - r.y * b.height < BAR) return { target: id, zone: 'center', index: tabsOf(id).filter((t) => tabMid(t) < x).length }
+      if (id !== 'chat' && px > 0.25 && px < 0.75 && py > 0.25 && py < 0.75) return { target: id, zone: 'center' }
       const sides: [Edge, number][] = [['left', px], ['right', 1 - px], ['top', py], ['bottom', 1 - py]]
       return { target: id, zone: sides.reduce((a, s) => (s[1] < a[1] ? s : a))[0] }
     }
@@ -275,7 +297,8 @@ export function Workspace(props: {
     const share = d.target === 'chat' ? 0.4 : 0.5
     switch (d.zone) {
       case 'center':
-        return b
+        // Onto a tab bar, the line between tabs shows where.
+        return d.index === undefined ? b : undefined
       case 'left':
         return part(b, 'row', 0, share)
       case 'right':
@@ -402,6 +425,7 @@ export function Workspace(props: {
         <div class="flex shrink-0 items-center gap-0.5 px-1.5" style={{ height: `${BAR}px` }}>
           {/* A mouse wheel only scrolls vertically, so turn that into scrolling along the tabs. */}
           <div
+            data-tabs={g().id}
             class="flex min-w-0 items-center gap-0.5 overflow-x-auto [scrollbar-width:none]"
             onWheel={(e) => {
               const el = e.currentTarget
@@ -416,6 +440,7 @@ export function Workspace(props: {
                 const isActive = () => activeOf(g()) === key
                 return (
                   <div
+                    data-tab={key}
                     class={`group flex h-7 max-w-56 shrink-0 items-center rounded-md transition-colors ${
                       isActive() ? (focused() ? 'bg-surface text-fg' : 'bg-surface/60 text-fg-2') : 'text-fg-3 hover:bg-surface/60 hover:text-fg-2'
                     } ${drag()?.key === key ? 'opacity-50' : ''}`}
@@ -567,6 +592,9 @@ export function Workspace(props: {
             style={place(b())}
           />
         )}
+      </Show>
+      <Show when={drag()?.drop && tabMark(drag()!.drop!)}>
+        {(m) => <div class="pointer-events-none absolute z-50 w-0.5 rounded-full bg-accent" style={m()} />}
       </Show>
       <Show when={dragging()}>
         <div class="fixed inset-0 z-40" style={{ cursor: dragging() }} />
