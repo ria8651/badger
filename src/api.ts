@@ -54,6 +54,8 @@ export const api = {
   createTerminal: (spec: { cwd: string; machine?: string; command?: string; cols?: number; rows?: number }) =>
     request<TerminalInfo>('POST', '/api/terminals', spec),
   restartTerminal: (id: string) => request<TerminalInfo>('POST', `/api/terminals/${id}/restart`),
+  /** An empty name puts the default back. */
+  renameTerminal: (id: string, name: string) => request<TerminalInfo>('PATCH', `/api/terminals/${id}`, { name }),
   closeTerminal: (id: string) => request<void>('DELETE', `/api/terminals/${id}`),
   machines: () => get<Machine[]>('/api/machines'),
   /** A new runner, named after its host once it first connects. Its token is only ever shown here. */

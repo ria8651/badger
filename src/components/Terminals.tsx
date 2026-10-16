@@ -1,11 +1,11 @@
-import { For, Show } from 'solid-js'
+import { For, Show, createSignal } from 'solid-js'
 import { Globe, RotateCw, SquareTerminal, Trash2 } from '../icons'
 import type { TerminalInfo } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { LEADER, panelsShown, togglePanels } from '../layout.ts'
 import { previewUrl, previewsAvailable } from '../previews.ts'
 import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
-import { inWs, terminalLabel, terminalState, terminals, terminalsListed, type Ws } from '../terminals.ts'
+import { inWs, terminalLabel, terminalState, terminalTooltip, terminals, terminalsListed, type Ws } from '../terminals.ts'
 import { TerminalView } from './TerminalView.tsx'
 import { Loading, ltr } from './ui.tsx'
 
@@ -80,9 +80,43 @@ export function PortButtons(props: { terminal: TerminalInfo; onOpen?: (port: num
   )
 }
 
+/**
+ * Edits a terminal's name in place. Enter or clicking away saves, Escape
+ * cancels; saving it empty puts the default back: the command, or "bash 2".
+ */
+export function RenameTerminal(props: { terminal: TerminalInfo; onDone: () => void; class?: string }) {
+  let done = false
+  const finish = (name?: string) => {
+    if (done) return
+    done = true
+    name = name?.trim()
+    if (name !== undefined && name !== (props.terminal.name ?? '')) {
+      api.renameTerminal(props.terminal.id, name).catch((e: Error) => alert(`Couldn't rename: ${e.message}`))
+    }
+    props.onDone()
+  }
+  return (
+    <input
+      ref={(el) => queueMicrotask(() => (el.focus(), el.select()))}
+      value={props.terminal.name ?? ''}
+      placeholder={props.terminal.command ?? 'Name'}
+      onKeyDown={(e) => {
+        // Not the workspace's shortcuts.
+        e.stopPropagation()
+        if (e.key === 'Enter') finish(e.currentTarget.value)
+        if (e.key === 'Escape') finish()
+      }}
+      onBlur={(e) => finish(e.currentTarget.value)}
+      onPointerDown={(e) => e.stopPropagation()}
+      class={`min-w-0 rounded bg-bg px-1 text-fg ring-1 ring-edge outline-none placeholder:text-fg-3 pointer-coarse:text-base ${props.class ?? ''}`}
+    />
+  )
+}
+
 /** One terminal filling the page, at /t/:id. */
 export function TerminalPage(props: { id: string; onClosed: () => void }) {
   const terminal = () => terminals().find((t) => t.id === props.id)
+  const [renaming, setRenaming] = createSignal(false)
   /** The machine it runs on, from its id: `<machine>.<id>`. */
   const machine = () => props.id.slice(0, Math.max(0, props.id.lastIndexOf('.'))) || LOCAL
   // Missing from the list while its runner is away, or back but hasn't said what it has: not closed.
@@ -109,7 +143,16 @@ export function TerminalPage(props: { id: string; onClosed: () => void }) {
           <>
             <div class="flex h-12 shrink-0 items-center gap-2 px-5 text-[13px]">
               <StatusDot terminal={t()} />
-              <span class="truncate text-fg">{terminalLabel(t())}</span>
+              <Show
+                when={renaming()}
+                fallback={
+                  <span onDblClick={() => setRenaming(true)} title={`${terminalTooltip(t())}\nDouble-click to rename`} class="truncate text-fg">
+                    {terminalLabel(t())}
+                  </span>
+                }
+              >
+                <RenameTerminal terminal={t()} onDone={() => setRenaming(false)} class="w-48 text-[13px]" />
+              </Show>
               <span class="min-w-0 flex-1 truncate text-left font-mono text-[11px] text-fg-3 [direction:rtl]">{ltr(t().cwd)}</span>
               <Show when={onMachine(t().machine)}>{(name) => <span class="shrink-0 text-[11px] text-fg-3">{name()}</span>}</Show>
               <span class="shrink-0 text-xs text-fg-3">{terminalState(t())}</span>
