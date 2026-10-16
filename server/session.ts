@@ -107,7 +107,7 @@ export class LiveSession {
     mode: PermissionMode
     model?: string
     resume: boolean
-    /** Start a new session in this worktree (Claude Code's --worktree); empty lets Claude name it. */
+    /** Start in this new worktree (Claude Code's --worktree), resuming or not; empty lets Claude name it. */
     worktree?: string
     tools: SessionTools
     onClose: () => void
@@ -118,7 +118,7 @@ export class LiveSession {
     this.cwd = opts.cwd
     this.mode = opts.mode
     this.model = opts.model
-    this.makingWorktree = opts.worktree !== undefined && !opts.resume
+    this.makingWorktree = opts.worktree !== undefined
     this.tools = opts.tools
     this.onClose = opts.onClose
     this.onChange = opts.onChange
@@ -708,8 +708,8 @@ export class SessionManager {
       mode: opts.mode ?? 'auto',
       model: opts.model,
       resume: !!info,
-      // Only a new chat can start in a new worktree; a resumed one already runs where it left off.
-      worktree: info ? undefined : opts.worktree,
+      // The hub only asks a chat that has run before to, when it's a fork that hasn't yet.
+      worktree: opts.worktree,
       tools: this.tools(id, () => session.cwd),
       onClose: () => {
         if (this.sessions.get(id) === session) this.sessions.delete(id)

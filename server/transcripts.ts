@@ -116,6 +116,18 @@ export class Transcripts {
     return rows.map((r) => r.subpath)
   }
 
+  /** A chat's subagents' transcripts, as their lines, with each one's metadata. */
+  subagentFiles(sessionId: string): { subpath: string; lines: string[]; meta?: Record<string, unknown> }[] {
+    return this.subpaths(sessionId).map((subpath) => {
+      const file = this.db.prepare('SELECT meta FROM transcript_files WHERE session_id = ? AND subpath = ?').get(sessionId, subpath) as { meta: string | null }
+      const rows = this.db.prepare('SELECT entry FROM transcript_lines WHERE session_id = ? AND subpath = ? ORDER BY n').all(sessionId, subpath) as {
+        entry: string
+      }[]
+      // Lines too long to copy came over blank.
+      return { subpath, lines: rows.map((r) => r.entry).filter(Boolean), ...(file.meta ? { meta: JSON.parse(file.meta) } : {}) }
+    })
+  }
+
   /** The most recently changed chats, newest first, less the `except` ones: left out before the limit, so they can't crowd others out. */
   list(limit: number, except: Set<string>): Promise<SDKSessionInfo[]> {
     const listed = () => this.summaries().filter((s) => !except.has(s.sessionId))

@@ -9,6 +9,7 @@ import { lastModel, modelValue, models, setLastModel } from '../models.ts'
 import { cardWorktreeName, isScratch, worktreeOf } from '../folders.ts'
 import { FileBrowser } from './FileBrowser.tsx'
 import { FolderPicker } from './FolderPicker.tsx'
+import { ForkDialog } from './ForkDialog.tsx'
 import { openView, panelsShown, planView, togglePanels, viewKey, viewShown, wide } from '../layout.ts'
 import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
 import { inWs, terminals, workspaceOf, type Ws } from '../terminals.ts'
@@ -367,6 +368,13 @@ export function Chat(props: {
 
   /** The panel a narrow composer keeps its mode, model and the rest in. */
   const [more, setMore] = createSignal(false)
+  /** The end of the turn being forked from, while picking where the fork goes. */
+  const [forking, setForking] = createSignal<string>()
+  const openChat = (id: string) => {
+    // App routes on popstate, so this navigates without a reload.
+    history.pushState(null, '', `/s/${id}`)
+    dispatchEvent(new PopStateEvent('popstate'))
+  }
   let moreButton!: HTMLButtonElement
   let morePanel: HTMLDivElement | undefined
   const onOutside = (e: PointerEvent) => {
@@ -448,9 +456,25 @@ export function Chat(props: {
                         working={working() && state.permissions.length === 0 && childPrompts().length === 0}
                         cwd={cwd()}
                         children={state.children}
+                        onFork={setForking}
                       />
                     </Checking.Provider>
                   </ChildChats.Provider>
+                  <Show when={forking()}>
+                    {(at) => (
+                      <ForkDialog
+                        sessionId={props.sessionId}
+                        at={at()}
+                        machine={machine()}
+                        cwd={cwd()}
+                        onForked={(id) => {
+                          setForking()
+                          openChat(id)
+                        }}
+                        onClose={() => setForking()}
+                      />
+                    )}
+                  </Show>
                   <Show when={state.makingWorktree}>
                     <div class="mt-4 flex h-6 items-center gap-2 text-[13px] text-fg-3">
                       <GitBranch class="size-3.5 shrink-0 animate-pulse" /> Making worktree

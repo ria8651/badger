@@ -2,6 +2,7 @@ import { For, Show, createContext, createMemo, createSignal, onCleanup, useConte
 import { unwrap } from 'solid-js/store'
 import { Columns3, Shield } from '../icons'
 import { parseCardContext, type CardContext } from '../../shared/cardContext.ts'
+import { splitMoveNote, type Move } from '../../shared/forkNote.ts'
 import { unwrapPaste } from '../../shared/pastes.ts'
 import type { CardStatus, ImageAttachment, WireMessage } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
@@ -23,7 +24,8 @@ type Item =
   | { kind: 'tool'; id: string; name: string; input: Record<string, unknown> }
   | { kind: 'result'; ok: boolean; seconds: number; tokens?: { input: number; output: number }; endedAt?: number; error?: string }
   | { kind: 'divider'; text: string }
-  | { kind: 'card'; context: CardContext }
+  /** What Badger told Claude with a prompt: its card, and where a fork moved to. */
+  | { kind: 'card'; context?: CardContext; move?: Move }
 
 /** A stretch of Claude's work folded into one row, in result-only mode. */
 type Work = { kind: 'work' }
@@ -90,8 +92,9 @@ function messageItems(m: WireMessage): Item[] {
   }
   if (m.type === 'hook_context') {
     // Other hooks' context isn't Badger's to show.
-    const context = parseCardContext(String(m.text ?? ''))
-    return context ? [{ kind: 'card', context }] : []
+    const { move, rest } = splitMoveNote(String(m.text ?? ''))
+    const context = rest ? parseCardContext(rest) : undefined
+    return context || move ? [{ kind: 'card', context, move }] : []
   }
   if (m.type === 'system' && m.subtype === 'compact_boundary') return [{ kind: 'divider', text: 'Conversation compacted' }]
   return []
@@ -157,22 +160,30 @@ function buildView(messages: WireMessage[], nested: boolean) {
     }
   }
   // Card context goes in with the prompt it was injected for, so it's shown as one of its attachments.
-  const cards = new Map<Item, CardContext>()
+  const cards = new Map<Item, Extract<Item, { kind: 'card' }>>()
   const attached = new Set<Item>()
   let lastUser: Item | undefined
+  // Each turn forks from its last answer: one rebuilt from the transcript says which, a live one follows it.
+  const forkAt = new Map<Item, string>()
+  let lastAnswer: string | undefined
   for (const m of messages) {
     const items = itemsFor(m)
     if (m.type === 'hook_context') {
       if (lastUser && items[0]?.kind === 'card') {
-        cards.set(lastUser, items[0].context)
+        cards.set(lastUser, items[0])
         attached.add(items[0])
       }
     } else if (m.type === 'user' || m.type === 'assistant' || m.type === 'result') lastUser = items.find((i) => i.kind === 'user')
+    if (m.type === 'assistant' && m.uuid) lastAnswer = m.uuid
+    if (m.type === 'result' && items[0]) {
+      const at = typeof m.after_uuid === 'string' ? m.after_uuid : lastAnswer
+      if (at) forkAt.set(items[0], at)
+    }
   }
   const items = messages.flatMap(itemsFor).filter((i) => !attached.has(i))
   // A subagent's prompt is shown with the call that started it; only messages sent to it later stay.
   const prompt = nested ? items.find((i) => i.kind === 'user') : undefined
-  return { items: prompt ? items.filter((i) => i !== prompt) : items, idleUntil, cards }
+  return { items: prompt ? items.filter((i) => i !== prompt) : items, idleUntil, cards, forkAt }
 }
 
 const isWork = (i: Item) => i.kind === 'text' || i.kind === 'thinking' || i.kind === 'tool'
@@ -263,6 +274,8 @@ type TranscriptProps = {
   cwd?: string
   /** Chats started from tool calls, by tool_use_id; those calls show the child's transcript. */
   children?: Record<string, string>
+  /** Given, each turn offers to fork the chat from its end, the id of its last message. */
+  onFork?: (at: string) => void
 }
 
 /** Index a chat's messages. Tracks the array and its length, then walks the raw objects so the cache keys are stable. */
@@ -350,7 +363,15 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
       case 'work':
         return <WorkRow work={item} />
       case 'user':
-        return <UserMessage text={item.text} pastes={item.pastes} images={item.images} card={view().cards.get(item)} />
+        return (
+          <UserMessage
+            text={item.text}
+            pastes={item.pastes}
+            images={item.images}
+            card={view().cards.get(item)?.context}
+            move={view().cards.get(item)?.move}
+          />
+        )
       case 'text':
         return (
           <div class="my-4">
@@ -386,6 +407,21 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
             {duration(item.seconds)}
             {item.tokens ? ` · ${compact(item.tokens.input)} in · ${compact(item.tokens.output)} out` : ''}
             <Show when={item.endedAt}>{(at) => <Idle from={at()} until={view().idleUntil.get(item)} />}</Show>
+            <Show when={!props.nested && props.onFork && view().forkAt.get(item)}>
+              {(at) => (
+                <>
+                  {' · '}
+                  <button
+                    type="button"
+                    title="Copy the chat up to here as a new one"
+                    onClick={() => props.onFork!(at())}
+                    class="-mx-1 rounded px-1 py-0.5 transition-colors hover:bg-surface"
+                  >
+                    Fork
+                  </button>
+                </>
+              )}
+            </Show>
           </div>
         )
       case 'divider':
@@ -397,7 +433,11 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
           </div>
         )
       case 'card':
-        return <CardContextBadge context={item.context} />
+        return (
+          <Show when={item.context}>
+            {(context) => <CardContextBadge context={context()} />}
+          </Show>
+        )
     }
   }
 
@@ -759,6 +799,8 @@ export function UserMessage(props: {
   pastes?: string[]
   images?: ImageAttachment[]
   card?: CardContext
+  /** Where a fork moved to, as Claude was told with this message. */
+  move?: Move
   /** Replaces the spacing it has in the transcript. */
   class?: string
   /** How tall it gets before it's clamped. */
@@ -771,8 +813,8 @@ export function UserMessage(props: {
   return (
     <div class={`flex items-center justify-start gap-1 ${props.class ?? 'mt-8 mb-4 first:mt-0'}`}>
       <div class="-ml-4 max-w-[80%] min-w-0 bg-surface rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed">
-        <Show when={props.pastes?.length || props.images?.length || props.card}>
-          <Attachments pastes={props.pastes ?? []} images={props.images ?? []} card={props.card} class={props.text ? 'mb-2' : ''} />
+        <Show when={props.pastes?.length || props.images?.length || props.card || props.move}>
+          <Attachments pastes={props.pastes ?? []} images={props.images ?? []} card={props.card} move={props.move} class={props.text ? 'mb-2' : ''} />
         </Show>
         <Show when={props.text}>
           <div

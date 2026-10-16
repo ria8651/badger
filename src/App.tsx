@@ -447,7 +447,7 @@ export function App() {
   return (
     <div class="flex h-full">
       <Show when={drawer()}>
-        <div onClick={() => setDrawer(false)} class="fixed inset-0 z-20 animate-[fade-in_150ms_ease-out] bg-[rgb(0_0_0/0.4)] md:hidden" />
+        <div onClick={() => setDrawer(false)} class="fixed inset-0 z-20 animate-[fade-in_150ms_ease-out] bg-black/40 md:hidden" />
       </Show>
       <aside
         class={`fixed inset-y-0 left-0 z-30 flex w-72 max-w-[85vw] shrink-0 flex-col border-r border-line bg-bg transition-[translate,visibility] duration-200 ease-out md:relative md:z-10 md:w-(--sidebar-w) md:translate-x-0 md:visible md:transition-none ${

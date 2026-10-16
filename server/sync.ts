@@ -1,6 +1,6 @@
-import { open, readdir, readFile, stat } from 'node:fs/promises'
+import { appendFile, mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join, relative, sep } from 'node:path'
+import { dirname, join, relative, sep } from 'node:path'
 import type { Remote } from './peer.ts'
 import { RUNNER_MAX_FRAME, isUuid, type HubApi, type TranscriptState } from './runnerProtocol.ts'
 
@@ -21,6 +21,30 @@ const MAX_MISMATCHES = 5
 /** Files asked about in one call when (re)connecting. */
 const STATE_BATCH = 500
 
+/** Where Claude Code keeps transcripts, a folder per project. */
+const projectsDir = () => join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects')
+
+/**
+ * Writes part of a chat's transcript where Claude Code keeps those of chats in
+ * `cwd`, e.g. a fork made on the hub. `subpath` is as in LocalFile; a
+ * subagent's metadata goes beside its file. A file's first part makes it, and
+ * fails if it's there already.
+ */
+export async function writeTranscript(
+  sessionId: string,
+  cwd: string,
+  file: { subpath: string; lines: string[]; append: boolean; meta?: Record<string, unknown> },
+): Promise<void> {
+  // Claude Code shortens long names with a hash too, but it looks in every project folder for a chat to resume.
+  const project = join(projectsDir(), cwd.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 200))
+  const path = file.subpath ? join(project, sessionId, `${file.subpath}.jsonl`) : join(project, `${sessionId}.jsonl`)
+  await mkdir(dirname(path), { recursive: true })
+  const text = file.lines.map((l) => `${l}\n`).join('')
+  if (file.append) await appendFile(path, text)
+  else await writeFile(path, text, { flag: 'wx' })
+  if (file.meta) await writeFile(path.replace(/\.jsonl$/, '.meta.json'), JSON.stringify(file.meta))
+}
+
 interface LocalFile {
   sessionId: string
   /** '' for the chat's own transcript, else its path under the chat's folder without `.jsonl`, e.g. `subagents/agent-<id>`. */
@@ -38,7 +62,7 @@ interface LocalFile {
  * off. Lines are only sent once they're whole.
  */
 export class TranscriptSync {
-  private readonly projects = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects')
+  private readonly projects = projectsDir()
   /** What the hub has of each file, as far as this connection knows; cleared when it reconnects. */
   private known = new Map<string, TranscriptState>()
   /** Subagent metadata sent this connection, by file, so it's only sent again when it changes. */

@@ -1,8 +1,10 @@
 import { For, Show, createSignal, onCleanup } from 'solid-js'
 import { Portal } from 'solid-js/web'
-import { Columns3, FileText, X } from '../icons'
+import { Columns3, FileText, GitFork, X } from '../icons'
 import type { CardContext } from '../../shared/cardContext.ts'
+import type { Move, Place } from '../../shared/forkNote.ts'
 import type { ImageAttachment } from '../../shared/protocol.ts'
+import { basename } from '../folders.ts'
 import { imageUrl } from '../images.ts'
 import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
@@ -17,11 +19,13 @@ export function Attachments(props: {
   pastes: string[]
   images: ImageAttachment[]
   card?: CardContext
+  /** Where a fork moved to, as Claude was told. */
+  move?: Move
   onRemovePaste?: (index: number) => void
   onRemoveImage?: (index: number) => void
   class?: string
 }) {
-  const [open, setOpen] = createSignal<number | 'card'>()
+  const [open, setOpen] = createSignal<number | 'card' | 'move'>()
   const [viewing, setViewing] = createSignal<ImageAttachment>()
   const openText = () => {
     const i = open()
@@ -60,6 +64,19 @@ export function Attachments(props: {
                 </button>
               )}
             </Show>
+          )}
+        </Show>
+        <Show when={props.move}>
+          {(move) => (
+            <button
+              type="button"
+              title={`Forked from ${place(move().from)}`}
+              class={`${chip} max-w-72 gap-1.5 px-2.5 ${open() === 'move' ? 'border-fg-3 text-fg-2' : 'border-edge text-fg-3 hover:text-fg-2'}`}
+              onClick={() => setOpen(open() === 'move' ? undefined : 'move')}
+            >
+              <GitFork class="size-3.5 shrink-0" />
+              <span class="min-w-0 truncate">Moved from {basename(move().from.cwd)}</span>
+            </button>
           )}
         </Show>
         <For each={props.images}>
@@ -127,12 +144,22 @@ export function Attachments(props: {
           </div>
         )}
       </Show>
+      <Show when={open() === 'move' && props.move}>
+        {(move) => (
+          <div class="mt-2 rounded-lg border border-edge px-3 py-2.5 text-[13px] text-fg-2">
+            Forked from a chat in <span class="font-mono text-xs">{place(move().from)}</span>, and now in{' '}
+            <span class="font-mono text-xs">{place(move().to)}</span>. Claude was told that paths from before may not be here.
+          </div>
+        )}
+      </Show>
       <Show when={viewing()}>{(image) => <Lightbox image={image()} onClose={() => setViewing(undefined)} />}</Show>
     </div>
   )
 }
 
 const chip = 'flex h-7 items-center rounded-lg border text-xs transition-colors'
+
+const place = (p: Place) => `${p.worktree ? 'a new worktree of ' : ''}${p.cwd} on ${p.machine}`
 
 function Lightbox(props: { image: ImageAttachment; onClose: () => void }) {
   // Caught first and stopped, so Escape closes this rather than also stopping Claude from the composer.

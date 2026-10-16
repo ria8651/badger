@@ -148,6 +148,15 @@ const MIGRATIONS = [
    );
    INSERT INTO machine_folders (machine, path, added_at, hidden_at) SELECT 'local', path, added_at, hidden_at FROM folders;
    DROP TABLE folders;`,
+  // Chats forked from another. Until a fork first runs: the new worktree it goes into, if any, and what Claude is told about moving.
+  `CREATE TABLE forks (
+     session_id TEXT PRIMARY KEY,
+     source_id TEXT NOT NULL,
+     cwd TEXT NOT NULL,
+     worktree TEXT,
+     note TEXT,
+     created_at INTEGER NOT NULL
+   );`,
 ]
 
 /**
@@ -438,6 +447,39 @@ export class Store {
       tool_use_id: string
     }[]
     return Object.fromEntries(rows.map((r) => [r.tool_use_id, r.session_id]))
+  }
+
+  addFork(fork: { sessionId: string; sourceId: string; cwd: string; worktree?: string; note?: string }): void {
+    this.db
+      .prepare('INSERT INTO forks (session_id, source_id, cwd, worktree, note, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(fork.sessionId, fork.sourceId, fork.cwd, fork.worktree ?? null, fork.note ?? null, Date.now())
+  }
+
+  /** A fork's folder, and the new worktree it starts in, while it hasn't. */
+  forkStart(sessionId: string): { cwd: string; worktree: string } | undefined {
+    const row = this.db.prepare('SELECT cwd, worktree FROM forks WHERE session_id = ? AND worktree IS NOT NULL').get(sessionId) as
+      | { cwd: string; worktree: string }
+      | undefined
+    return row
+  }
+
+  /** The fork has started in its worktree, so later starts resume wherever it is. */
+  forkStarted(sessionId: string): void {
+    this.db.prepare('UPDATE forks SET worktree = NULL WHERE session_id = ?').run(sessionId)
+  }
+
+  /** What a fork that moved is told about it, until Claude has been. */
+  forkNote(sessionId: string): string | undefined {
+    const row = this.db.prepare('SELECT note FROM forks WHERE session_id = ?').get(sessionId) as { note: string | null } | undefined
+    return row?.note ?? undefined
+  }
+
+  forkNoteSeen(sessionId: string): void {
+    this.db.prepare('UPDATE forks SET note = NULL WHERE session_id = ?').run(sessionId)
+  }
+
+  removeFork(sessionId: string): void {
+    this.db.prepare('DELETE FROM forks WHERE session_id = ?').run(sessionId)
   }
 
   contextHash(sessionId: string): string | undefined {
