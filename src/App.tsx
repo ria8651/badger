@@ -17,6 +17,7 @@ import { AccountLimits } from './components/Usage.tsx'
 import { StatusDot, TerminalPage } from './components/Terminals.tsx'
 import { ChatSummary, MachineName } from './components/ChatSummary.tsx'
 import { Settings } from './components/Settings.tsx'
+import { ImageViewer } from './components/ImageViewer.tsx'
 import { Loading, Menu, modalOpen } from './components/ui.tsx'
 import { terminalLabel, terminalWs, terminals, terminalsLoaded, wsKey } from './terminals.ts'
 import { accountUsage } from './usage.ts'
@@ -689,6 +690,7 @@ export function App() {
       <Show when={settings()}>
         <Settings onClose={() => setSettings(false)} />
       </Show>
+      <ImageViewer />
     </div>
   )
 }

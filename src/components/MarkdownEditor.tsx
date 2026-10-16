@@ -8,6 +8,7 @@ import Link from '@tiptap/extension-link'
 import { Paragraph as BaseParagraph } from '@tiptap/extension-paragraph'
 import { Placeholder } from '@tiptap/extensions'
 import { Markdown } from '@tiptap/markdown'
+import { viewImageIn } from './ImageViewer.tsx'
 
 const SAVE_DELAY = 800
 
@@ -127,12 +128,23 @@ export function MarkdownEditor(props: {
           if (e.key === 'k' && (e.metaKey || e.ctrlKey)) return (editLink(), true)
           return false
         },
-        // Links open with a modifier, since a plain click is for putting the cursor in them.
-        handleClick: (_, __, e) => {
+        // Links and images open with a modifier, since a plain click is for putting the cursor in or selecting them.
+        handleClick: (view, __, e) => {
+          if (!(e.metaKey || e.ctrlKey)) return false
+          if (e.target instanceof HTMLImageElement) return (viewImageIn(view.dom, e.target), true)
           const a = (e.target as Element).closest('a')
-          if (!a || !(e.metaKey || e.ctrlKey)) return false
+          if (!a) return false
           window.open(a.href, '_blank', 'noreferrer')
           return true
+        },
+        // Or an image opens with a double click. The browser's, once the clicks are over: ProseMirror's
+        // comes on the second press, so the release would land on the viewer and close it.
+        handleDOMEvents: {
+          dblclick: (view, e) => {
+            if (!(e.target instanceof HTMLImageElement)) return false
+            viewImageIn(view.dom, e.target)
+            return true
+          },
         },
       },
       onUpdate: () => {
