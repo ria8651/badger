@@ -16,6 +16,7 @@
  *   accent   only for "live" or "needs you": running chats, prompts
  *   danger   errors, destructive modes, removed lines
  *   ok       added lines in diffs
+ *   black    the dimmed backdrop behind modals and the drawer, in both themes
  */
 @theme {
   --color-*: initial;
@@ -31,6 +32,7 @@
   --color-accent: #c15f3c;
   --color-danger: #c13a2e;
   --color-ok: #3d7a4a;
+  --color-black: #000;
 
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;

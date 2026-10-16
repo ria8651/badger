@@ -5,11 +5,13 @@ import { homedir } from 'node:os'
 import { extname, isAbsolute, join, resolve } from 'node:path'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { z } from 'zod'
+import { renderMoveNote, splitMoveNote } from '../shared/forkNote.ts'
 import { IMAGE_TYPES, type AnswerDraft, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
 import { Attention } from './attention.ts'
 import { BRIDGE_PATH, Bridges } from './bridge.ts'
 import { boardOps, cardContext, contextSeen, type ChatInfo } from './boardTools.ts'
 import { type Actor, BadRequest, type Draft, Store } from './db.ts'
+import { forkTranscript } from './fork.ts'
 import { LOCAL, Machines, mismatch, type Connection } from './machines.ts'
 import { OpError, type Op } from './ops.ts'
 import { memoryLinks, wsLink } from './peer.ts'
@@ -284,8 +286,13 @@ function hubApi(machine: string): Omit<HubApi, 'hello'> {
       const chats = await chatInfo(card.sessionIds)
       return { ...card, chats: chats.map(({ id, cwd, machine }) => ({ id, cwd, machine, archived: archived.has(id) })) }
     },
-    cardContext: (chat) => cardContext(store, own(chat)),
-    contextSeen: (chat, text) => contextSeen(store, own(chat), text),
+    // A fork that moved is told so first, then about its card.
+    cardContext: (chat) => [store.forkNote(own(chat)), cardContext(store, chat)].filter(Boolean).join('\n\n') || undefined,
+    contextSeen: (chat, text) => {
+      const { move, rest } = splitMoveNote(text)
+      if (move) store.forkNoteSeen(own(chat))
+      if (rest) contextSeen(store, own(chat), rest)
+    },
     openPreview: (chat, { root, port, name, path }) => {
       own(chat)
       broadcast({ type: 'open_preview', root, machine, port, name, path })
@@ -524,14 +531,12 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       // Sending empties the composer in every tab, not just the one that sent.
       saveDraft(ws, event.sessionId, { text: '', attachments: { pastes: [], images: [] } })
       machines.assign(event.sessionId, machine)
+      // A chat that's run before resumes where it was, except a fork going into a new worktree.
+      const fork = placed ? store.forkStart(event.sessionId) : undefined
+      const where = placed ? { cwd: fork?.cwd, worktree: fork?.worktree } : { cwd: event.cwd, worktree: event.worktree }
       try {
-        await runner.peer.remote.send(
-          event.sessionId,
-          { cwd: event.cwd, mode: event.mode, model: event.model, worktree: event.worktree },
-          event.text,
-          pastes,
-          images,
-        )
+        await runner.peer.remote.send(event.sessionId, { ...where, mode: event.mode, model: event.model }, event.text, pastes, images)
+        if (fork) store.forkStarted(event.sessionId)
       } catch (err) {
         // Turned away, so it never started: it can go elsewhere. Anything else, e.g. the connection dropping, it may have.
         if (!placed && err instanceof BadRequest) machines.unassign(event.sessionId, machine)
@@ -733,9 +738,10 @@ async function cardsApi(method: string, path: string, req: IncomingMessage): Pro
 
 /** Archive and title routes. Archiving only hides a chat; its transcript is left alone. */
 async function sessionsApi(method: string, path: string, req: IncomingMessage): Promise<[number, unknown] | undefined> {
-  const m = path.match(/^\/api\/sessions\/([0-9a-f-]{36})\/(archive|title|title\/suggest)$/)
+  const m = path.match(/^\/api\/sessions\/([0-9a-f-]{36})\/(archive|title|title\/suggest|fork)$/)
   if (!m) return undefined
   const [, id, action] = m
+  if (action === 'fork' && method === 'POST') return [201, await forkChat(id, await readJson(req))]
   if (action === 'archive') {
     if (method === 'POST') return (store.setArchived(id, true, UI), [204, null])
     if (method === 'DELETE') return (store.setArchived(id, false, UI), [204, null])
@@ -757,6 +763,54 @@ async function sessionsApi(method: string, path: string, req: IncomingMessage): 
     return [200, { title: await suggestTitle(id, current, card, SCRATCH_DIR, transcripts.store).catch(badRequest) }]
   }
   return undefined
+}
+
+/**
+ * Copies a chat as a new one, up to the end of the turn `at` (or all of it),
+ * on the same card. It can go to another folder or runner, or into a new
+ * worktree made when it first runs; then Claude is told it moved, with its
+ * first message. Files stay where they are. The copy is made here, so the
+ * chat's own machine needn't be online, and written on the one it goes to.
+ */
+async function forkChat(id: string, body: { at?: unknown; machine?: unknown; cwd?: unknown; worktree?: unknown }) {
+  if (body.at !== undefined && typeof body.at !== 'string') throw new BadRequest('at must be a message id')
+  if (body.worktree !== undefined && typeof body.worktree !== 'string') throw new BadRequest('worktree must be a string')
+  const info = await transcripts.info(id)
+  const fromMachine = machines.machineOf(id)
+  const fromCwd = machines.live(id)?.cwd ?? info?.cwd
+  if (!info || !fromMachine || !fromCwd) throw new BadRequest("This chat hasn't been saved yet, so it can't be forked")
+  const runner = machineParam(body.machine ?? fromMachine)
+  const cwd = body.cwd === undefined ? fromCwd : requirePath(body.cwd)
+  const worktree = body.worktree
+  const moved = runner.id !== fromMachine || cwd !== fromCwd || worktree !== undefined
+  const title = `${(info.customTitle || info.summary || info.firstPrompt || 'Untitled').replace(/ \(fork\)$/, '')} (fork)`
+  const fork = await forkTranscript(transcripts.store, transcripts.subagentFiles(id), id, { at: body.at, title, cwd: moved ? cwd : undefined }).catch((err) => {
+    // The turn's last messages may not have been copied here yet.
+    throw new BadRequest(`Couldn't fork it: ${err instanceof Error ? err.message : err}`)
+  })
+  const note = moved
+    ? renderMoveNote({ from: { machine: machines.name(fromMachine), cwd: fromCwd }, to: { machine: runner.name, cwd, worktree: worktree !== undefined || undefined } })
+    : undefined
+  const card = store.cards().find((c) => c.sessionIds.includes(id))
+  store.transaction(() => {
+    machines.assign(fork.sessionId, runner.id)
+    store.addFork({ sessionId: fork.sessionId, sourceId: id, cwd, worktree, note })
+  })
+  try {
+    for (const file of fork.files) await runner.peer.remote.importTranscript(fork.sessionId, cwd, file)
+  } catch (err) {
+    store.transaction(() => {
+      machines.unassign(fork.sessionId, runner.id)
+      store.removeFork(fork.sessionId)
+    })
+    throw err
+  }
+  if (card) {
+    store.linkSession(card.id, fork.sessionId, UI)
+    cardsChanged()
+  }
+  sessionsChanged()
+  return { sessionId: fork.sessionId }
 }
 
 /** Runner routes: the list, adding one (its token is shown once), renaming, a new token, and removing one. */

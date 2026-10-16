@@ -19,6 +19,7 @@ import {
   type FileData,
   type HubApi,
   type HubEvent,
+  type ImportedFile,
   type LiveInfo,
   type LiveSnapshot,
   type OpenOptions,
@@ -28,7 +29,7 @@ import {
 } from './runnerProtocol.ts'
 import { scriptOp } from './scripts.ts'
 import { SessionManager, listModels } from './session.ts'
-import { TranscriptSync } from './sync.ts'
+import { TranscriptSync, writeTranscript } from './sync.ts'
 import { TERMINAL_INSTRUCTIONS, TERMINAL_SERVER, terminalOps } from './terminalTools.ts'
 import { Terminals } from './terminals.ts'
 import { ContextReader, readAccount } from './usage.ts'
@@ -305,6 +306,14 @@ export class Runner implements RunnerApi {
 
   async rename(sessionId: string, title: string): Promise<void> {
     await renameSession(sessionId, title).catch(badRequest)
+    this.sync.touch(sessionId)
+  }
+
+  async importTranscript(sessionId: string, cwd: string, file: ImportedFile): Promise<void> {
+    if (!isAbsolute(cwd) || inaccessible(cwd)) throw new BadRequest(`${cwd} doesn't exist or can't be opened`)
+    if (file.subpath && file.subpath.split('/').some((p) => !p || p === '.' || p === '..')) throw new BadRequest(`Bad transcript file ${file.subpath}`)
+    this.chats.add(sessionId)
+    await writeTranscript(sessionId, cwd, file).catch(badRequest)
     this.sync.touch(sessionId)
   }
 

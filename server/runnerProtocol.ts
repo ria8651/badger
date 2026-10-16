@@ -32,7 +32,7 @@ import type { CreateSpec } from './ptyProtocol.ts'
  * Runners and the hub are updated separately, so bump this when either side
  * would misread the other; the hub turns away runners on another version.
  */
-export const RUNNER_PROTOCOL = 5
+export const RUNNER_PROTOCOL = 6
 
 /** Header a runner sends its protocol version in, so a mismatch is caught before the upgrade. */
 export const PROTOCOL_HEADER = 'x-badger-protocol'
@@ -84,10 +84,21 @@ export interface LiveSnapshot {
   queued: QueuedMessage[]
 }
 
+/** Part of a transcript file the hub sends a runner: the chat's own (`subpath` '') or a subagent's. */
+export interface ImportedFile {
+  subpath: string
+  lines: string[]
+  /** Not the file's first part. */
+  append: boolean
+  /** A subagent's .meta.json. */
+  meta?: Record<string, unknown>
+}
+
 export interface OpenOptions {
   cwd?: string
   mode?: PermissionMode
   model?: string
+  /** Start in a new worktree of cwd with this name; empty lets Claude name it. For a new chat, or a fork that hasn't run. */
   worktree?: string
 }
 
@@ -142,6 +153,12 @@ export interface RunnerApi {
   models(): Promise<ModelOption[]>
   /** The title goes in the transcript, where the CLI's /resume sees it too. */
   rename(sessionId: string, title: string): Promise<void>
+  /**
+   * Writes part of a forked chat's transcript here, where Claude Code keeps
+   * those of chats in `cwd`, and puts the chat on this machine. A file's
+   * first part makes it; the rest are appended.
+   */
+  importTranscript(sessionId: string, cwd: string, file: ImportedFile): Promise<void>
   /** Which of these folders Claude Code can't run in. */
   inaccessible(dirs: string[]): string[]
   workspaceRoot(cwd: string): string
@@ -179,6 +196,7 @@ export const RUNNER_METHODS = [
   'accountUsage',
   'models',
   'rename',
+  'importTranscript',
   'inaccessible',
   'workspaceRoot',
   'worktreeStatus',
