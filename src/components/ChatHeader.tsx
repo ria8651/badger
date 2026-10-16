@@ -74,6 +74,7 @@ export function ChatHeader(props: {
   cards: Card[]
   onRenamed: (title: string) => void
   onToggleArchived: () => void
+  onOpenCard: (id: number) => void
   cwd?: string
   machine: string
   ws?: Ws
@@ -192,11 +193,11 @@ export function ChatHeader(props: {
   const button = 'flex h-7 items-center gap-1 rounded-md px-2 text-xs transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9'
 
   return (
-    <div class="flex h-11 shrink-0 items-center gap-2 border-b border-line px-3 text-[13px] md:px-4">
+    <div class="flex h-10 shrink-0 items-center gap-2 border-b border-line px-3 text-[13px] md:h-11 md:px-4">
       <Show when={props.session}>
         {(s) => (
           <>
-            {/* On narrow screens the page's own header has the title, and the sidebar's row moves and renames. */}
+            {/* On narrow screens the bar above has the title, and the sidebar's row renames. */}
             <RenameChat
               session={s()}
               onSaved={props.onRenamed}
@@ -206,21 +207,31 @@ export function ChatHeader(props: {
               }
               trigger={() => s().title}
             />
+            <Show when={card()}>
+              {(c) => (
+                <a
+                  href={`/c/${c().id}`}
+                  onClick={(e) => {
+                    // New tabs and windows go by the href.
+                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
+                    e.preventDefault()
+                    props.onOpenCard(c().id)
+                  }}
+                  title={`Open #${c().id} ${c().title}`}
+                  class={`${button} min-w-0 max-w-60 shrink text-fg-3`}
+                >
+                  <span class="shrink-0 tabular-nums">#{c().id}</span>
+                  {/* Between the two the chat's title is enough. */}
+                  <span class="truncate md:hidden lg:inline">{c().title}</span>
+                </a>
+              )}
+            </Show>
             <FileChat
               session={s()}
               cards={props.cards}
               title={card() ? 'Move to another project or card' : 'Put in a project'}
-              triggerClass={(open) => `${button} hidden max-w-60 md:flex ${open ? 'bg-surface text-fg-2' : 'text-fg-3'}`}
-              trigger={() => (
-                <Show when={card()} fallback={<FolderInput class="size-3.5" />}>
-                  {(c) => (
-                    <>
-                      <span class="tabular-nums">#{c().id}</span>
-                      <span class="hidden truncate lg:inline">{c().title}</span>
-                    </>
-                  )}
-                </Show>
-              )}
+              triggerClass={(open) => `${button} shrink-0 ${card() ? '-ml-2' : ''} ${open ? 'bg-surface text-fg-2' : 'text-fg-3'}`}
+              trigger={() => <FolderInput class="size-3.5" />}
             />
           </>
         )}

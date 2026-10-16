@@ -71,7 +71,7 @@
   --color-accent: #d97757;
   --color-danger: #e26d5f;
   --color-ok: #7cb08a;
-  --pane-ring: rgb(255 255 255 / 0.05);
+  --pane-ring: rgb(255 255 255 / 0.1);
 }
 /* True dark: near-black, as the dark theme first was. */
 [data-palette="black"] {
@@ -86,7 +86,7 @@
   --color-accent: #d97757;
   --color-danger: #e26d5f;
   --color-ok: #7cb08a;
-  --pane-ring: rgb(255 255 255 / 0.05);
+  --pane-ring: rgb(255 255 255 / 0.1);
 }
 
 /*

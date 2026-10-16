@@ -472,6 +472,30 @@ export function App() {
     </Switch>
   )
 
+  /** The top bar on narrow screens. A chat puts it at the top of its own header, so they read as one. */
+  const mobileBar = () => (
+    <div class="flex h-12 shrink-0 items-center gap-1 px-1.5 md:hidden">
+      <button
+        onClick={() => setDrawer(true)}
+        title="Chats and projects"
+        class="relative grid size-10 place-items-center rounded-lg text-fg-2 transition-colors hover:bg-surface hover:text-fg"
+      >
+        <PanelLeft class="size-5" />
+        <Show when={needsYou()}>
+          <span class="absolute top-2 right-2 size-2 rounded-full bg-accent ring-2 ring-bg" />
+        </Show>
+      </button>
+      <span class="min-w-0 flex-1 truncate text-[13px] font-medium">{pageTitle()}</span>
+      <button
+        onClick={newHomeChat}
+        title={focus() ? `New chat on ${focus()!.title}` : 'New chat'}
+        class="grid size-10 place-items-center rounded-lg text-fg-2 transition-colors hover:bg-surface hover:text-fg"
+      >
+        <Plus class="size-5" />
+      </button>
+    </div>
+  )
+
   return (
     <div class="relative flex h-full gap-(--pane-gutter) bg-canvas p-(--pane-margin)" style={{ '--sidebar-w': `${sidebarWidth()}px` }}>
       <Show when={drawer()}>
@@ -648,26 +672,9 @@ export function App() {
       />
 
       <div class="flex min-w-0 flex-1 flex-col gap-(--pane-gutter)">
-        <header class="pane flex h-12 shrink-0 items-center gap-1 px-1.5 md:hidden">
-          <button
-            onClick={() => setDrawer(true)}
-            title="Chats and projects"
-            class="relative grid size-10 place-items-center rounded-lg text-fg-2 transition-colors hover:bg-surface hover:text-fg"
-          >
-            <PanelLeft class="size-5" />
-            <Show when={needsYou()}>
-              <span class="absolute top-2 right-2 size-2 rounded-full bg-accent ring-2 ring-bg" />
-            </Show>
-          </button>
-          <span class="min-w-0 flex-1 truncate text-[13px] font-medium">{pageTitle()}</span>
-          <button
-            onClick={newHomeChat}
-            title={focus() ? `New chat on ${focus()!.title}` : 'New chat'}
-            class="grid size-10 place-items-center rounded-lg text-fg-2 transition-colors hover:bg-surface hover:text-fg"
-          >
-            <Plus class="size-5" />
-          </button>
-        </header>
+        <Show when={!current()}>
+          <header class="pane shrink-0 md:hidden">{mobileBar()}</header>
+        </Show>
         <div class="flex min-h-0 flex-1">
           {/* A chat lays out its own panes, with its panels; every other page is one pane. */}
           <Show when={current()} keyed fallback={<div class="pane flex min-w-0 flex-1">{page()}</div>}>
@@ -695,6 +702,8 @@ export function App() {
                   }}
                   onStart={() => home() && startHomeChat(id, drafts()[id] ?? defaultCwd(), draftMachine(id))}
                   onOpenTerminal={(tid) => go({ kind: 'terminal', id: tid })}
+                  onOpenCard={(cid) => go({ kind: 'card', id: cid })}
+                  bar={mobileBar()}
                 />
               )
             }}

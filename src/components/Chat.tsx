@@ -55,6 +55,9 @@ export function Chat(props: {
   onRenamed: (title: string) => void
   onToggleArchived: () => void
   onOpenTerminal: (id: string) => void
+  onOpenCard: (id: number) => void
+  /** The top bar on narrow screens, to go above the chat's header. */
+  bar: JSX.Element
 }) {
   const { state, clearError } = createChat(props.sessionId)
   const [text, setText] = createSignal('')
@@ -387,12 +390,15 @@ export function Chat(props: {
       onOpenPage={props.onOpenTerminal}
     >
       <div class="flex h-full min-w-0 flex-1 flex-col">
+        {/* One header on narrow screens: the page's bar above the chat's own row, divided only below. */}
+        <div class={`md:contents ${!picking() && cwd() ? '' : 'border-b border-line'}`}>{props.bar}</div>
         <Show when={!picking() && cwd()}>
           <ChatHeader
             session={props.session}
             cards={props.cards}
             onRenamed={props.onRenamed}
             onToggleArchived={props.onToggleArchived}
+            onOpenCard={props.onOpenCard}
             cwd={cwd()}
             machine={machine()}
             ws={ws()}
