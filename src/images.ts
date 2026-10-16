@@ -7,7 +7,10 @@ const SCALED_EDGE = 2000
 
 const isSendable = (type: string): type is ImageAttachment['mediaType'] => (IMAGE_TYPES as readonly string[]).includes(type)
 
-export const imageUrl = (image: ImageAttachment) => `data:${image.mediaType};base64,${image.data}`
+/** An image to show: one being sent, or one from a chat's history, which the server serves at a URL. */
+export type ShownImage = ImageAttachment | { url: string }
+
+export const imageUrl = (image: ShownImage) => ('url' in image ? image.url : `data:${image.mediaType};base64,${image.data}`)
 
 /** A pasted or dropped file as an image Claude can take, or undefined if it isn't an image. */
 export async function readImage(file: File): Promise<ImageAttachment | undefined> {

@@ -2,9 +2,8 @@ import { For, Show, createSignal } from 'solid-js'
 import { Columns3, FileText, GitFork, X } from '../icons'
 import type { CardContext } from '../../shared/cardContext.ts'
 import type { Move, Place } from '../../shared/forkNote.ts'
-import type { ImageAttachment } from '../../shared/protocol.ts'
 import { basename } from '../folders.ts'
-import { imageUrl } from '../images.ts'
+import { imageUrl, type ShownImage } from '../images.ts'
 import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
 import { viewImages } from './ImageViewer.tsx'
@@ -17,7 +16,7 @@ import { plural } from './ui.tsx'
  */
 export function Attachments(props: {
   pastes: string[]
-  images: ImageAttachment[]
+  images: ShownImage[]
   card?: CardContext
   /** Where a fork moved to, as Claude was told. */
   move?: Move
@@ -82,7 +81,7 @@ export function Attachments(props: {
           {(image, i) => (
             <div class="group relative">
               <button type="button" class="cursor-zoom-in" onClick={() => viewImages(props.images.map(imageUrl), i())} title="View image">
-                <img src={imageUrl(image)} alt="" class="block h-14 max-w-40 rounded-lg border border-edge object-cover" />
+                <img src={imageUrl(image)} alt="" loading="lazy" class="block h-14 max-w-40 rounded-lg border border-edge object-cover" />
               </button>
               <Show when={props.onRemoveImage}>
                 <button

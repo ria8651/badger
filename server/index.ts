@@ -31,6 +31,7 @@ import {
 } from './runnerProtocol.ts'
 import { shellEnv } from './terminals.ts'
 import { suggestTitle } from './titles.ts'
+import { IMAGE_PATH, entryImage, externalizeImages } from './transcriptImages.ts'
 import { Transcripts, transcriptModel } from './transcripts.ts'
 import { AccountLimits } from './usage.ts'
 import { prepareScratch } from './workspace.ts'
@@ -439,7 +440,7 @@ async function sendSnapshot(ws: WebSocket, sessionId: string): Promise<void> {
     if (!live) {
       return send(ws, {
         ...base,
-        messages: history,
+        messages: externalizeImages(sessionId, history),
         running: false,
         mode: 'auto',
         model: transcriptModel(history),
@@ -456,7 +457,8 @@ async function sendSnapshot(ws: WebSocket, sessionId: string): Promise<void> {
     const seen = new Set(live.messages.map((m) => m.uuid))
     const messages = [...history.filter((m) => !seen.has(m.uuid) && !seen.has(m.after_uuid as string)), ...live.messages]
     // The runner's answer goes first, so it can't say which chat this is.
-    send(ws, { ...live, ...base, messages })
+    // The process's newest messages may not have been copied here yet, and their images can't be served until they are.
+    send(ws, { ...live, ...base, messages: externalizeImages(sessionId, messages, (uuid) => transcripts.hasImageEntry(sessionId, uuid)) })
   }
   if (!runner) return done(null, false)
   const gone = info?.cwd ? (await runner.peer.within(QUICK_TIMEOUT_MS).inaccessible([info.cwd]).catch(() => [])).length > 0 : false
@@ -1020,6 +1022,16 @@ const server = createServer(async (req, res) => {
         const dir = requirePath(body.path)
         await (url.pathname === '/api/git/push' ? runner.peer.remote.gitPush(dir) : runner.peer.remote.gitPull(dir))
         return json(204, null)
+      }
+      const image = url.pathname.match(IMAGE_PATH)
+      if (image && method === 'GET') {
+        const entry = transcripts.imageEntry(image[1], image[2])
+        const found = entry && entryImage(entry, Number(image[3]))
+        if (!found) return json(404, { error: 'No such image' })
+        // A message never changes once written, so neither does its image. Only image types are served as themselves.
+        const type = (IMAGE_TYPES as readonly string[]).includes(found.mediaType) ? found.mediaType : 'application/octet-stream'
+        res.writeHead(200, { 'content-type': type, 'x-content-type-options': 'nosniff', 'cache-control': 'private, max-age=31536000, immutable' })
+        return void res.end(found.data)
       }
       // A file from the file browser, e.g. an image to attach.
       if (url.pathname === '/api/fs/file' && method === 'GET') {

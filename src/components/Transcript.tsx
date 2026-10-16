@@ -6,6 +6,7 @@ import { splitMoveNote, type Move } from '../../shared/forkNote.ts'
 import { unwrapPaste } from '../../shared/pastes.ts'
 import type { CardStatus, ImageAttachment, WireMessage } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
+import type { ShownImage } from '../images.ts'
 import { collectTasks, type Task } from '../tasks.ts'
 import { ChildChats, useChecking, type Partial } from '../useChat.ts'
 import { STATUS_LABELS } from './Board.tsx'
@@ -15,10 +16,10 @@ import { Attachments } from './Attachments.tsx'
 import { LiveDot, compact, plural } from './ui.tsx'
 
 type Block = { type: string; text?: string; thinking?: string; id?: string; name?: string; input?: Record<string, unknown> }
-type ContentBlock = Block & { tool_use_id?: string; content?: unknown; is_error?: boolean; source?: { type: string; media_type: string; data: string } }
+type ContentBlock = Block & { tool_use_id?: string; content?: unknown; is_error?: boolean; source?: { type: string; media_type: string; data?: string; url?: string } }
 
 type Item =
-  | { kind: 'user'; text: string; pastes?: string[]; images?: ImageAttachment[] }
+  | { kind: 'user'; text: string; pastes?: string[]; images?: ShownImage[] }
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; id: string; name: string; input: Record<string, unknown> }
@@ -242,13 +243,15 @@ function sentToSubagent(m: WireMessage): string | undefined {
 }
 
 /** What the user typed, and the big pastes and images sent with it as attachments. */
-function userText(m: WireMessage): { text: string; pastes: string[]; images: ImageAttachment[] } {
+function userText(m: WireMessage): { text: string; pastes: string[]; images: ShownImage[] } {
   const content = (m.message as { content?: unknown })?.content
   const all = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? (content as ContentBlock[]) : []
   const blocks = all.filter((b) => b.type === 'text').map((b) => b.text ?? '')
-  const images = all.flatMap((b) =>
-    b.type === 'image' && b.source?.type === 'base64' ? [{ mediaType: b.source.media_type, data: b.source.data } as ImageAttachment] : [],
-  )
+  const images = all.flatMap((b): ShownImage[] => {
+    if (b.type !== 'image') return []
+    if (b.source?.type === 'url' && b.source.url) return [{ url: b.source.url }]
+    return b.source?.type === 'base64' ? [{ mediaType: b.source.media_type, data: b.source.data } as ImageAttachment] : []
+  })
   const pastes: string[] = []
   const typed: string[] = []
   for (const b of blocks) {
@@ -797,7 +800,7 @@ function CardContextBadge(props: { context: CardContext }) {
 export function UserMessage(props: {
   text: string
   pastes?: string[]
-  images?: ImageAttachment[]
+  images?: ShownImage[]
   card?: CardContext
   /** Where a fork moved to, as Claude was told with this message. */
   move?: Move
