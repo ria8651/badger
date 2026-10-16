@@ -17,6 +17,7 @@
  *   danger   errors, destructive modes, removed lines
  *   ok       added lines in diffs
  *   black    the dimmed backdrop behind modals and the drawer, in both themes
+ *   white    controls on the image viewer, which is black in every theme
  */
 @theme {
   --color-*: initial;
@@ -33,6 +34,7 @@
   --color-danger: #c13a2e;
   --color-ok: #3d7a4a;
   --color-black: #000;
+  --color-white: #fff;
 
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -176,6 +178,8 @@
 .md :where(th, td) { padding: 0.4em 0.9em 0.4em 0; border-bottom: 1px solid var(--color-line); text-align: left; }
 .md th { font-weight: 500; color: var(--color-fg-2); }
 .md img { max-width: 100%; border-radius: 8px; }
+/* Rendered ones open in the image viewer on a click; edited ones on a double click. */
+.md:not(.ProseMirror) img:not(a img) { cursor: zoom-in; }
 
 /* Task lists, the same in rendered and edited Markdown: the checkbox hangs where the bullet would be. */
 .md li:has(> input[type="checkbox"]), .md li[data-checked] { position: relative; list-style: none; }

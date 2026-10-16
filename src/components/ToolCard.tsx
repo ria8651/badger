@@ -2,6 +2,7 @@ import { For, Match, Show, Switch, createEffect, createSignal, on, type JSX } fr
 import { Check, ChevronRight, Loader2, Shield } from '../icons'
 import type { Task } from '../tasks.ts'
 import { useChecking } from '../useChat.ts'
+import { viewImages } from './ImageViewer.tsx'
 import { Markdown } from './Markdown.tsx'
 
 export interface ToolResult {
@@ -96,11 +97,17 @@ export function resultImages(content: unknown): string[] {
   return content.flatMap((b) => (b?.type === 'image' && b.source?.type === 'base64' ? [`data:${b.source.media_type};base64,${b.source.data}`] : []))
 }
 
-/** What Claude saw: the images it was shown, small. */
+/** What Claude saw: the images it was shown, small, each opening full size. */
 function ResultImages(props: { urls: string[]; class: string }) {
   return (
     <div class="flex flex-wrap gap-2">
-      <For each={props.urls}>{(url) => <img src={url} alt="" class={`w-auto rounded-lg border border-line ${props.class}`} />}</For>
+      <For each={props.urls}>
+        {(url, i) => (
+          <button type="button" title="View image" class="max-w-full cursor-zoom-in" onClick={() => viewImages(props.urls, i())}>
+            <img src={url} alt="" class={`block w-auto rounded-lg border border-line ${props.class}`} />
+          </button>
+        )}
+      </For>
     </div>
   )
 }

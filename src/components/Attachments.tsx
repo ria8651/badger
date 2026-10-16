@@ -1,5 +1,4 @@
-import { For, Show, createSignal, onCleanup } from 'solid-js'
-import { Portal } from 'solid-js/web'
+import { For, Show, createSignal } from 'solid-js'
 import { Columns3, FileText, GitFork, X } from '../icons'
 import type { CardContext } from '../../shared/cardContext.ts'
 import type { Move, Place } from '../../shared/forkNote.ts'
@@ -8,12 +7,13 @@ import { basename } from '../folders.ts'
 import { imageUrl } from '../images.ts'
 import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
-import { modalOpen, plural } from './ui.tsx'
+import { viewImages } from './ImageViewer.tsx'
+import { plural } from './ui.tsx'
 
 /**
  * Images as thumbnails, and big pastes and the card Claude was told about as
  * chips. Clicking a paste or the card shows its text underneath; clicking an
- * image shows it full size.
+ * image opens the viewer.
  */
 export function Attachments(props: {
   pastes: string[]
@@ -26,7 +26,6 @@ export function Attachments(props: {
   class?: string
 }) {
   const [open, setOpen] = createSignal<number | 'card' | 'move'>()
-  const [viewing, setViewing] = createSignal<ImageAttachment>()
   const openText = () => {
     const i = open()
     return typeof i === 'number' ? props.pastes[i] : undefined
@@ -82,7 +81,7 @@ export function Attachments(props: {
         <For each={props.images}>
           {(image, i) => (
             <div class="group relative">
-              <button type="button" onClick={() => setViewing(image)} title="View image">
+              <button type="button" class="cursor-zoom-in" onClick={() => viewImages(props.images.map(imageUrl), i())} title="View image">
                 <img src={imageUrl(image)} alt="" class="block h-14 max-w-40 rounded-lg border border-edge object-cover" />
               </button>
               <Show when={props.onRemoveImage}>
@@ -152,7 +151,6 @@ export function Attachments(props: {
           </div>
         )}
       </Show>
-      <Show when={viewing()}>{(image) => <Lightbox image={image()} onClose={() => setViewing(undefined)} />}</Show>
     </div>
   )
 }
@@ -160,21 +158,3 @@ export function Attachments(props: {
 const chip = 'flex h-7 items-center rounded-lg border text-xs transition-colors'
 
 const place = (p: Place) => `${p.worktree ? 'a new worktree of ' : ''}${p.cwd} on ${p.machine}`
-
-function Lightbox(props: { image: ImageAttachment; onClose: () => void }) {
-  // Caught first and stopped, so Escape closes this rather than also stopping Claude from the composer.
-  const onKey = (e: KeyboardEvent) => {
-    if (e.key !== 'Escape' || modalOpen()) return
-    e.stopPropagation()
-    props.onClose()
-  }
-  addEventListener('keydown', onKey, true)
-  onCleanup(() => removeEventListener('keydown', onKey, true))
-  return (
-    <Portal>
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-8" onClick={props.onClose}>
-        <img src={imageUrl(props.image)} alt="" class="max-h-full max-w-full rounded-lg shadow-2xl" />
-      </div>
-    </Portal>
-  )
-}
