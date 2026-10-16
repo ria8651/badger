@@ -392,8 +392,8 @@ export function Chat(props: {
     >
       <div class="flex h-full min-w-0 flex-1 flex-col">
         {/* One header on narrow screens: the page's bar above the chat's own row, divided only below. */}
-        <div class={`md:contents ${!picking() && cwd() ? '' : 'border-b border-line'}`}>{props.bar}</div>
-        <Show when={!picking() && cwd()}>
+        <div class={`md:contents ${cwd() ? '' : 'border-b border-line'}`}>{props.bar}</div>
+        <Show when={cwd()}>
           <ChatHeader
             session={props.session}
             cards={props.cards}
@@ -407,7 +407,7 @@ export function Chat(props: {
             fetching={git.fetching()}
             onRefresh={git.refresh}
             actions={actions()}
-            onAsk={(prompt) => send(prompt)}
+            onAsk={picking() ? undefined : (prompt) => send(prompt)}
           />
         </Show>
         <div
