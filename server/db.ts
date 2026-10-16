@@ -340,9 +340,8 @@ export class Store {
         .prepare('UPDATE cards SET title = ?, description = ?, status = ?, position = ?, parent_id = ?, updated_at = ? WHERE id = ?')
         .run(next.title, next.description, next.status, next.position, next.parentId, Date.now(), id)
       this.audit(actor, 'card', id, 'update', before, after)
-      // Finishing a card puts its chats away; reopening it brings them back.
+      // Finishing a card puts its chats away. Reopening it leaves them archived; messaging one brings it back.
       if (next.status === 'done' && current.status !== 'done') for (const s of current.sessionIds) this.setArchived(s, true, actor)
-      if (next.status !== 'done' && current.status === 'done') for (const s of current.sessionIds) this.setArchived(s, false, actor)
     })
     return this.card(id)
   }
