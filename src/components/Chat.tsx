@@ -23,6 +23,7 @@ import { reveal, revealed, toolLabel } from './ToolCard.tsx'
 import { TaskPane, Transcript, UserMessage, createIndex, detail, runInBackground, setDetail } from './Transcript.tsx'
 import { ContextMeter } from './Usage.tsx'
 import { Workspace, type ChatPanes } from './Workspace.tsx'
+import { showError } from './Popover.tsx'
 import { IconButton, Loading, Select, modalOpen, touch, type Option } from './ui.tsx'
 
 const MODES: Option<PermissionMode>[] = [
@@ -89,7 +90,7 @@ export function Chat(props: {
       void fetch(api.fileUrl(path, machine()))
         .then((res) => (res.ok ? res.blob() : Promise.reject(new Error(res.statusText))))
         .then((blob) => addImages([new File([blob], path.split('/').pop()!, { type: blob.type })]))
-        .catch((e: Error) => alert(`Couldn't attach ${path}: ${e.message}`))
+        .catch((e: Error) => showError(`Couldn't attach ${path.split('/').pop()}`, e.message, input))
     }
     const dir = cwd() && !isScratch(cwd()) ? `${cwd()}/` : undefined
     const mentions = paths

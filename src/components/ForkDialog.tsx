@@ -3,6 +3,7 @@ import { Portal } from 'solid-js/web'
 import { X } from '../icons'
 import { api } from '../api.ts'
 import { FolderPicker } from './FolderPicker.tsx'
+import { popoverOpen } from './Popover.tsx'
 import { Button, setModalOpen } from './ui.tsx'
 
 /**
@@ -47,7 +48,7 @@ export function ForkDialog(props: {
 
   const before = document.activeElement as HTMLElement | null
   const onKey = (e: KeyboardEvent) => {
-    if (e.key !== 'Escape' || e.defaultPrevented) return
+    if (e.key !== 'Escape' || e.defaultPrevented || popoverOpen()) return
     // Caught first, so it closes this rather than also stopping Claude from the composer.
     e.stopPropagation()
     props.onClose()

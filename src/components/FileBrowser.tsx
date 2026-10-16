@@ -4,6 +4,7 @@ import { Check, CornerLeftUp, Eye, EyeOff, File, Folder, FolderGit2, FolderPlus,
 import type { FileEntry, Listing } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { LOCAL } from '../machines.ts'
+import { popoverOpen } from './Popover.tsx'
 import { Button, inputClass, ltr, modalOpen, plural } from './ui.tsx'
 
 /** Bytes as a short size, e.g. 1.2 GB. */
@@ -112,7 +113,7 @@ export function FileBrowser(props: {
   }
 
   const onKey = (e: KeyboardEvent) => {
-    if (e.key !== 'Escape' || modalOpen()) return
+    if (e.key !== 'Escape' || modalOpen() || popoverOpen()) return
     e.stopPropagation()
     if (naming()) setNaming(false)
     else props.onClose()

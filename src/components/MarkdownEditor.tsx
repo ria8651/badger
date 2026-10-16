@@ -9,6 +9,7 @@ import { Paragraph as BaseParagraph } from '@tiptap/extension-paragraph'
 import { Placeholder } from '@tiptap/extensions'
 import { Markdown } from '@tiptap/markdown'
 import { viewImageIn } from './ImageViewer.tsx'
+import { askBy } from './Popover.tsx'
 
 const SAVE_DELAY = 800
 
@@ -125,7 +126,7 @@ export function MarkdownEditor(props: {
         attributes: { class: `md outline-none ${props.class ?? ''}` },
         handleKeyDown: (_, e) => {
           if (e.key === 'Escape') return (editor?.commands.blur(), true)
-          if (e.key === 'k' && (e.metaKey || e.ctrlKey)) return (editLink(), true)
+          if (e.key === 'k' && (e.metaKey || e.ctrlKey)) return (void editLink(), true)
           return false
         },
         // Links and images open with a modifier, since a plain click is for putting the cursor in or selecting them.
@@ -156,11 +157,19 @@ export function MarkdownEditor(props: {
     })
   })
 
-  const editLink = () => {
+  /** Asks for the URL by the selection. Emptying it takes the link off. */
+  const editLink = async () => {
     if (!editor) return
     const current = editor.getAttributes('link').href as string | undefined
-    const href = prompt('Link to', current ?? '')
-    if (href === null) return
+    const at = editor.view.coordsAtPos(editor.state.selection.from)
+    const href = await askBy(new DOMRect(at.left, at.top, at.right - at.left, at.bottom - at.top), {
+      label: 'Link to',
+      value: current,
+      placeholder: current ? 'Leave empty to remove the link' : 'https://…',
+      action: current ? 'Save' : 'Add link',
+    })
+    if (!editor) return
+    if (href === undefined) return void editor.commands.focus()
     const chain = editor.chain().focus().extendMarkRange('link')
     if (href.trim()) chain.setLink({ href: href.trim() }).run()
     else chain.unsetLink().run()

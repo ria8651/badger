@@ -1,5 +1,6 @@
 import { createSignal } from 'solid-js'
 import { api } from './api.ts'
+import { showError } from './components/Popover.tsx'
 import { LOCAL } from './machines.ts'
 import { wsKey, type Ws } from './terminals.ts'
 
@@ -382,7 +383,7 @@ export async function openTerminal(ws: Ws, cwd: string, where?: { group: string 
   try {
     id = (await api.createTerminal({ cwd, machine: ws.machine })).id
   } catch (err) {
-    alert(`Couldn't open a terminal: ${err instanceof Error ? err.message : err}`)
+    showError("Couldn't open a terminal", err instanceof Error ? err.message : String(err))
     return
   }
   pending.add(id)

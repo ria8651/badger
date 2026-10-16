@@ -6,6 +6,7 @@ import { basename, scratchDir } from '../folders.ts'
 import { machineOf, machines, severalMachines } from '../machines.ts'
 import { FileBrowser, formatBytes } from './FileBrowser.tsx'
 import { GitSummary } from './GitSummary.tsx'
+import { confirmBy, showError } from './Popover.tsx'
 import { ltr, plural } from './ui.tsx'
 
 /** How many folders show before "Show more": the most recently used. */
@@ -73,21 +74,23 @@ export function FolderPicker(props: {
     return h && !top.includes(h) ? [...top, h] : top
   }
 
-  const hide = (folder: Folder) => {
-    api.hideFolder(folder.path, props.machine).then(refetch, (e: Error) => alert(`Couldn't remove it: ${e.message}`))
+  const hide = (folder: Folder, button: Element) => {
+    api.hideFolder(folder.path, props.machine).then(refetch, (e: Error) => showError("Couldn't take it off the list", e.message, button))
   }
-  const removeWorktree = (folder: Folder, c: Checkout) => {
+  const removeWorktree = async (folder: Folder, c: Checkout, button: Element) => {
     const unmerged = c.git.base?.ahead ?? 0
-    const kept = unmerged ? `\n\nIts branch ${c.git.branch} has ${plural(unmerged, 'unmerged commit')}, so it will be kept.` : ''
-    const unpushed = c.unpushed ? `\n\n${plural(c.unpushed, 'commit')} on it aren't on any remote.` : ''
-    if (!confirm(`Delete worktree ${basename(c.path)}?${kept}${unpushed}`)) return
+    const notes = [
+      unmerged && `Its branch ${c.git.branch} has ${plural(unmerged, 'unmerged commit')}, so it will be kept.`,
+      c.unpushed && `${plural(c.unpushed, 'commit')} on it aren't on any remote.`,
+    ].filter((note) => typeof note === 'string')
+    if (!(await confirmBy(button, { message: `Delete worktree ${basename(c.path)}?`, notes, action: 'Delete' }))) return
     const machine = props.machine
     api
       .removeWorktree(c.path, machine)
       .then(() => {
         if (props.selected === c.path && props.machine === machine) pick(folder.path, false)
       })
-      .catch((e: Error) => alert(`Couldn't delete it: ${e.message}`))
+      .catch((e: Error) => showError("Couldn't delete it", e.message, button))
       .finally(refetch)
   }
 
@@ -139,7 +142,7 @@ export function FolderPicker(props: {
               fallback={
                 <Row selected={isSelected(folder, folder.path, true)} onClick={() => pick(folder.path, false)}>
                   <FolderIcon class="size-4 shrink-0 text-fg-3" />
-                  <FolderName folder={folder} onHide={() => hide(folder)} />
+                  <FolderName folder={folder} onHide={(button) => hide(folder, button)} />
                   <Size path={folder.path} machine={props.machine} />
                 </Row>
               }
@@ -155,7 +158,7 @@ export function FolderPicker(props: {
                             <FolderGit2 class="size-4 shrink-0 text-fg-3" />
                             {/* The status drops under the name when the row's too narrow for both. */}
                             <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3">
-                              <FolderName folder={folder} onHide={() => hide(folder)} />
+                              <FolderName folder={folder} onHide={(button) => hide(folder, button)} />
                               <GitSummary git={c.git} branch class="shrink-0 text-[11px]" />
                             </div>
                             <Size path={c.path} machine={props.machine} />
@@ -174,15 +177,21 @@ export function FolderPicker(props: {
                             <GitSummary git={c.git} class="shrink-0 text-[11px]" />
                           </div>
                           <Size path={c.path} machine={props.machine} />
+                          {/* Faded rather than disabled while it has changes, so a click says why instead of picking the row. */}
                           <button
                             type="button"
-                            disabled={c.git.changes > 0}
+                            aria-disabled={c.git.changes > 0}
                             onClick={(e) => {
                               e.stopPropagation()
-                              removeWorktree(folder, c)
+                              if (!c.git.changes) return void removeWorktree(folder, c, e.currentTarget)
+                              showError(
+                                "Can't delete it yet",
+                                `It has ${plural(c.git.changes, 'uncommitted change')}. Commit or discard them first, so nothing is lost.`,
+                                e.currentTarget,
+                              )
                             }}
                             title={c.git.changes ? 'Commit or discard its changes before deleting it' : 'Delete worktree (its branch goes too, if merged)'}
-                            class="grid size-6 shrink-0 place-items-center rounded-md text-fg-3 opacity-0 transition group-hover/row:opacity-100 hover:bg-bg hover:text-danger focus-visible:opacity-100 disabled:hover:bg-transparent disabled:hover:text-fg-3 pointer-coarse:size-8 pointer-coarse:opacity-100"
+                            class="grid size-6 shrink-0 place-items-center rounded-md text-fg-3 opacity-0 transition group-hover/row:opacity-100 hover:bg-bg hover:text-danger focus-visible:opacity-100 aria-disabled:text-fg-3/40 aria-disabled:hover:bg-transparent aria-disabled:hover:text-fg-3/40 pointer-coarse:size-8 pointer-coarse:opacity-100"
                           >
                             <Trash2 class="size-3.5" />
                           </button>
@@ -272,7 +281,7 @@ function Row(props: { selected: boolean; indent?: boolean; onClick: () => void; 
 }
 
 /** A folder's name and path, and a way to take it off the list. */
-function FolderName(props: { folder: Folder; onHide: () => void }) {
+function FolderName(props: { folder: Folder; onHide: (button: Element) => void }) {
   return (
     <div class="min-w-32 flex-1">
       <div class="flex items-center gap-1">
@@ -282,7 +291,7 @@ function FolderName(props: { folder: Folder; onHide: () => void }) {
           title="Take off this list (nothing on disk changes)"
           onClick={(e) => {
             e.stopPropagation()
-            props.onHide()
+            props.onHide(e.currentTarget)
           }}
           class="grid size-5 shrink-0 place-items-center rounded text-fg-3 opacity-0 transition group-hover/card:opacity-100 hover:bg-bg hover:text-fg focus-visible:opacity-100 pointer-coarse:hidden"
         >
