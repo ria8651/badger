@@ -1,11 +1,11 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup, on, onMount, untrack } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
-import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, FolderInput, PanelLeft, Pencil, Plus, Radar as RadarIcon, Settings as SettingsIcon, Trash2 } from './icons'
+import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, FolderInput, PanelLeft, Pencil, Plus, Radar as RadarIcon, Search, Settings as SettingsIcon, Trash2, X } from './icons'
 import { descendants, projectOf } from '../shared/cardTree.ts'
 import type { Card, SessionSummary } from '../shared/protocol.ts'
 import { api, socket } from './api.ts'
 import { attention, looking, notifications, notify, onAttention, toggleNotifications } from './attention.ts'
-import { basename, isScratch, lastWorkedIn, scratchDir, setScratch } from './folders.ts'
+import { basename, folderLabel, isScratch, lastWorkedIn, scratchDir, setScratch } from './folders.ts'
 import { LOCAL, machineOf, machines, onMachine } from './machines.ts'
 import { Board } from './components/Board.tsx'
 import { CardView } from './components/CardView.tsx'
@@ -18,7 +18,7 @@ import { StatusDot, TerminalPage } from './components/Terminals.tsx'
 import { ChatSummary, MachineName } from './components/ChatSummary.tsx'
 import { Settings } from './components/Settings.tsx'
 import { ImageViewer } from './components/ImageViewer.tsx'
-import { Loading, Menu, modalOpen } from './components/ui.tsx'
+import { Loading, Menu, inputClass, modalOpen } from './components/ui.tsx'
 import { terminalLabel, terminalTooltip, terminalWs, terminals, terminalsLoaded, wsKey } from './terminals.ts'
 import { accountUsage } from './usage.ts'
 
@@ -262,6 +262,22 @@ export function App() {
   const active = createMemo(() => sessions().filter((s) => !s.archived && inFocus(s)))
   const archived = createMemo(() => sessions().filter((s) => s.archived && inFocus(s)))
   const [showArchived, setShowArchived] = createSignal(false)
+  /**
+   * What the sidebar's search box has in it. Searching looks through every chat, archived ones and other projects'
+   * too, since a chat you can't find is usually one that isn't in front of you: every word has to be in its title,
+   * folder, card or project. Archived ones come after the rest.
+   */
+  const [query, setQuery] = createSignal('')
+  const found = createMemo(() => {
+    const words = query().toLowerCase().split(/\s+/).filter(Boolean)
+    if (!words.length) return
+    const matches = sessions().filter((s) => {
+      const card = cardOf().get(s.id)
+      const text = [s.title, s.cwd && folderLabel(s.cwd), card && `#${card.id} ${card.title}`, projectOfChat(s.id)?.title].join(' ').toLowerCase()
+      return words.every((w) => text.includes(w))
+    })
+    return [...matches.filter((s) => !s.archived), ...matches.filter((s) => s.archived)]
+  })
   const toggleArchived = (s: SessionSummary) => {
     // Move it straight away; the server's sessions_changed confirms it.
     setSessions((all) => all.map((x) => (x.id === s.id ? { ...x, archived: !s.archived } : x)))
@@ -293,7 +309,9 @@ export function App() {
                   ? 'text-fg-3 group-hover:text-fg'
                   : 'text-fg-2 group-hover:text-fg'
             }
-            timeClass={`group-hover:invisible ${filing() === s().id ? 'invisible' : ''} ${s().id === current() ? 'pointer-coarse:invisible' : ''}`}
+            // The buttons sit over the end of this line, so while they show it stops short of them rather than running under.
+            timeClass={`group-hover:hidden ${filing() === s().id ? 'hidden' : ''} ${s().id === current() ? 'pointer-coarse:hidden' : ''}`}
+            metaClass={`group-hover:pr-17 ${filing() === s().id ? 'pr-17 pointer-coarse:pr-20' : s().id === current() ? 'pointer-coarse:pr-20' : ''}`}
           />
         </button>
         {/* Touch has no hover, so there the open chat's row shows them instead. */}
@@ -619,22 +637,63 @@ export function App() {
             </For>
           </div>
         </Show>
-        <nav class="flex-1 overflow-y-auto px-2 py-2">
-          <For each={active()}>{(s) => <SessionRow session={s} />}</For>
-          <Show when={unfiled() && loaded() && cardsLoaded() && !active().length}>
-            <p class="px-2 py-1.5 text-[13px] text-fg-3">Every chat is in a project.</p>
-          </Show>
-          <Show when={archived().length}>
+        <div class="relative mx-2">
+          <Search class="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-fg-3" />
+          <input
+            type="search"
+            value={query()}
+            onInput={(e) => setQuery(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key !== 'Escape') return
+              setQuery('')
+              e.currentTarget.blur()
+            }}
+            placeholder="Search chats"
+            aria-label="Search chats"
+            class={`${inputClass} border-line pr-7 pl-8 hover:border-edge focus:border-edge pointer-coarse:h-10 [&::-webkit-search-cancel-button]:hidden`}
+          />
+          <Show when={query()}>
             <button
-              onClick={() => setShowArchived((v) => !v)}
-              class="mt-2 flex h-7 w-full items-center gap-1 rounded-lg px-2 text-[11px] text-fg-3 transition-colors hover:text-fg-2"
+              onClick={() => setQuery('')}
+              title="Clear"
+              class="absolute top-1/2 right-1.5 grid size-5 -translate-y-1/2 place-items-center rounded text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-7"
             >
-              <ChevronRight class={`size-3 transition-transform ${showArchived() ? 'rotate-90' : ''}`} />
-              Archived ({archived().length})
+              <X class="size-3.5" />
             </button>
-            <For each={showArchived() ? archived() : archived().filter((s) => s.id === current())}>
-              {(s) => <SessionRow session={s} />}
-            </For>
+          </Show>
+        </div>
+        <nav class="flex-1 overflow-y-auto px-2 py-2">
+          <Show
+            when={found()}
+            fallback={
+              <>
+                <For each={active()}>{(s) => <SessionRow session={s} />}</For>
+                <Show when={unfiled() && loaded() && cardsLoaded() && !active().length}>
+                  <p class="px-2 py-1.5 text-[13px] text-fg-3">Every chat is in a project.</p>
+                </Show>
+                <Show when={archived().length}>
+                  <button
+                    onClick={() => setShowArchived((v) => !v)}
+                    class="mt-2 flex h-7 w-full items-center gap-1 rounded-lg px-2 text-[11px] text-fg-3 transition-colors hover:text-fg-2"
+                  >
+                    <ChevronRight class={`size-3 transition-transform ${showArchived() ? 'rotate-90' : ''}`} />
+                    Archived ({archived().length})
+                  </button>
+                  <For each={showArchived() ? archived() : archived().filter((s) => s.id === current())}>
+                    {(s) => <SessionRow session={s} />}
+                  </For>
+                </Show>
+              </>
+            }
+          >
+            {(found) => (
+              <>
+                <For each={found()}>{(s) => <SessionRow session={s} />}</For>
+                <Show when={!found().length}>
+                  <p class="px-2 py-1.5 text-[13px] text-fg-3">No chats match.</p>
+                </Show>
+              </>
+            )}
           </Show>
         </nav>
         <Show when={accountUsage()}>{(u) => <AccountLimits usage={u()} />}</Show>

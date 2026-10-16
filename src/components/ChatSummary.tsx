@@ -15,6 +15,8 @@ export function ChatSummary(props: {
   /** The title's colour, which depends on where it's shown. */
   titleClass: string
   timeClass?: string
+  /** The folder, card and time line's, e.g. to leave room for buttons over its end. */
+  metaClass?: string
 }) {
   const s = () => props.session
   return (
@@ -23,7 +25,7 @@ export function ChatSummary(props: {
         <span class={`min-w-0 flex-1 truncate text-[13px] ${props.titleClass}`}>{s().title}</span>
         <ChatDot running={s().running} attention={attention()[s().id]} />
       </div>
-      <div class="mt-0.5 flex gap-1.5 text-[11px] text-fg-3 tabular-nums">
+      <div class={`mt-0.5 flex gap-1.5 text-[11px] text-fg-3 tabular-nums ${props.metaClass ?? ''}`}>
         <span class="truncate">{s().cwd && folderLabel(s().cwd!)}</span>
         <Show when={onMachine(s().machine)}>{(name) => <MachineName machine={s().machine} name={name()} />}</Show>
         <Show when={props.card}>{(c) => <span class="shrink-0">#{c().id}</span>}</Show>
