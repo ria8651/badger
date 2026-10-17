@@ -122,7 +122,7 @@ export function PlanActions(props: { sessionId: string; permission: PendingPermi
           <button
             onClick={props.onOpen}
             title="Read and edit it in a panel beside the chat"
-            class="ml-auto flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-fg-3 transition-colors hover:bg-surface hover:text-fg-2"
+            class="ml-auto flex h-7 items-center gap-1.5 rounded-button-md px-2 text-xs text-fg-3 transition-colors hover:bg-surface hover:text-fg-2"
           >
             <PanelRight class="size-3.5" />
             Open beside the chat

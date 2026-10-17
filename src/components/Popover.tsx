@@ -70,7 +70,7 @@ function float(
         role={opts.role}
         aria-label={opts.label}
         style={{ ...place, width: `${width}px` }}
-        class="fixed z-[60] flex animate-[pop-in_120ms_ease-out] flex-col overflow-y-auto rounded-xl border border-edge bg-bg p-3 shadow-[0_12px_32px_-12px_rgb(0_0_0/0.35)]"
+        class="fixed z-[60] flex animate-[pop-in_120ms_ease-out] flex-col overflow-y-auto rounded-xl border border-edge bg-bg p-3 pop shadow-(--shadow-pop)"
       >
         {panel(close)}
       </div>
@@ -179,7 +179,7 @@ export function showError(title: string, detail: string, anchor?: Anchor) {
           type="button"
           title="Dismiss"
           onClick={close}
-          class="-mt-1 -mr-1 grid size-6 shrink-0 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-8"
+          class="-mt-1 -mr-1 grid size-6 shrink-0 place-items-center rounded-button-md text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-8"
         >
           <X class="size-3.5" />
         </button>

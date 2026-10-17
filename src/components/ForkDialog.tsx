@@ -75,15 +75,15 @@ export function ForkDialog(props: {
           aria-modal="true"
           aria-label="Fork chat"
           tabindex={-1}
-          class="flex h-full w-full flex-col overflow-hidden border-edge bg-bg shadow-[0_24px_64px_-16px_rgb(0_0_0/0.45)] outline-none sm:h-auto sm:max-h-[90vh] sm:max-w-xl sm:rounded-xl sm:border"
+          class="flex h-full w-full flex-col overflow-hidden border-edge bg-bg p-(--inset) shadow-(--shadow-modal) outline-none sm:h-auto sm:max-h-[90vh] sm:max-w-xl sm:rounded-xl sm:border-(length:--dialog-border)"
         >
-          <div class="flex items-center gap-2 border-b border-line px-4 py-3">
+          <div class="bar flex items-center gap-2 border-b border-line px-4 py-3">
             <h2 class="flex-1 text-sm font-medium text-fg">Fork from here</h2>
             <button
               type="button"
               title="Close"
               onClick={props.onClose}
-              class="grid size-8 shrink-0 place-items-center rounded-lg text-fg-3 transition-colors hover:bg-surface hover:text-fg"
+              class="grid size-8 shrink-0 place-items-center rounded-button-lg text-fg-3 transition-colors hover:bg-surface hover:text-fg"
             >
               <X class="size-4" />
             </button>

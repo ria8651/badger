@@ -23,7 +23,7 @@ export function ContextMeter(props: { usage: ContextUsage }) {
         onKeyDown={(e) => e.key === 'Escape' && setOpen(false)}
         title={`Context: ${tokens(props.usage.tokens)} of ${tokens(props.usage.max)} tokens`}
         aria-expanded={open()}
-        class={`flex h-7 items-center gap-1.5 rounded-md px-2 text-xs tabular-nums transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 ${
+        class={`flex h-7 items-center gap-1.5 rounded-button-md px-2 text-xs tabular-nums transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 ${
           full() ? 'text-danger' : open() ? 'bg-surface text-fg-2' : 'text-fg-3'
         } ${open() ? 'bg-surface' : ''}`}
       >
@@ -31,7 +31,7 @@ export function ContextMeter(props: { usage: ContextUsage }) {
         {props.usage.percent}%
       </button>
       <Show when={open()}>
-        <div class="absolute right-0 bottom-full z-10 mb-1.5 w-72 origin-bottom animate-[pop-in_120ms_ease-out] rounded-xl border border-edge bg-bg p-3 shadow-[0_12px_32px_-12px_rgb(0_0_0/0.35)]">
+        <div class="absolute right-0 bottom-full z-10 mb-1.5 w-72 origin-bottom animate-[pop-in_120ms_ease-out] rounded-xl border border-edge bg-bg p-3 pop shadow-(--shadow-pop)">
           <div class="flex items-baseline justify-between text-[13px]">
             <span class="text-fg">Context</span>
             <span class="text-xs text-fg-3 tabular-nums">

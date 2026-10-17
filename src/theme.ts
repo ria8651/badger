@@ -5,7 +5,7 @@ import { createMemo, createSignal } from 'solid-js'
 // index.css holds the tokens for each; this only picks which ones apply. index.html
 // repeats the choosing before anything paints, so the page doesn't flash another theme first.
 
-export type Palette = 'light' | 'dark' | 'black'
+export type Palette = 'light' | 'dark' | 'black' | 'terminal' | 'oms' | 'win95'
 export type Frame = 'classic' | 'modern'
 /** System follows the OS between light and dark. */
 export type Mode = Palette | 'system'
@@ -15,10 +15,14 @@ export interface ThemeChoice {
   frame: Frame
 }
 
-export const PALETTES: { id: Palette; label: string }[] = [
+/** A fun one is a whole look: it comes with its own frame, and the picker shows it in a section of its own. */
+export const PALETTES: { id: Palette; label: string; frame?: Frame }[] = [
   { id: 'light', label: 'Light' },
   { id: 'dark', label: 'Dark' },
   { id: 'black', label: 'True dark' },
+  { id: 'terminal', label: 'Terminal', frame: 'classic' },
+  { id: 'oms', label: 'Open mSupply', frame: 'classic' },
+  { id: 'win95', label: 'Windows 95', frame: 'modern' },
 ]
 export const FRAMES: { id: Frame; label: string; description: string }[] = [
   { id: 'classic', label: 'Classic', description: 'Panes divided by lines' },
@@ -33,13 +37,21 @@ function load(): ThemeChoice {
   // Before themes, the toggle stored just 'light' or 'dark'.
   if (raw === 'light' || raw === 'dark') return { ...fallback, mode: raw }
   try {
-    return { ...fallback, ...JSON.parse(raw ?? '{}') }
+    return ownFrame({ ...fallback, ...JSON.parse(raw ?? '{}') })
   } catch {
     return fallback
   }
 }
 
+/** A fun palette always comes in its own frame, whatever was saved with it. */
+function ownFrame(c: ThemeChoice): ThemeChoice {
+  const frame = PALETTES.find((p) => p.id === c.mode)?.frame
+  return frame ? { ...c, frame } : c
+}
+
 const [choice, setChoice] = createSignal(load())
+// Saved back, so the copy in index.html picks the same frame before first paint next time.
+localStorage.setItem(THEME_KEY, JSON.stringify(choice()))
 export const themeChoice = choice
 
 const osDark = matchMedia('(prefers-color-scheme: dark)')
@@ -54,10 +66,9 @@ export const palette = createMemo<Palette>(() => {
   const c = choice()
   return c.mode === 'system' ? (systemIsDark() ? 'dark' : 'light') : c.mode
 })
-export const isDark = () => palette() !== 'light'
 
 export function setTheme(change: Partial<ThemeChoice>): void {
-  setChoice({ ...choice(), ...change })
+  setChoice(ownFrame({ ...choice(), ...change }))
   localStorage.setItem(THEME_KEY, JSON.stringify(choice()))
   switchTo(apply)
 }
@@ -75,6 +86,5 @@ function apply(): void {
   const root = document.documentElement
   root.dataset.palette = palette()
   root.dataset.frame = choice().frame
-  root.style.colorScheme = isDark() ? 'dark' : 'light'
 }
 apply()

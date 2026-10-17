@@ -62,9 +62,9 @@ export function Settings(props: { onClose: () => void }) {
           aria-modal="true"
           aria-label="Settings"
           tabindex={-1}
-          class="flex h-full w-full flex-col overflow-hidden border-edge bg-bg shadow-[0_24px_64px_-16px_rgb(0_0_0/0.45)] outline-none sm:h-[min(42rem,90vh)] sm:max-w-3xl sm:rounded-xl sm:border"
+          class="flex h-full w-full flex-col overflow-hidden border-edge bg-bg p-(--inset) shadow-(--shadow-modal) outline-none sm:h-[min(42rem,90vh)] sm:max-w-3xl sm:rounded-xl sm:border-(length:--dialog-border)"
         >
-          <div class="flex items-center gap-2 border-b border-line px-4 py-3">
+          <div class="bar flex items-center gap-2 border-b border-line px-4 py-3">
             <h2 class="flex-1 text-sm font-medium text-fg">Settings</h2>
             <button type="button" title="Close" onClick={props.onClose} class={toolButton}>
               <X class="size-4" />
@@ -242,7 +242,7 @@ function Runners() {
           <h3 class="text-sm font-medium text-fg">Runners</h3>
           <p class="mt-1 text-[13px] leading-relaxed text-fg-2">
             Chats run on the runner they started on, next to its files. Other machines connect with{' '}
-            <code class="rounded bg-surface px-1 font-mono text-xs">pnpm remote</code> from a Badger checkout. While a runner is offline, its chats can be read but
+            <code class="rounded-sm bg-surface px-1 font-mono text-xs">pnpm remote</code> from a Badger checkout. While a runner is offline, its chats can be read but
             not run.
           </p>
         </div>
@@ -287,7 +287,7 @@ function Runners() {
                               type="button"
                               title="Rename"
                               onClick={() => setRenaming(id)}
-                              class="group flex min-w-0 items-center gap-1.5 rounded text-left text-[13px] font-medium text-fg"
+                              class="group flex min-w-0 items-center gap-1.5 rounded-sm text-left text-[13px] font-medium text-fg"
                             >
                               <span class="truncate">{m().name}</span>
                               <Pencil class="size-3 shrink-0 text-fg-3 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 pointer-coarse:opacity-100" />
@@ -350,7 +350,7 @@ function Runners() {
                         ]}
                         onPick={(i) => setConfirming({ id, action: i === 0 ? 'token' : 'remove' })}
                         triggerClass={(open) =>
-                          `grid size-7 shrink-0 place-items-center rounded-md transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-9 ${
+                          `grid size-7 shrink-0 place-items-center rounded-button-md transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-9 ${
                             open ? 'bg-surface text-fg' : 'text-fg-3'
                           }`
                         }
@@ -397,7 +397,7 @@ function Runners() {
                             <button
                               type="button"
                               onClick={act}
-                              class="h-8 rounded-lg bg-danger px-3 text-[13px] font-medium text-bg transition-colors hover:bg-danger/85 disabled:pointer-events-none disabled:opacity-40 pointer-coarse:h-10"
+                              class="h-8 rounded-button-lg bg-danger px-3 shadow-(--shadow-control) text-[13px] font-medium text-bg transition-colors hover:bg-danger/85 disabled:pointer-events-none disabled:opacity-40 pointer-coarse:h-10"
                             >
                               Remove runner
                             </button>
@@ -435,7 +435,7 @@ function Runners() {
                                 <button
                                   type="button"
                                   onClick={() => copy(command(s().token), box)}
-                                  class="flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-edge bg-bg px-2 text-xs text-fg-2 transition-colors hover:text-fg disabled:opacity-40 pointer-coarse:h-9"
+                                  class="flex h-7 shrink-0 items-center gap-1.5 rounded-button-md border border-button-edge shadow-(--shadow-control) bg-bg px-2 text-xs text-fg-2 transition-colors hover:text-fg disabled:opacity-40 pointer-coarse:h-9"
                                 >
                                   <Show when={copied()} fallback={<Copy class="size-3.5" />}>
                                     <Check class="size-3.5 text-ok" />

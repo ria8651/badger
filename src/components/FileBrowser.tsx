@@ -131,9 +131,9 @@ export function FileBrowser(props: {
           role="dialog"
           aria-label={props.title}
           onClick={(e) => e.stopPropagation()}
-          class="flex h-full w-full flex-col overflow-hidden border-edge bg-bg shadow-[0_24px_64px_-16px_rgb(0_0_0/0.45)] sm:h-[min(40rem,90vh)] sm:max-w-2xl sm:rounded-xl sm:border"
+          class="flex h-full w-full flex-col overflow-hidden border-edge bg-bg p-(--inset) shadow-(--shadow-modal) sm:h-[min(40rem,90vh)] sm:max-w-2xl sm:rounded-xl sm:border-(length:--dialog-border)"
         >
-          <div class="flex items-center gap-2 border-b border-line px-4 py-3">
+          <div class="bar flex items-center gap-2 border-b border-line px-4 py-3">
             <h2 class="flex-1 text-sm font-medium text-fg">{props.title}</h2>
             <button type="button" title="Close" onClick={props.onClose} class={toolButton}>
               <X class="size-4" />
@@ -214,7 +214,7 @@ export function FileBrowser(props: {
                       when={entry.dir}
                       fallback={
                         <Show when={props.mode === 'files'} fallback={<File class="size-4 shrink-0" />}>
-                          <span class={`grid size-4 shrink-0 place-items-center rounded-[4px] border ${picked() ? 'border-fg bg-fg text-bg' : 'border-edge'}`}>
+                          <span class={`grid size-4 shrink-0 place-items-center rounded-sm border ${picked() ? 'border-primary bg-primary text-on-primary' : 'border-edge'}`}>
                             <Show when={picked()}>
                               <Check class="size-3" stroke-width={3} />
                             </Show>
@@ -238,7 +238,7 @@ export function FileBrowser(props: {
                           e.stopPropagation()
                           void pickFolder(full())
                         }}
-                        class="hidden h-6 shrink-0 rounded-md border border-edge px-2 text-xs text-fg-2 group-hover:block hover:bg-bg hover:text-fg pointer-coarse:block"
+                        class="hidden h-6 shrink-0 rounded-button-md border border-button-edge shadow-(--shadow-control) px-2 text-xs text-fg-2 group-hover:block hover:bg-bg hover:text-fg pointer-coarse:block"
                       >
                         Add
                       </button>

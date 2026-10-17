@@ -8,30 +8,30 @@ import { connected } from '../api.ts'
 const [modalOpen, setModalOpen] = createSignal(false)
 export { modalOpen, setModalOpen }
 
-/** Ink-filled when primary, red when it destroys something; otherwise a hairline outline. */
+/** Filled with the primary colour when primary, red when it destroys something; otherwise a hairline outline. */
 export function Button(props: JSX.ButtonHTMLAttributes<HTMLButtonElement> & { primary?: boolean; danger?: boolean }) {
   const [local, rest] = splitProps(props, ['primary', 'danger', 'class'])
   return (
     <button
       {...rest}
-      class={`h-8 px-3 text-[13px] font-medium transition-colors rounded-lg disabled:pointer-events-none disabled:opacity-40 ${
+      class={`h-8 px-3 text-[13px] font-medium transition-colors rounded-button-lg disabled:pointer-events-none disabled:opacity-40 ${
         local.primary
-          ? 'bg-fg text-bg hover:bg-fg/85'
+          ? 'bg-primary text-on-primary shadow-(--shadow-control) hover:bg-primary/85'
           : local.danger
-            ? 'bg-danger text-white hover:bg-danger/85'
-            : 'border border-edge text-fg-2 hover:bg-surface hover:text-fg'
+            ? 'bg-danger text-white shadow-(--shadow-control) hover:bg-danger/85'
+            : 'border border-button-edge text-fg-2 shadow-(--shadow-control) hover:bg-surface hover:text-fg'
       } ${local.class ?? ''}`}
     />
   )
 }
 
-/** Round, ink-filled, icon only. Goes quiet when disabled rather than fading out. */
+/** Round, filled with the primary colour, icon only. Goes quiet when disabled rather than fading out. */
 export function IconButton(props: JSX.ButtonHTMLAttributes<HTMLButtonElement> & { title: string }) {
   const [local, rest] = splitProps(props, ['class'])
   return (
     <button
       {...rest}
-      class={`grid size-8 shrink-0 place-items-center rounded-full bg-fg text-bg transition-colors pointer-coarse:size-9 hover:bg-fg/85 disabled:bg-surface disabled:text-fg-3 ${local.class ?? ''}`}
+      class={`grid size-8 shrink-0 place-items-center rounded-button-round bg-primary text-on-primary shadow-(--shadow-control) transition-colors pointer-coarse:size-9 hover:bg-primary/85 disabled:bg-surface disabled:text-fg-3 disabled:shadow-none ${local.class ?? ''}`}
     />
   )
 }
@@ -214,7 +214,7 @@ export function Menu(props: {
           tabindex={-1}
           aria-activedescendant={`${id}-${active()}`}
           onKeyDown={onListKey}
-          class={`absolute ${props.align === 'right' ? 'right-0' : 'left-0'} z-10 max-h-[60vh] overflow-y-auto rounded-xl border border-edge bg-bg p-1 shadow-[0_12px_32px_-12px_rgb(0_0_0/0.35)] outline-none ${
+          class={`absolute ${props.align === 'right' ? 'right-0' : 'left-0'} z-10 max-h-[60vh] overflow-y-auto rounded-xl border border-edge bg-bg p-1 pop shadow-(--shadow-pop) outline-none ${
             props.placement === 'bottom' ? 'top-full mt-1.5 origin-top' : 'bottom-full mb-1.5 origin-bottom'
           } ${open() ? 'animate-[pop-in_120ms_ease-out]' : 'pointer-events-none animate-[pop-out_80ms_ease-in_forwards]'} ${props.class ?? 'w-72'}`}
         >
@@ -271,7 +271,7 @@ export function Select<T extends string>(props: {
       title={props.title}
       placement={props.placement}
       triggerClass={(open) =>
-        `flex h-7 items-center gap-1 rounded-md px-2 text-xs transition-colors hover:bg-surface pointer-coarse:h-9 ${
+        `flex h-7 items-center gap-1 rounded-button-md px-2 text-xs transition-colors hover:bg-surface pointer-coarse:h-9 ${
           current()?.tone === 'danger' ? 'text-danger' : open ? 'text-fg-2' : 'text-fg-3 hover:text-fg-2'
         } ${open ? 'bg-surface' : ''}`
       }
@@ -405,7 +405,7 @@ export function SearchMenu(props: {
           <div
             ref={panel}
             style={{ ...place(), width: `${width()}px` }}
-            class="fixed z-40 flex animate-[pop-in_120ms_ease-out] flex-col rounded-xl border border-edge bg-bg shadow-[0_12px_32px_-12px_rgb(0_0_0/0.35)]"
+            class="fixed z-40 flex animate-[pop-in_120ms_ease-out] flex-col rounded-xl border border-edge bg-bg pop shadow-(--shadow-pop)"
           >
             <input
               ref={(el) => queueMicrotask(() => el.focus())}
