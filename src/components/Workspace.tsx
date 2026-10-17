@@ -18,6 +18,7 @@ import {
   openTerminal,
   panelsShown,
   placeTerminals,
+  movePreview,
   reloadPreview,
   removeView,
   sessionOf,
@@ -538,7 +539,7 @@ export function Workspace(props: {
           <Show when={preview()}>
             {(v) => (
               <>
-                <button onClick={() => props.ws && reloadPreview(props.ws, v())} title="Reload from where it was opened" class={ghost()}>
+                <button onClick={() => props.ws && reloadPreview(props.ws, v())} title="Reload" class={ghost()}>
                   <RotateCw class="size-3.5" />
                 </button>
                 <Show when={previewUrl(v().id, v().path, machine())}>
@@ -589,7 +590,15 @@ export function Workspace(props: {
                       {(t) => <TerminalView id={t().id} visible={!!at()} onReady={(focus) => ready(key, focus)} class="size-full px-3 py-2" />}
                     </Match>
                     <Match when={v().kind === 'preview' && (v() as PreviewView)}>
-                      {(p) => <PreviewFrame view={p()} machine={machine()} onReady={(focus) => ready(key, focus)} class="size-full" />}
+                      {(p) => (
+                        <PreviewFrame
+                          view={p()}
+                          machine={machine()}
+                          onMove={(path) => props.ws && movePreview(props.ws, p().id, path)}
+                          onReady={(focus) => ready(key, focus)}
+                          class="size-full"
+                        />
+                      )}
                     </Match>
                     <Match when={taskOf(v())}>{(id) => props.panes.render(id(), (focus) => ready(key, focus))}</Match>
                     <Match when={v().kind === 'plan'}>{props.panes.renderPlan((focus) => ready(key, focus))}</Match>

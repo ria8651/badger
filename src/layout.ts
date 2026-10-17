@@ -17,8 +17,9 @@ import { wsKey, type Ws } from './terminals.ts'
  */
 export type View = { kind: 'terminal'; id: string } | PreviewView | { kind: 'task'; session: string; id: string } | PlanView
 /**
- * What a port serves, in a frame; id is the port. Opening it again changes
- * path, and bumps nav, which reloads it.
+ * What a port serves, in a frame; id is the port. Path is where the page is:
+ * where it was opened, then wherever it's gone since. Opening it again
+ * changes path, and bumps nav, which reloads it.
  */
 export type PreviewView = { kind: 'preview'; id: string; name?: string; path?: string; nav?: number }
 /** The plan a chat is proposing, or last proposed. One per chat, so a revised plan takes the old one's place. */
@@ -450,7 +451,15 @@ export function openPreview(ws: Ws, port: number, opts: { name?: string; path?: 
   })
 }
 
-/** Loads a preview again from the path it was opened at. */
+/** Notes where a preview's page has gone, without reloading it, so a reload comes back there. */
+export function movePreview(ws: Ws, port: string, path: string): void {
+  updateLayout(ws, (l) => {
+    const found = viewsOf(l.tree).find((v): v is PreviewView => v.kind === 'preview' && v.id === port)
+    return !found || found.path === path ? l : { ...l, tree: replaceView(l.tree, { ...found, path }) }
+  })
+}
+
+/** Loads a preview again, wherever its page last was. */
 export function reloadPreview(ws: Ws, view: PreviewView): void {
   updateLayout(ws, (l) => ({ ...l, tree: replaceView(l.tree, { ...view, nav: (view.nav ?? 0) + 1 }) }))
 }
