@@ -29,7 +29,7 @@ export const api = {
   rename: (sessionId: string, title: string) => request<void>('PUT', `/api/sessions/${sessionId}/title`, { title }),
   suggestTitle: (sessionId: string) => request<{ title: string }>('POST', `/api/sessions/${sessionId}/title/suggest`),
   /** A copy of the chat up to the end of the turn `at`, here or somewhere else. Returns the new chat's id. */
-  fork: (sessionId: string, to: { at?: string; machine?: string; cwd?: string; worktree?: string }) =>
+  fork: (sessionId: string, to: { at?: string; machine?: string; cwd?: string; worktree?: string; draft?: string }) =>
     request<{ sessionId: string }>('POST', `/api/sessions/${sessionId}/fork`, to),
   cards: () => get<Card[]>('/api/cards'),
   createCard: (card: { title: string; description?: string; status?: CardStatus; parentId?: number | null }) => request<Card>('POST', '/api/cards', card),

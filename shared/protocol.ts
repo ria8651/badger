@@ -345,6 +345,8 @@ export type ServerEvent =
       running: boolean
       /** Claude Code is still making the worktree it was started in, so nothing's happening yet. */
       makingWorktree?: boolean
+      /** When Claude Code started compacting the conversation, if it's doing that now. */
+      compacting?: number
       mode: PermissionMode
       /** A ModelOption value, or a model id from the transcript. Absent until the chat has run. */
       model?: string
@@ -374,7 +376,7 @@ export type ServerEvent =
   /** The calls auto mode is still deciding whether to allow; replaces the previous set. */
   | { type: 'checking'; sessionId: string; toolUseIds: string[] }
   /** cwd changes when the chat moves into a worktree. */
-  | { type: 'status'; sessionId: string; running: boolean; makingWorktree: boolean; mode: PermissionMode; model?: string; cwd: string }
+  | { type: 'status'; sessionId: string; running: boolean; makingWorktree: boolean; compacting?: number; mode: PermissionMode; model?: string; cwd: string }
   /** Messages Claude Code is holding for its next break; replaces the previous list. */
   | { type: 'queued'; sessionId: string; messages: QueuedMessage[] }
   /** The background tasks running now; replaces the previous set. */

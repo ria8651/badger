@@ -1,15 +1,44 @@
 import { For, Match, Show, Switch, createEffect, createSignal, on, type JSX } from 'solid-js'
-import { Check, ChevronRight, Loader2, Shield } from '../icons'
+import { Check, ChevronRight, CircleAlert, Loader2, Shield, Webhook } from '../icons'
 import type { Task } from '../tasks.ts'
 import { useChecking } from '../useChat.ts'
 import { viewImages } from './ImageViewer.tsx'
 import { Markdown } from './Markdown.tsx'
+import { compact } from './ui.tsx'
 
 export interface ToolResult {
   content: unknown
   isError: boolean
   /** The SDK's structured version of the result (`tool_use_result`), on live messages only. */
   structured?: unknown
+}
+
+/** What Claude Code added to the context about a call: the skill it loaded, and what hooks that ran after it said. */
+export interface ToolContext {
+  /** A Skill call's instructions, as Claude was given them. */
+  skill?: string
+  hooks: { hook?: string; text: string }[]
+  errors: { hook?: string; command?: string; error: string }[]
+}
+
+/** How Claude Code answers a call the user stopped. */
+const INTERRUPTED = "The user doesn't want to proceed with this tool use"
+
+const interrupted = (result?: ToolResult) => !!result?.isError && resultText(result.content).startsWith(INTERRUPTED)
+
+/** The tools a ToolSearch call loaded, from its result, or else what it asked for. */
+function loadedTools(input: Input, result?: ToolResult): string[] {
+  const content = result?.content
+  const loaded = Array.isArray(content) ? content.filter((b) => b?.type === 'tool_reference' && b.tool_name).map((b) => String(b.tool_name)) : []
+  if (loaded.length) return loaded
+  const query = str(input.query)
+  return query.startsWith('select:') ? query.slice(7).split(',').map((t) => t.trim()).filter(Boolean) : []
+}
+
+/** A skill's instructions as Claude Code hands them over: where the skill lives, then its text. */
+export function splitSkill(text: string): { dir?: string; body: string } {
+  const m = text.match(/^Base directory for this skill: (.*)\n+/)
+  return m ? { dir: m[1], body: text.slice(m[0].length) } : { body: text }
 }
 
 type Input = Record<string, unknown>
@@ -24,6 +53,7 @@ export function relPath(path: string, cwd?: string): string {
 
 /** Display name: Badger's own board tools read as actions, other MCP tools as "server: tool". */
 export function toolLabel(name: string): string {
+  if (name === 'ToolSearch') return 'Load tools'
   const mcp = name.match(/^mcp__(.+?)__(.+)$/)
   if (!mcp) return name
   const action = mcp[2].replace(/_/g, ' ')
@@ -71,6 +101,10 @@ export function toolSummary(name: string, input: Input, cwd?: string): string {
       return str(input.to)
     case 'TodoWrite':
       return 'Update todos'
+    case 'Skill':
+      return [str(input.skill), str(input.args)].filter(Boolean).join(' ')
+    case 'ToolSearch':
+      return loadedTools(input).join(', ') || str(input.query)
     default: {
       const first = Object.values(input).find((v) => typeof v === 'string')
       // Preview tools say which page.
@@ -84,7 +118,7 @@ export function resultText(content: unknown): string {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
     return content
-      .map((b) => (b?.type === 'text' ? b.text : b?.type === 'image' ? '[image]' : ''))
+      .map((b) => (b?.type === 'text' ? b.text : b?.type === 'image' ? '[image]' : b?.type === 'tool_reference' ? b.tool_name : ''))
       .filter(Boolean)
       .join('\n')
   }
@@ -274,6 +308,7 @@ type ToolProps = {
   task?: Task
   /** Offered while the call runs and the turn waits on it. */
   onBackground?: () => void
+  context?: ToolContext
 }
 
 /** Output still coming: the call's, while the turn waits on it, or its task's, for as long as that runs. */
@@ -287,9 +322,11 @@ export function ToolCard(props: ToolProps) {
     props.task?.status === 'running'
       ? 'running'
       : props.result
-        ? props.result.isError
-          ? 'error'
-          : 'done'
+        ? interrupted(props.result)
+          ? 'interrupted'
+          : props.result.isError
+            ? 'error'
+            : 'done'
         : props.running
           ? props.id && checking(props.id)
             ? 'checking'
@@ -308,9 +345,15 @@ export function ToolCard(props: ToolProps) {
         <Disclosure
           id={props.id}
           label={toolLabel(props.name)}
-          detail={toolSummary(props.name, props.input, props.cwd)}
+          detail={props.name === 'ToolSearch' ? loadedTools(props.input, props.result).join(', ') : toolSummary(props.name, props.input, props.cwd)}
           trailing={
             <>
+              <Show when={props.context?.skill}>
+                {(skill) => <span class="shrink-0 text-xs text-fg-3 tabular-nums">{compact(splitSkill(skill()).body.length)} chars</span>}
+              </Show>
+              <Show when={props.context?.errors.length && status() !== 'error'}>
+                <span class="shrink-0 text-xs text-danger">Hook failed</span>
+              </Show>
               {/* Success is the norm and stays silent; only work in progress and failures show. */}
               <Switch>
                 <Match when={status() === 'checking'}>
@@ -324,6 +367,9 @@ export function ToolCard(props: ToolProps) {
                 </Match>
                 <Match when={status() === 'error'}>
                   <span class="shrink-0 text-xs text-danger">Failed</span>
+                </Match>
+                <Match when={status() === 'interrupted'}>
+                  <span class="shrink-0 text-xs text-fg-3">Interrupted</span>
                 </Match>
               </Switch>
             </>
@@ -353,6 +399,71 @@ export function ToolCard(props: ToolProps) {
  * printed comes from its own output, and how it ended from its task.
  */
 export function ToolBody(props: ToolProps & { /** Fill the space given rather than keep output short. */ fill?: boolean }) {
+  // A skill's instructions and the tools loaded say what the call did; its input and "Launching skill" don't add anything.
+  const skill = () => (props.name === 'Skill' && props.context?.skill ? splitSkill(props.context.skill) : undefined)
+  const tools = () => (props.name === 'ToolSearch' && props.result && !props.result.isError ? loadedTools(props.input, props.result) : [])
+  return (
+    <Switch
+      fallback={
+        <>
+          <Plain {...props} />
+          <Hooks context={props.context} />
+        </>
+      }
+    >
+      <Match when={skill()}>
+        {(s) => (
+          <>
+            <Show when={s().dir}>
+              <div class="font-mono text-xs text-fg-3">{s().dir}</div>
+            </Show>
+            <Markdown text={s().body} />
+            <Hooks context={props.context} />
+          </>
+        )}
+      </Match>
+      <Match when={tools().length}>
+        <div class="flex flex-wrap gap-1.5">
+          <For each={tools()}>{(t) => <span class="rounded-md bg-surface px-2 py-0.5 font-mono text-xs text-fg-2">{t}</span>}</For>
+        </div>
+        <p class="text-xs text-fg-3">Their definitions joined the context.</p>
+      </Match>
+    </Switch>
+  )
+}
+
+/** What hooks that ran after a call added to the context, and the ones that failed. */
+function Hooks(props: { context?: ToolContext }) {
+  return (
+    <>
+      <For each={props.context?.hooks}>
+        {(h) => (
+          <div class="flex items-start gap-1.5 text-xs text-fg-2">
+            <Webhook class="mt-0.5 size-3.5 shrink-0 text-fg-3" />
+            <span class="min-w-0 whitespace-pre-wrap">
+              <span class="text-fg-3">{h.hook ?? 'A hook'} added: </span>
+              {h.text}
+            </span>
+          </div>
+        )}
+      </For>
+      <For each={props.context?.errors}>
+        {(e) => (
+          <div class="flex items-start gap-1.5 text-xs text-danger">
+            <CircleAlert class="mt-0.5 size-3.5 shrink-0" />
+            <span class="min-w-0 whitespace-pre-wrap">
+              {e.hook ?? 'A hook'} failed{e.command ? ` running ${e.command}` : ''}
+              {e.error && e.error !== 'No stderr output' ? `: ${e.error}` : ''}. Claude carried on.
+            </span>
+          </div>
+        )}
+      </For>
+    </>
+  )
+}
+
+/** Any other call: its input, then its output. */
+function Plain(props: ToolProps & { fill?: boolean }) {
   const live = () => liveOf(props)
   const background = () => !!props.task?.background
   /** A command in the background, whose result is only the note. */

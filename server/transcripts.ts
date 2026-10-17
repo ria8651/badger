@@ -163,25 +163,60 @@ export class Transcripts {
 
   /**
    * A chat's transcript, with what the SDK's reader leaves out put back:
-   * turn results, hook context, which messages are meta, and subagents' work.
+   * turn results, the history before each compaction, the context Claude Code
+   * added (see contextOf), which messages are meta, and subagents' work.
    * Subagent messages come last; each carries the parent_tool_use_id of the call that started it.
    */
   async transcript(id: string): Promise<WireMessage[]> {
-    const [messages, subagents] = await Promise.all([
-      getSessionMessages(id, { sessionStore: this.store }).catch(() => []) as Promise<unknown> as Promise<WireMessage[]>,
-      this.subagentMessages(id).catch(() => []),
-    ])
-    const { context, meta } = this.extras(id)
+    const entries = (this.entries(id, '') ?? []) as Entry[]
+    const [messages, subagents] = await Promise.all([this.mainMessages(id, entries).catch(() => []), this.subagentMessages(id).catch(() => [])])
+    const { meta, apiErrors, added } = contextOf(entries)
+    // Each added message goes after the nearest message it descends from, so it's where it happened.
+    const listed = new Set(messages.map((m) => m.uuid))
+    const parents = new Map(entries.flatMap((e) => (e.uuid ? [[e.uuid, e.parentUuid ?? undefined] as const] : [])))
+    const after = new Map<string | undefined, WireMessage[]>()
+    for (const { message, parent } of added) {
+      let at = parent
+      while (at && !listed.has(at)) at = parents.get(at)
+      after.set(at, [...(after.get(at) ?? []), message])
+    }
     return [
       ...withTurnResults(
         messages.flatMap((m) => [
           // e.g. a subagent's report handed back, which would otherwise read as something the user typed.
-          meta.has(m.uuid ?? '') ? { ...m, isMeta: true } : m,
-          ...(context.get(m.uuid ?? '') ?? []).map((text, i) => ({ type: 'hook_context', uuid: `${m.uuid}-context-${i}`, after_uuid: m.uuid, text })),
+          meta.has(m.uuid ?? '') || m.is_meta ? { ...m, isMeta: true } : m,
+          ...(m.uuid ? (after.get(m.uuid) ?? []) : []),
         ]),
-      ),
+      ).map((m) => (m.uuid && apiErrors.has(m.uuid) ? { ...m, isApiErrorMessage: true, error: apiErrors.get(m.uuid) } : m)),
+      ...(after.get(undefined) ?? []),
       ...subagents,
     ]
+  }
+
+  /**
+   * The chat's own messages. The SDK's reader starts at the last compaction,
+   * so it's run once per compaction on the entries before it, each run giving
+   * the history since the one before, and the compaction goes between them.
+   * Messages a compaction kept appear again after it, and are skipped there.
+   */
+  private async mainMessages(id: string, entries: Entry[]): Promise<WireMessage[]> {
+    const cuts = entries.flatMap((e, i) => (e.type === 'system' && e.subtype === 'compact_boundary' ? [i] : []))
+    const read = (end: number) => {
+      const sessionStore: SessionStore = { ...this.store, load: async (key) => (key.subpath ? this.store.load(key) : (entries.slice(0, end) as SessionStoreEntry[])) }
+      return getSessionMessages(id, { sessionStore }) as Promise<unknown> as Promise<WireMessage[]>
+    }
+    if (!cuts.length) return read(entries.length)
+    const seen = new Set<string>()
+    const out: WireMessage[] = []
+    for (const end of [...cuts, entries.length]) {
+      for (const m of await read(end)) {
+        if (m.uuid && seen.has(m.uuid)) continue
+        if (m.uuid) seen.add(m.uuid)
+        out.push(m)
+      }
+      if (end < entries.length) out.push(compactBoundary(entries[end]))
+    }
+    return out
   }
 
   private async subagentMessages(id: string): Promise<WireMessage[]> {
@@ -191,36 +226,122 @@ export class Transcripts {
   }
 
   /**
-   * What getSessionMessages leaves out, read from the raw entries: what
-   * UserPromptSubmit hooks added to each turn (attachment entries), by the uuid
-   * of the prompt it came with, and the uuids of messages marked meta.
+   * Context from a live chat's newest lines, which its process doesn't send:
+   * what hooks added, CLAUDE.md files loaded, a typed skill's instructions.
+   * Only what came from `uuids`, so each goes out once. Reads the lines that
+   * can hold context, since an attachment's anchor may be in an earlier batch.
    */
-  private extras(id: string): { context: Map<string, string[]>; meta: Set<string> } {
-    const out = new Map<string, string[]>()
-    const meta = new Set<string>()
+  liveContext(id: string, uuids: Set<string>): WireMessage[] {
     const rows = this.db
-      .prepare(
-        `SELECT entry FROM transcript_lines WHERE session_id = ? AND subpath = '' AND (entry LIKE '%"attachment"%' OR entry LIKE '%"isMeta":true%') ORDER BY n`,
-      )
+      .prepare(`SELECT entry FROM transcript_lines WHERE session_id = ? AND subpath = '' AND (entry LIKE '%"attachment"%' OR entry LIKE '%"isMeta":true%') ORDER BY n`)
       .all(id) as { entry: string }[]
-    type Entry = { type?: string; uuid?: string; parentUuid?: string; isMeta?: boolean; attachment?: { type?: string; hookEvent?: string; content?: unknown } }
-    const parents = new Map<string, string>()
-    const hooks: Entry[] = []
-    for (const e of parse(rows.map((r) => r.entry)) as Entry[]) {
-      if (e.isMeta && e.uuid) meta.add(e.uuid)
-      if (e.type !== 'attachment' || !e.uuid || !e.parentUuid) continue
-      parents.set(e.uuid, e.parentUuid)
-      if (e.attachment?.type === 'hook_additional_context' && e.attachment.hookEvent === 'UserPromptSubmit') hooks.push(e)
-    }
-    for (const e of hooks) {
-      // Attachments chain off each other; the first non-attachment ancestor is the prompt.
-      let anchor = e.parentUuid!
-      while (parents.has(anchor)) anchor = parents.get(anchor)!
-      const content = Array.isArray(e.attachment!.content) ? e.attachment!.content.filter((c): c is string => typeof c === 'string') : []
-      out.set(anchor, [...(out.get(anchor) ?? []), ...content])
-    }
-    return { context: out, meta }
+    return contextOf(parse(rows.map((r) => r.entry)) as Entry[])
+      .added.filter((a) => uuids.has(a.source) && a.message.type !== 'system')
+      .map((a) => a.message)
   }
+}
+
+/** A raw transcript entry, as far as Badger reads them. */
+type Entry = {
+  type?: string
+  subtype?: string
+  uuid?: string
+  parentUuid?: string | null
+  timestamp?: string
+  isMeta?: boolean
+  isApiErrorMessage?: boolean
+  error?: string
+  sourceToolUseID?: string
+  content?: unknown
+  message?: { content?: unknown }
+  attachment?: { type?: string; hookName?: string; hookEvent?: string; toolUseID?: string; content?: unknown; files?: unknown; stderr?: string; stdout?: string; command?: string; exitCode?: number }
+  compactMetadata?: { trigger?: string; preTokens?: number; durationMs?: number }
+  [key: string]: unknown
+}
+
+/** A compaction as the live stream reports it. */
+function compactBoundary(e: Entry): WireMessage {
+  const m = e.compactMetadata ?? {}
+  return { type: 'system', subtype: 'compact_boundary', uuid: e.uuid, timestamp: e.timestamp, compact_metadata: { trigger: m.trigger, pre_tokens: m.preTokens, duration_ms: m.durationMs } }
+}
+
+/** A user-role entry's text, its blocks joined. */
+function entryText(e: Entry): string {
+  const content = e.message?.content
+  if (typeof content === 'string') return content
+  return Array.isArray(content) ? content.map((b: { type?: string; text?: string }) => (b?.type === 'text' ? (b.text ?? '') : '')).join('\n') : ''
+}
+
+/**
+ * What getSessionMessages leaves out, read from raw entries: which messages
+ * are meta and which are API errors, and context Claude Code added, as
+ * messages for the client (shared/protocol.ts ContextMessage) with the entry
+ * each came from and the one it descends from. Context about a call names it
+ * with `tool_use_id`; the rest has an `anchor`, the nearest message it came
+ * after, which the client places in its turn.
+ */
+function contextOf(entries: Entry[]): { meta: Set<string>; apiErrors: Map<string, string>; added: { message: WireMessage; source: string; parent?: string }[] } {
+  const meta = new Set<string>()
+  const apiErrors = new Map<string, string>()
+  const added: { message: WireMessage; source: string; parent?: string }[] = []
+  // Attachments chain off each other and off meta messages, like a skill's instructions after its /skill
+  // prompt; the first ancestor that's neither is where they came in.
+  const attachments = new Map(entries.flatMap((e) => ((e.type === 'attachment' || e.isMeta) && e.uuid ? [[e.uuid, e.parentUuid ?? undefined] as const] : [])))
+  const anchorOf = (e: Entry) => {
+    let at = e.parentUuid ?? undefined
+    while (at && attachments.has(at)) at = attachments.get(at)
+    return at
+  }
+  const add = (e: Entry, message: WireMessage, parent = anchorOf(e)) => added.push({ message, source: e.uuid!, parent })
+  /** On a call when it's about one, otherwise anchored where it came in. */
+  const place = (e: Entry, toolUseId?: string) => (toolUseId?.startsWith('toolu_') ? { tool_use_id: toolUseId } : { anchor: anchorOf(e) })
+  for (const e of entries) {
+    if (!e.uuid) continue
+    if (e.isMeta) meta.add(e.uuid)
+    if (e.type === 'assistant' && e.isApiErrorMessage) apiErrors.set(e.uuid, e.error ?? 'unknown')
+    const a = e.attachment
+    if (e.type === 'attachment' && a) {
+      if (a.type === 'hook_additional_context' && Array.isArray(a.content)) {
+        a.content.forEach((text, i) => {
+          if (typeof text === 'string' && text.trim()) add(e, { type: 'hook_context', uuid: `${e.uuid}-${i}`, hook: a.hookName, text, ...place(e, a.toolUseID) })
+        })
+      } else if (a.type === 'hook_non_blocking_error' || a.type === 'hook_blocking_error') {
+        const error = (a.stderr || a.stdout || '').replace(/^Failed with non-blocking status code: /, '').trim()
+        add(e, { type: 'hook_error', uuid: e.uuid, hook: a.hookName, command: a.command, exit_code: a.exitCode, error, ...place(e, a.toolUseID) })
+      } else if (a.type === 'instructions' && Array.isArray(a.files)) {
+        const files = (a.files as { path?: string; type?: string; content?: string }[]).filter((f) => f?.path).map((f) => ({ path: f.path, type: f.type, content: f.content ?? '' }))
+        if (files.length) add(e, { type: 'instructions', uuid: e.uuid, files, anchor: anchorOf(e) })
+      }
+    } else if (e.type === 'user' && e.isMeta) {
+      // A skill's instructions: after the Skill call that loaded them, or the /skill prompt that did.
+      const text = entryText(e)
+      if (text.startsWith('Base directory for this skill:')) {
+        const where = e.sourceToolUseID ? { tool_use_id: e.sourceToolUseID } : { anchor: e.parentUuid ?? undefined }
+        add(e, { type: 'skill', uuid: `${e.uuid}-skill`, text, ...where }, e.parentUuid ?? undefined)
+      }
+    } else if (e.type === 'system' && e.subtype === 'local_command') {
+      // A built-in command's output; live, it arrives as a message from the "<synthetic>" model with this uuid.
+      add(e, { type: 'system', subtype: 'local_command', uuid: e.uuid, content: e.content }, e.parentUuid ?? undefined)
+    } else if (e.type === 'system' && e.subtype === 'model_refusal_fallback') {
+      add(
+        e,
+        {
+          type: 'system',
+          subtype: 'model_refusal_fallback',
+          uuid: e.uuid,
+          content: e.content,
+          original_model: e.originalModel,
+          fallback_model: e.fallbackModel,
+          scope: e.scope,
+          api_refusal_category: e.apiRefusalCategory,
+          refused_user_message_uuid: e.refusedUserMessageUuid,
+          retracted_message_uuids: e.retractedMessageUuids,
+        },
+        e.parentUuid ?? undefined,
+      )
+    }
+  }
+  return { meta, apiErrors, added }
 }
 
 /** Lines that parse; a torn or corrupt one is skipped rather than losing the rest. */
@@ -282,10 +403,12 @@ function withTurnResults(messages: WireMessage[]): WireMessage[] {
 
 /** A message the user typed, as opposed to tool results or injected context. */
 function isPrompt(m: WireMessage): boolean {
-  if (m.type !== 'user' || m.parent_tool_use_id || m.isMeta || !m.timestamp) return false
+  if (m.type !== 'user' || m.parent_tool_use_id || m.isMeta || m.isCompactSummary || !m.timestamp) return false
   const content = (m.message as { content?: unknown } | undefined)?.content
-  if (typeof content === 'string') return !content.trimStart().startsWith('<')
-  return Array.isArray(content) && content.some((b) => b?.type === 'text' && !String(b.text).trimStart().startsWith('<'))
+  // A slash command the user typed is a prompt too; other tagged text was added by Claude Code.
+  const typed = (text: string) => !text.trimStart().startsWith('<') || /^\s*<command-(message|name)>/.test(text)
+  if (typeof content === 'string') return typed(content)
+  return Array.isArray(content) && content.some((b) => b?.type === 'text' && typed(String(b.text)))
 }
 
 /** The model a transcript's main agent last answered with: a model id, e.g. `claude-opus-5-5`. */
