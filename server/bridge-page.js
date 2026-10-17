@@ -210,6 +210,12 @@
   let retry = 0
   const state = (active) => ({ type: 'state', url: location.href, title: document.title, visible: document.visibilityState === 'visible', active })
   const send = (message) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify(message))
+  // Badger's panel around the page, which reloads it where it last was. Only Badger may frame a preview (its frame-ancestors).
+  const moved = () =>
+    window.parent !== window &&
+    window.parent.postMessage({ type: 'badger:preview-location', path: location.pathname + location.search + location.hash }, '*')
+  const navigated = () => (send(state(false)), moved())
+  moved()
 
   async function handle(message) {
     const { id, op } = message
@@ -254,10 +260,10 @@
     const original = history[method]
     history[method] = function (...args) {
       const result = original.apply(this, args)
-      send(state(false))
+      navigated()
       return result
     }
   }
-  addEventListener('popstate', () => send(state(false)))
-  addEventListener('hashchange', () => send(state(false)))
+  addEventListener('popstate', navigated)
+  addEventListener('hashchange', navigated)
 })()
