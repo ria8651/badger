@@ -418,7 +418,7 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
                     type="button"
                     title="Copy the chat up to here as a new one"
                     onClick={() => props.onFork!(at())}
-                    class="-mx-1 rounded px-1 py-0.5 transition-colors hover:bg-surface"
+                    class="-mx-1 rounded-sm px-1 py-0.5 transition-colors hover:bg-surface"
                   >
                     Fork
                   </button>

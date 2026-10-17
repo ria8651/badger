@@ -34,7 +34,7 @@ type BoardProps = {
 export function Board(props: BoardProps) {
   return (
     <div class="flex h-full min-w-0 flex-1 flex-col">
-      <div class="flex h-12 shrink-0 items-center px-5">
+      <div class="bar flex h-12 shrink-0 items-center px-5">
         <h1 class="font-medium">Projects</h1>
       </div>
       <Columns {...props} parentId={null} class="flex-1" />
@@ -101,7 +101,7 @@ export function Columns(props: BoardProps & { parentId: number | null; class?: s
                 <button
                   onClick={() => setAdding(status)}
                   title="Add card"
-                  class="ml-auto grid size-6 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-9"
+                  class="ml-auto grid size-6 place-items-center rounded-button-md text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-9"
                 >
                   <Plus class="size-3.5" />
                 </button>
@@ -150,7 +150,7 @@ export function Columns(props: BoardProps & { parentId: number | null; class?: s
                               setTarget({ status, index: e.clientY > rect.top + rect.height / 2 ? index + 1 : index })
                             }}
                             onClick={() => props.onOpen(card.id)}
-                            class={`w-full rounded-lg border border-line bg-bg px-3 py-2.5 text-left transition-colors hover:border-edge ${
+                            class={`w-full rounded-lg border border-line bg-bg shadow-(--shadow-card) px-3 py-2.5 text-left transition-colors hover:border-edge ${
                               dragging() === card.id ? 'opacity-40' : ''
                             }`}
                           >

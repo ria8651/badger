@@ -21,6 +21,7 @@ import { ImageViewer } from './components/ImageViewer.tsx'
 import { Loading, Menu, inputClass, modalOpen } from './components/ui.tsx'
 import { terminalLabel, terminalTooltip, terminalWs, terminals, terminalsLoaded, wsKey } from './terminals.ts'
 import { accountUsage } from './usage.ts'
+import { SIDEBAR_DEFAULT, dragSidebar, setSidebarWidth, sidebarWidth } from './sidebar.ts'
 
 /** crypto.randomUUID needs a secure context; fall back for plain-http hosts. */
 function uuid(): string {
@@ -170,15 +171,11 @@ export function App() {
 
   /** On narrow screens the sidebar is a drawer over the page; going anywhere closes it. */
   const [drawer, setDrawer] = createSignal(false)
-  /** The sidebar's width on wide screens, dragged from its edge. Narrow screens use a fixed drawer. */
-  const [sidebarWidth, setSidebarWidth] = createSignal(Number(localStorage.getItem(SIDEBAR_KEY)) || SIDEBAR_DEFAULT)
-  createEffect(() => localStorage.setItem(SIDEBAR_KEY, String(sidebarWidth())))
   const startSidebarDrag = (e: PointerEvent) => {
     if (e.button !== 0) return
     e.preventDefault()
-    const start = e.clientX - sidebarWidth()
     document.body.style.cursor = 'col-resize'
-    const move = (m: PointerEvent) => setSidebarWidth(Math.round(Math.max(200, Math.min(480, m.clientX - start))))
+    const move = dragSidebar(e)
     const up = () => {
       document.body.style.cursor = ''
       removeEventListener('pointermove', move)
@@ -326,7 +323,7 @@ export function App() {
             title={cardOf().has(s().id) ? 'Move to another project or card' : 'Put in a project'}
             onOpenChange={keepOpen(s().id)}
             triggerClass={(open) =>
-              `grid size-5 place-items-center rounded transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-6 ${open ? 'bg-surface text-fg' : 'text-fg-3'}`
+              `grid size-5 place-items-center rounded-button-sm transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-6 ${open ? 'bg-surface text-fg' : 'text-fg-3'}`
             }
             trigger={() => <FolderInput class="size-3.5" />}
           />
@@ -336,14 +333,14 @@ export function App() {
             title="Rename"
             onOpenChange={keepOpen(s().id)}
             triggerClass={(open) =>
-              `grid size-5 place-items-center rounded transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-6 ${open ? 'bg-surface text-fg' : 'text-fg-3'}`
+              `grid size-5 place-items-center rounded-button-sm transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-6 ${open ? 'bg-surface text-fg' : 'text-fg-3'}`
             }
             trigger={() => <Pencil class="size-3.5" />}
           />
           <button
             onClick={() => toggleArchived(s())}
             title={s().archived ? 'Unarchive' : 'Archive'}
-            class="grid size-5 place-items-center rounded text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-6"
+            class="grid size-5 place-items-center rounded-button-sm text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-6"
           >
             <Show when={s().archived} fallback={<Archive class="size-3.5" />}>
               <ArchiveRestore class="size-3.5" />
@@ -492,11 +489,11 @@ export function App() {
 
   /** The top bar on narrow screens. A chat puts it at the top of its own header, so they read as one. */
   const mobileBar = () => (
-    <div class="flex h-12 shrink-0 items-center gap-1 px-1.5 md:hidden">
+    <div class="bar flex h-12 shrink-0 items-center gap-1 px-1.5 md:hidden">
       <button
         onClick={() => setDrawer(true)}
         title="Chats and projects"
-        class="relative grid size-10 place-items-center rounded-lg text-fg-2 transition-colors hover:bg-surface hover:text-fg"
+        class="relative grid size-10 place-items-center rounded-button-lg text-fg-2 transition-colors hover:bg-surface hover:text-fg"
       >
         <PanelLeft class="size-5" />
         <Show when={needsYou()}>
@@ -507,7 +504,7 @@ export function App() {
       <button
         onClick={newHomeChat}
         title={focus() ? `New chat on ${focus()!.title}` : 'New chat'}
-        class="grid size-10 place-items-center rounded-lg text-fg-2 transition-colors hover:bg-surface hover:text-fg"
+        class="grid size-10 place-items-center rounded-button-lg text-fg-2 transition-colors hover:bg-surface hover:text-fg"
       >
         <Plus class="size-5" />
       </button>
@@ -520,11 +517,11 @@ export function App() {
         <div onClick={() => setDrawer(false)} class="fixed inset-0 z-20 animate-[fade-in_150ms_ease-out] bg-black/40 md:hidden" />
       </Show>
       <aside
-        class={`fixed inset-y-0 left-0 z-30 flex w-72 max-w-[85vw] shrink-0 flex-col pane max-md:rounded-none transition-[translate,visibility] duration-200 ease-out md:relative md:z-10 md:w-(--sidebar-w) md:translate-x-0 md:visible md:transition-none ${
-          drawer() ? 'translate-x-0 max-md:shadow-[0_0_48px_rgb(0_0_0/0.3)]' : 'invisible -translate-x-full'
+        class={`fixed inset-y-0 left-0 z-30 flex w-72 max-w-[85vw] shrink-0 flex-col pane sidebar max-md:rounded-none transition-[translate,visibility] duration-200 ease-out md:relative md:z-10 md:w-(--sidebar-w) md:translate-x-0 md:visible md:transition-none ${
+          drawer() ? 'translate-x-0 max-md:shadow-(--shadow-modal)' : 'invisible -translate-x-full'
         }`}
       >
-        <div class="flex h-12 shrink-0 items-center gap-2 px-4">
+        <div class="bar flex h-12 shrink-0 items-center gap-2 px-4">
           <img src="/favicon.svg" alt="" class="size-5" />
           <span class="font-medium tracking-tight">Badger</span>
           <button
@@ -537,7 +534,7 @@ export function App() {
                   ? 'Notifications are blocked in this browser, or need https'
                   : 'Turn on notifications'
             }
-            class="ml-auto grid size-7 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg disabled:opacity-40 pointer-coarse:size-10"
+            class="ml-auto grid size-7 place-items-center rounded-button-md text-fg-3 transition-colors hover:bg-surface hover:text-fg disabled:opacity-40 pointer-coarse:size-10"
           >
             <Show when={notifications() === 'on'} fallback={<BellOff class="size-4" />}>
               <Bell class="size-4" />
@@ -546,12 +543,12 @@ export function App() {
           <button
             onClick={() => setSettings(true)}
             title="Settings"
-            class="grid size-7 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-10"
+            class="grid size-7 place-items-center rounded-button-md text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-10"
           >
             <SettingsIcon class="size-4" />
           </button>
         </div>
-        <div class="px-2 pb-3">
+        <div class="px-2 pt-2 pb-3">
           <Menu
             items={switchable().map((c) =>
               c === 'none'
@@ -650,7 +647,7 @@ export function App() {
                   <button
                     onClick={() => api.closeTerminal(t.id).then(() => t.id === currentTerminal() && newHomeChat())}
                     title="Delete terminal: stops it and everything it started"
-                    class={`absolute top-1/2 right-1.5 hidden size-5 -translate-y-1/2 place-items-center rounded text-fg-3 transition-colors group-hover:grid hover:bg-surface hover:text-fg pointer-coarse:size-6 ${
+                    class={`absolute top-1/2 right-1.5 hidden size-5 -translate-y-1/2 place-items-center rounded-button-sm text-fg-3 transition-colors group-hover:grid hover:bg-surface hover:text-fg pointer-coarse:size-6 ${
                       t.id === currentTerminal() ? 'pointer-coarse:grid' : ''
                     }`}
                   >
@@ -680,7 +677,7 @@ export function App() {
             <button
               onClick={() => setQuery('')}
               title="Clear"
-              class="absolute top-1/2 right-1.5 grid size-5 -translate-y-1/2 place-items-center rounded text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-7"
+              class="absolute top-1/2 right-1.5 grid size-5 -translate-y-1/2 place-items-center rounded-button-sm text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-7"
             >
               <X class="size-3.5" />
             </button>
@@ -783,8 +780,6 @@ const MACHINES_KEY = 'badger.draftMachines'
 const LAST_MACHINE_KEY = 'badger.lastMachine'
 const WORKTREES_KEY = 'badger.draftWorktrees'
 const FOCUS_KEY = 'badger.focus'
-const SIDEBAR_KEY = 'badger.sidebarWidth'
-const SIDEBAR_DEFAULT = 256
 
 /** A JSON record from localStorage, or an empty one. */
 function loadRecord<T>(key: string): T {

@@ -107,7 +107,7 @@ export function FolderPicker(props: {
                 aria-pressed={m.id === props.machine}
                 onClick={() => m.id !== props.machine && props.onPick(startOn(m.id)!, false, m.id)}
                 title={m.online ? (m.hostname ?? m.name) : `${m.name} is offline`}
-                class={`flex h-7 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors disabled:cursor-default pointer-coarse:h-9 ${
+                class={`flex h-7 items-center gap-1.5 rounded-button-round border px-3 text-xs transition-colors disabled:cursor-default pointer-coarse:h-9 ${
                   m.id === props.machine ? 'border-fg-3 bg-surface text-fg' : 'border-edge text-fg-2 enabled:hover:bg-surface enabled:hover:text-fg'
                 } ${m.online ? '' : 'opacity-60'}`}
               >
@@ -124,7 +124,7 @@ export function FolderPicker(props: {
 
       <Show when={scratch()}>
         {(scratch) => (
-          <div class="rounded-xl border border-line">
+          <div class="rounded-xl border border-line shadow-(--shadow-card)">
             <Row selected={props.selected === scratch()} onClick={() => pick(scratch(), false)}>
               <MessageSquare class="size-4 shrink-0 text-fg-3" />
               <span class="text-[13px] text-fg-2">No folder</span>
@@ -136,7 +136,7 @@ export function FolderPicker(props: {
 
       <For each={shown()}>
         {(folder) => (
-          <div class="group/card rounded-xl border border-line">
+          <div class="group/card rounded-xl border border-line shadow-(--shadow-card)">
             <Show
               when={folder.checkouts}
               fallback={
@@ -226,7 +226,7 @@ export function FolderPicker(props: {
           <button
             type="button"
             onClick={() => setAll(true)}
-            class="rounded-lg px-2.5 py-1.5 text-xs text-fg-3 transition-colors hover:bg-surface/60 hover:text-fg-2"
+            class="rounded-button-lg px-2.5 py-1.5 text-xs text-fg-3 transition-colors hover:bg-surface/60 hover:text-fg-2"
           >
             Show {listed().length - shown().length} more
           </button>
@@ -234,7 +234,7 @@ export function FolderPicker(props: {
         <button
           type="button"
           onClick={() => setBrowsing(true)}
-          class="ml-auto flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-fg-3 transition-colors hover:bg-surface/60 hover:text-fg-2"
+          class="ml-auto flex items-center gap-1.5 rounded-button-lg px-2.5 py-1.5 text-xs text-fg-3 transition-colors hover:bg-surface/60 hover:text-fg-2"
         >
           <FolderPlus class="size-3.5" /> Add a folder
         </button>
@@ -293,7 +293,7 @@ function FolderName(props: { folder: Folder; onHide: (button: Element) => void }
             e.stopPropagation()
             props.onHide(e.currentTarget)
           }}
-          class="grid size-5 shrink-0 place-items-center rounded text-fg-3 opacity-0 transition group-hover/card:opacity-100 hover:bg-bg hover:text-fg focus-visible:opacity-100 pointer-coarse:hidden"
+          class="grid size-5 shrink-0 place-items-center rounded-button-sm text-fg-3 opacity-0 transition group-hover/card:opacity-100 hover:bg-bg hover:text-fg focus-visible:opacity-100 pointer-coarse:hidden"
         >
           <X class="size-3" />
         </button>

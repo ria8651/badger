@@ -574,7 +574,7 @@ export function Chat(props: {
                 </Show>
                 <div
                   inert={state.gone || stranded()}
-                  class={`@container relative border transition-colors rounded-2xl focus-within:border-fg-3 ${dragging() ? 'border-fg-3' : 'border-edge'} ${state.gone || stranded() ? 'opacity-50' : ''}`}
+                  class={`@container relative border shadow-(--shadow-card) transition-colors rounded-2xl focus-within:border-fg-3 ${dragging() ? 'border-fg-3' : 'border-edge'} ${state.gone || stranded() ? 'opacity-50' : ''}`}
                   onDragOver={(e) => {
                     if (!e.dataTransfer?.types.includes('Files')) return
                     e.preventDefault()
@@ -653,7 +653,7 @@ export function Chat(props: {
                       type="button"
                       onClick={() => setBrowsing(true)}
                       title="Attach files"
-                      class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9"
+                      class="flex h-7 items-center rounded-button-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9"
                     >
                       <Paperclip class="size-3.5" />
                     </button>
@@ -688,7 +688,7 @@ export function Chat(props: {
                         type="button"
                         onClick={() => setDetail(detail() === 'full' ? 'result' : 'full')}
                         title={detail() === 'full' ? 'Show results only' : 'Show all work'}
-                        class="flex h-7 items-center rounded-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9"
+                        class="flex h-7 items-center rounded-button-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9"
                       >
                         {/* Shows what a click does, like play/pause: fold the work away or expand it. */}
                         <Show when={detail() === 'full'} fallback={<ListChevronsUpDown class="size-3.5" />}>
@@ -702,7 +702,7 @@ export function Chat(props: {
                       onClick={() => setMore((o) => !o)}
                       title="Mode, model and more"
                       aria-expanded={more()}
-                      class={`flex h-7 items-center rounded-md px-2 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 @md:hidden ${
+                      class={`flex h-7 items-center rounded-button-md px-2 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 @md:hidden ${
                         mode() === 'bypassPermissions' ? 'text-danger' : more() ? 'bg-surface text-fg-2' : 'text-fg-3'
                       }`}
                     >
@@ -772,7 +772,7 @@ function ComposerPanel(props: {
   return (
     <div
       ref={props.ref}
-      class="absolute inset-x-0 bottom-full z-10 mb-2 max-h-[70vh] origin-bottom animate-[pop-in_120ms_ease-out] overflow-y-auto rounded-2xl border border-edge bg-bg p-1 shadow-[0_12px_32px_-12px_rgb(0_0_0/0.35)]"
+      class="absolute inset-x-0 bottom-full z-10 mb-2 max-h-[70vh] origin-bottom animate-[pop-in_120ms_ease-out] overflow-y-auto rounded-2xl border border-edge bg-bg p-1 pop shadow-(--shadow-pop)"
     >
       <PanelChoices label="Permission mode" options={MODES} value={props.mode} onPick={props.onMode} />
       <Show when={props.model}>
@@ -802,7 +802,7 @@ function PanelChoices<T extends string>(props: { label: string; options: Option<
               type="button"
               onClick={() => props.onPick(o.value)}
               aria-pressed={o.value === props.value}
-              class={`h-9 rounded-full border px-3 text-[13px] transition-colors ${
+              class={`h-9 rounded-button-round border px-3 text-[13px] transition-colors ${
                 o.value === props.value
                   ? o.tone === 'danger'
                     ? 'border-danger bg-danger/10 text-danger'

@@ -210,8 +210,8 @@ function QuestionPrompt(props: {
                         >
                           <span
                             class={`mt-0.5 grid size-3.5 shrink-0 place-items-center border ${
-                              q.multiSelect ? 'rounded' : 'rounded-full'
-                            } ${on() ? 'border-fg bg-fg text-bg' : 'border-edge'}`}
+                              q.multiSelect ? 'rounded-sm' : 'rounded-full'
+                            } ${on() ? 'border-primary bg-primary text-on-primary' : 'border-edge'}`}
                           >
                             <Show when={on()}>
                               <Check size={10} stroke-width={3} />
@@ -280,7 +280,7 @@ function Shell(props: {
     })
 
   return (
-    <div class="flex min-h-0 flex-col overflow-y-auto border border-edge text-[13px] rounded-2xl">
+    <div class="flex min-h-0 flex-col overflow-y-auto border border-edge text-[13px] rounded-2xl shadow-(--shadow-card)">
       <button onClick={toggle} title={open() ? 'Fold away' : 'Unfold'} class="flex shrink-0 items-center gap-2.5 p-4 text-left">
         <span class="size-1.5 shrink-0 rounded-full bg-accent" />
         <Show when={props.from}>

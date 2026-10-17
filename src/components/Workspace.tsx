@@ -40,6 +40,7 @@ import {
   type View,
 } from '../layout.ts'
 import { LOCAL, isOnline, onMachine } from '../machines.ts'
+import { dragSidebar } from '../sidebar.ts'
 import { previewUrl } from '../previews.ts'
 import { inWs, terminalLabel, terminalTooltip, terminals, terminalsListed, type Ws } from '../terminals.ts'
 import { PreviewFrame } from './PreviewFrame.tsx'
@@ -56,8 +57,15 @@ const MIN = 120
 const css = (l: Len, px = 0) => `calc(${l.f * 100}% + ${l.g} * var(--pane-gutter) + ${px}px)`
 /** The middle of a gutter that starts here. */
 const mid = (l: Len): Len => ({ f: l.f, g: l.g + 0.5 })
-/** Placed over a box, less `top` pixels off the top. */
-const place = (b: Box, top = 0): JSX.CSSProperties => ({ left: css(b.x), top: css(b.y, top), width: css(b.w), height: css(b.h, -top) })
+/** Placed over a box. */
+const place = (b: Box): JSX.CSSProperties => ({ left: css(b.x), top: css(b.y), width: css(b.w), height: css(b.h) })
+/** Placed inside a pane over a box: under its tab bar, and clear of the --inset round its edges. */
+const placeIn = (b: Box): JSX.CSSProperties => ({
+  left: `calc(${css(b.x)} + var(--inset))`,
+  top: `calc(${css(b.y, BAR)} + var(--inset))`,
+  width: `calc(${css(b.w)} - 2 * var(--inset))`,
+  height: `calc(${css(b.h, -BAR)} - 2 * var(--inset))`,
+})
 
 const taskOf = (v?: View) => (v?.kind === 'task' ? v.id : undefined)
 const terminalOf = (v?: View) => (v?.kind === 'terminal' ? terminals().find((t) => t.id === v.id) : undefined)
@@ -215,8 +223,11 @@ export function Workspace(props: {
   /** What's being dragged, for a cover over the page that keeps the cursor and stops terminals taking the pointer. */
   const [dragging, setDragging] = createSignal<'col-resize' | 'row-resize' | 'move' | 'grabbing'>()
 
-  /** Drags gutters: one, or two where they meet. Each keeps the pair of panes either side of it the same size together. */
-  const startResize = (e: PointerEvent, ds: Divider[]) => {
+  /**
+   * Drags gutters: one, or two where they meet. Each keeps the pair of panes either side of it the same size together.
+   * With `sidebar`, the sidebar's edge comes too, from where a gutter meets it.
+   */
+  const startResize = (e: PointerEvent, ds: Divider[], sidebar = false) => {
     if (e.button !== 0) return
     e.preventDefault()
     const bounds = container.getBoundingClientRect()
@@ -227,9 +238,12 @@ export function Workspace(props: {
       const pair = d.sizes[d.index - 1] + d.sizes[d.index]
       return { d, row, span, pair, start: row ? e.clientX : e.clientY, min: Math.min(MIN / span, pair / 2) }
     })
+    const followSidebar = sidebar ? dragSidebar(e) : undefined
     const cursors = new Set(drags.map((g) => g.row))
+    if (sidebar) cursors.add(true)
     setDragging(cursors.size > 1 ? 'move' : cursors.has(true) ? 'col-resize' : 'row-resize')
-    const move = (m: PointerEvent) =>
+    const move = (m: PointerEvent) => {
+      followSidebar?.(m)
       update((l) =>
         drags.reduce((l, { d, row, span, pair, start, min }) => {
           const i = d.index
@@ -240,6 +254,7 @@ export function Workspace(props: {
           return wide() ? { ...l, tree: setSizes(l.tree, d.path, sizes) } : { ...l, narrow: sizes[1] }
         }, l),
       )
+    }
     const up = () => {
       setDragging()
       removeEventListener('pointermove', move)
@@ -509,7 +524,7 @@ export function Workspace(props: {
                       onPointerDown={(e) => e.stopPropagation()}
                       onClick={() => close(key)}
                       title={v()?.kind === 'terminal' ? 'Delete terminal: stops it and everything it started' : 'Close'}
-                      class={`mx-0.5 grid size-5 shrink-0 place-items-center rounded text-fg-3 transition-colors hover:text-fg ${
+                      class={`mx-0.5 grid size-5 shrink-0 place-items-center rounded-button-sm text-fg-3 transition-colors hover:text-fg ${
                         isActive() ? '' : 'invisible group-hover:visible'
                       }`}
                     >
@@ -579,7 +594,7 @@ export function Workspace(props: {
             <div
               class="absolute overflow-hidden rounded-b-(--pane-radius)"
               classList={{ hidden: !at() }}
-              style={at() ? place(at()!.box, BAR) : undefined}
+              style={at() ? placeIn(at()!.box) : undefined}
               onFocusIn={() => at() && focusIn(at()!.group)}
             >
               <Show when={view()}>
@@ -622,11 +637,21 @@ export function Workspace(props: {
           />
         )}
       </Index>
+      {/* Where a gutter between stacked panes meets the sidebar's edge. Narrow screens have a drawer instead. */}
+      <Index each={measured().dividers.filter((d) => d.dir === 'col' && d.split.x < 1e-6)}>
+        {(d) => (
+          <div
+            onPointerDown={(e) => startResize(e, [d()], true)}
+            class="absolute z-20 hidden size-4 -translate-1/2 cursor-move md:block"
+            style={{ left: 'calc(var(--sidebar-gutter) / -2)', top: css(mid(d().gutter.y)) }}
+          />
+        )}
+      </Index>
 
       <Show when={drag()?.drop && dropBox(drag()!.drop!)}>
         {(b) => (
           <div
-            class="pointer-events-none absolute z-20 rounded-[max(6px,var(--pane-radius))] border-2 border-accent/60 bg-accent/10 transition-all duration-100"
+            class="pointer-events-none absolute z-20 rounded-[max(var(--radius-md),var(--pane-radius))] border-2 border-accent/60 bg-accent/10 transition-all duration-100"
             style={place(b())}
           />
         )}
@@ -640,7 +665,7 @@ export function Workspace(props: {
       <Show when={drag()}>
         {(d) => (
           <div
-            class="pointer-events-none fixed z-50 rounded-md border border-edge bg-bg px-2 py-1 text-xs text-fg shadow-[0_8px_24px_-8px_rgb(0_0_0/0.35)]"
+            class="pointer-events-none fixed z-50 rounded-md border border-edge bg-bg px-2 py-1 text-xs text-fg pop shadow-(--shadow-pop)"
             style={{ left: `${d().x + 12}px`, top: `${d().y + 8}px` }}
           >
             {d().label}
@@ -649,7 +674,7 @@ export function Workspace(props: {
       </Show>
 
       <Show when={leader()}>
-        <div class="pointer-events-none absolute bottom-4 left-1/2 z-50 w-64 -translate-x-1/2 animate-[pop-in_120ms_ease-out] rounded-xl border border-edge bg-bg p-2 text-[13px] shadow-[0_12px_32px_-12px_rgb(0_0_0/0.35)]">
+        <div class="pointer-events-none absolute bottom-4 left-1/2 z-50 w-64 -translate-x-1/2 animate-[pop-in_120ms_ease-out] rounded-xl border border-edge bg-bg p-2 text-[13px] pop shadow-(--shadow-pop)">
           <div class="px-1.5 pb-1 text-[11px] text-fg-3">{LEADER}, then</div>
           <For each={BINDINGS}>
             {([key, what]) => (

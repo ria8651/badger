@@ -94,7 +94,7 @@ export function RenameChat(props: {
             role="dialog"
             aria-label="Rename chat"
             style={{ ...place(), width: `${width}px` }}
-            class="fixed z-40 flex animate-[pop-in_120ms_ease-out] flex-col rounded-xl border border-edge bg-bg shadow-[0_12px_32px_-12px_rgb(0_0_0/0.35)]"
+            class="fixed z-40 flex animate-[pop-in_120ms_ease-out] flex-col rounded-xl border border-edge bg-bg pop shadow-(--shadow-pop)"
           >
             <input
               ref={(el) => {
@@ -141,7 +141,7 @@ export function RenameChat(props: {
                 onClick={suggest}
                 disabled={suggesting()}
                 title="Suggest another"
-                class="grid size-7 shrink-0 place-items-center rounded-lg text-fg-3 transition-colors hover:bg-surface hover:text-fg disabled:invisible"
+                class="grid size-7 shrink-0 place-items-center rounded-button-lg text-fg-3 transition-colors hover:bg-surface hover:text-fg disabled:invisible"
               >
                 <RefreshCw class="size-3.5" />
               </button>

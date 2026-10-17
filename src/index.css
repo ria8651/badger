@@ -10,14 +10,45 @@
  *   surface  hover, selection, user messages, code
  *   line     dividers
  *   edge     borders on interactive controls
- *   fg       primary text, primary buttons
+ *   fg       primary text
  *   fg-2     secondary text
  *   fg-3     metadata, placeholders, icons
+ *   primary     primary buttons, ticked boxes: fg unless the palette says otherwise
+ *   on-primary  text and icons on primary
+ *   button-edge the border of outlined buttons: edge unless the palette says otherwise
+ *   sidebar          the sidebar's bg, and
+ *   sidebar-surface  its surface: bg and surface unless the palette says otherwise (see .sidebar)
+ *   bar              title bars' background, transparent unless the palette says otherwise, and
+ *   on-bar, -2, -3   text on them: fg, fg-2 and fg-3 unless the palette says otherwise (see .bar)
  *   accent   only for "live" or "needs you": running chats, prompts
  *   danger   errors, destructive modes, removed lines
  *   ok       added lines in diffs
  *   black    the dimmed backdrop behind modals and the drawer, in both themes
  *   white    controls on the image viewer, which is black in every theme
+ *
+ * Besides colours, a palette can turn the look's other knobs (defaults below):
+ *
+ *   --font-sans      the UI's typeface
+ *   --roundness      scales every corner: 1 as designed, 0 square (rounded-round is a circle, scaled too)
+ *   --radius-pill    buttons' corners at least this round: 9999px makes them pills. Buttons
+ *                    use rounded-button-{size}, the size's corners until --radius-pill is bigger
+ *   --sidebar-gutter the space between the sidebar and the panes beside it: the frame's gutter by default
+ *   --inset          room inside panes and dialogs, so an edge drawn by an inset shadow isn't covered by what's in them
+ *   --dialog-border  the width of dialogs' border
+ *   --glow           a text-shadow on all text
+ *   --screen         a background laid over the whole page, e.g. scanlines
+ *   color-scheme     light or dark, for scrollbars and the browser's own controls
+ *
+ * and how high things float, as box-shadows. Use them as shadow-(--shadow-pop)
+ * and so on: Tailwind bakes its theme's shadows into the class, out of a palette's reach.
+ *
+ *   --shadow-pane     the panes, when the frame makes them tiles
+ *   --shadow-sidebar  the sidebar, which sits over the panes beside it: the frame's pane shadow by default
+ *   --shadow-bar      a chat's header, over its transcript
+ *   --shadow-card    cards and the composer, sitting on a pane
+ *   --shadow-control  filled buttons
+ *   --shadow-pop      menus, popovers, tooltips
+ *   --shadow-modal    dialogs and the drawer
  */
 @theme {
   --color-*: initial;
@@ -33,18 +64,74 @@
   --color-accent: #c15f3c;
   --color-danger: #c13a2e;
   --color-ok: #3d7a4a;
+  --color-primary: #1b1a18;
+  --color-on-primary: #fafaf8;
+  --color-sidebar: #fafaf8;
+  --color-sidebar-surface: #f0efeb;
+  --color-button-edge: #d5d3cd;
   --color-black: #000;
   --color-white: #fff;
 
+  --radius-round: 9999px;
+
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@utility rounded-button-* {
+  border-radius: max(--value(--radius-*), var(--radius-pill));
 }
 
 /*
  * A theme is a palette and a frame, set as data-palette and data-frame by
  * src/theme.ts. They're attributes rather than :root rules so any element can
  * carry its own: the previews in Settings are drawn in their theme that way.
+ *
+ * The defaults, and anything worked out from other tokens, are here rather
+ * than in @theme for the same reason: a custom property's var()s resolve where
+ * it's declared, so ones declared on :root would ignore a preview's palette.
  */
+[data-palette] {
+  color-scheme: light;
+  --color-primary: var(--color-fg);
+  --color-on-primary: var(--color-bg);
+  --color-sidebar: var(--color-bg);
+  --color-sidebar-surface: var(--color-surface);
+  --color-button-edge: var(--color-edge);
+  --color-bar: transparent;
+  --color-on-bar: var(--color-fg);
+  --color-on-bar-2: var(--color-fg-2);
+  --color-on-bar-3: var(--color-fg-3);
+  /* The palette's own, for .pop to go back to inside the sidebar or a bar. */
+  --page-bg: var(--color-bg);
+  --page-surface: var(--color-surface);
+  --page-fg: var(--color-fg);
+  --page-fg-2: var(--color-fg-2);
+  --page-fg-3: var(--color-fg-3);
+  --sidebar-gutter: var(--pane-gutter);
+  --inset: 0px;
+  --dialog-border: 1px;
+  --shadow-sidebar: var(--pane-shadow);
+  --shadow-bar: none;
+  --roundness: 1;
+  --radius-pill: 0px;
+  --glow: none;
+  --screen: none;
+  --shadow-pane: 0 1px 3px rgb(0 0 0 / 0.04);
+  --shadow-card: none;
+  --shadow-control: none;
+  --shadow-pop: 0 12px 32px -12px rgb(0 0 0 / 0.35);
+  --shadow-modal: 0 24px 64px -16px rgb(0 0 0 / 0.45);
+  --radius: calc(0.25rem * var(--roundness));
+  --radius-xs: calc(0.125rem * var(--roundness));
+  --radius-sm: calc(0.25rem * var(--roundness));
+  --radius-md: calc(0.375rem * var(--roundness));
+  --radius-lg: calc(0.5rem * var(--roundness));
+  --radius-xl: calc(0.75rem * var(--roundness));
+  --radius-2xl: calc(1rem * var(--roundness));
+  --radius-3xl: calc(1.5rem * var(--roundness));
+  --radius-round: calc(9999px * var(--roundness));
+}
 [data-palette="light"] {
   --color-bg: #fafaf8;
   --color-well: #ecebe6;
@@ -60,6 +147,7 @@
   --pane-ring: rgb(0 0 0 / 0.07);
 }
 [data-palette="dark"] {
+  color-scheme: dark;
   --color-bg: #1e1d1b;
   --color-well: #151413;
   --color-surface: #2a2927;
@@ -75,6 +163,7 @@
 }
 /* True dark: near-black, as the dark theme first was. */
 [data-palette="black"] {
+  color-scheme: dark;
   --color-bg: #141413;
   --color-well: #0a0a09;
   --color-surface: #1f1e1c;
@@ -87,6 +176,97 @@
   --color-danger: #e26d5f;
   --color-ok: #7cb08a;
   --pane-ring: rgb(255 255 255 / 0.1);
+}
+/* Retro terminal: green phosphor on black, amber for what's live, square corners, glow and scanlines. */
+[data-palette="terminal"] {
+  color-scheme: dark;
+  --color-bg: #0a120c;
+  --color-well: #040805;
+  --color-surface: #12241a;
+  --color-line: #183522;
+  --color-edge: #24502f;
+  --color-fg: #6bff8f;
+  --color-fg-2: #45c867;
+  --color-fg-3: #2f8a49;
+  --color-accent: #ffb000;
+  --color-danger: #ff5f4f;
+  --color-ok: #b4ffc6;
+  --pane-ring: rgb(107 255 143 / 0.18);
+  --font-sans: var(--font-mono);
+  --roundness: 0;
+  --glow: 0 0 1px currentColor, 0 0 6px color-mix(in srgb, currentColor 45%, transparent);
+  --screen:
+    repeating-linear-gradient(rgb(0 0 0 / 0.2) 0 1px, transparent 1px 3px),
+    radial-gradient(ellipse at center, transparent 55%, rgb(0 0 0 / 0.4));
+}
+/*
+ * Open mSupply's React UI: Material Design 2, from client/packages/common/src/styles/theme.ts
+ * in msupply-foundation/open-msupply. Orange primary, blue for what's live, Inter, a grey
+ * drawer flush against the page with its big shadow (shadows[7]) over it, pill buttons, and its shadow ramp
+ * on everything else that floats.
+ */
+[data-palette="oms"] {
+  --color-bg: #fff;
+  --color-well: #f2f2f5;
+  --color-surface: #f2f2f5;
+  --color-line: #e4e4eb;
+  --color-edge: #c7c9d9;
+  --color-fg: #1c1c28;
+  --color-fg-2: #555770;
+  --color-fg-3: #8f90a6;
+  --color-primary: #e95c30;
+  --color-on-primary: #fff;
+  --color-accent: #3e7bfa;
+  --color-danger: #e63535;
+  --color-ok: #2e7d32;
+  --font-sans: "Inter Variable", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --roundness: 1.25;
+  --radius-pill: 9999px;
+  --color-button-edge: transparent;
+  --color-sidebar: #f2f2f5;
+  --color-sidebar-surface: #fff;
+  --sidebar-gutter: 0px;
+  --shadow-sidebar: 0 4px 5px -2px rgb(0 0 0 / 0.2), 0 7px 10px 1px rgb(0 0 0 / 0.14), 0 2px 16px 1px rgb(0 0 0 / 0.12);
+  --shadow-bar: 0 4px 8px 0 rgb(96 97 112 / 0.16), 0 0 2px 0 rgb(40 41 61 / 0.04);
+  --shadow-card: 0 4px 8px 0 rgb(96 97 112 / 0.16), 0 0 2px 0 rgb(40 41 61 / 0.04);
+  --shadow-control: 0 4px 8px 0 rgb(96 97 112 / 0.16), 0 0 2px 0 rgb(40 41 61 / 0.04);
+  --shadow-pop: 0 8px 16px 0 rgb(96 97 112 / 0.16), 0 2px 4px 0 rgb(40 41 61 / 0.04);
+  --shadow-modal: 0 12px 24px 0 rgb(96 97 112 / 0.16), 0 4px 8px 0 rgb(40 41 61 / 0.3);
+}
+/*
+ * Windows 95: grey windows on a teal desktop, navy title bars, square corners,
+ * and every edge a two-tone bevel, light from the top left. Windows keep their
+ * contents --inset clear of their bevel, with a pixel of grey to spare, as 95 did.
+ */
+[data-palette="win95"] {
+  --color-bg: #c0c0c0;
+  --color-well: #008080;
+  --color-surface: #dfdfdf;
+  --color-line: #808080;
+  --color-edge: #808080;
+  --color-fg: #000;
+  --color-fg-2: #222;
+  --color-fg-3: #505050;
+  --color-primary: #c0c0c0;
+  --color-on-primary: #000;
+  --color-accent: #000080;
+  --color-danger: #a00000;
+  --color-ok: #006400;
+  --color-button-edge: transparent;
+  --color-bar: #000080;
+  --color-on-bar: #fff;
+  --color-on-bar-2: #fff;
+  --color-on-bar-3: #c0c0c0;
+  --pane-ring: transparent;
+  --font-sans: Tahoma, "Microsoft Sans Serif", "MS Sans Serif", Geneva, Verdana, sans-serif;
+  --roundness: 0;
+  --inset: 3px;
+  --dialog-border: 0px;
+  --shadow-pane: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf, inset -2px -2px #808080, inset 2px 2px #fff;
+  --shadow-card: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf;
+  --shadow-control: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf;
+  --shadow-pop: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf, inset -2px -2px #808080, inset 2px 2px #fff;
+  --shadow-modal: var(--shadow-pane);
 }
 
 /*
@@ -108,9 +288,9 @@
   --color-canvas: var(--color-well);
   --pane-gutter: 6px;
   --pane-margin: 6px;
-  --pane-radius: 10px;
+  --pane-radius: calc(10px * var(--roundness));
   --pane-border: var(--pane-ring);
-  --pane-shadow: 0 1px 3px rgb(0 0 0 / 0.04);
+  --pane-shadow: var(--shadow-pane);
 }
 
 @layer base {
@@ -118,7 +298,10 @@
   body {
     @apply bg-bg text-fg text-sm antialiased;
     font-feature-settings: "cv11", "ss01";
+    text-shadow: var(--glow);
   }
+  /* The browser's own styles turn the glow off on controls. */
+  :where(button, input, textarea, select) { text-shadow: inherit; }
   * {
     scrollbar-width: thin;
     scrollbar-color: var(--color-edge) transparent;
@@ -127,6 +310,8 @@
   :focus-visible { outline: 1.5px solid var(--color-fg-3); outline-offset: 2px; }
   .lucide { stroke-width: 1.75; }
   .theme-switching, .theme-switching * { transition: none !important; }
+  /* Over everything, but clicks go through. */
+  body::after { content: ""; position: fixed; inset: 0; z-index: 1000; pointer-events: none; background: var(--screen); }
 }
 
 /* One of the big panes, clipped to its corners. A layer down so utilities can override it. */
@@ -137,6 +322,31 @@
     outline: 1px solid var(--pane-border);
     border-radius: var(--pane-radius);
     box-shadow: var(--pane-shadow);
+    padding: var(--inset);
+  }
+  /* The sidebar's pane: everything in it that reads bg or surface gets the sidebar's shades. */
+  .sidebar {
+    --color-bg: var(--color-sidebar);
+    --color-surface: var(--color-sidebar-surface);
+    margin-right: calc(var(--sidebar-gutter) - var(--pane-gutter));
+    box-shadow: var(--shadow-sidebar);
+  }
+  /* A pane's title bar: its text reads on-bar's colours. */
+  .bar {
+    --color-fg: var(--color-on-bar);
+    --color-fg-2: var(--color-on-bar-2);
+    --color-fg-3: var(--color-on-bar-3);
+    color: var(--color-fg);
+    background-color: var(--color-bar);
+  }
+  /* Menus and popovers are page-coloured wherever they open from, a bar or the sidebar included. */
+  .pop {
+    --color-bg: var(--page-bg);
+    --color-surface: var(--page-surface);
+    --color-fg: var(--page-fg);
+    --color-fg-2: var(--page-fg-2);
+    --color-fg-3: var(--page-fg-3);
+    color: var(--color-fg);
   }
 }
 
@@ -171,13 +381,13 @@
 .md hr { margin: 1.5em 0; border-color: var(--color-line); }
 .md blockquote { padding-left: 1em; border-left: 2px solid var(--color-edge); color: var(--color-fg-2); }
 .md code { font-family: var(--font-mono); font-size: 0.86em; }
-.md :not(pre) > code { padding: 0.1em 0.35em; border-radius: 4px; background: var(--color-surface); }
-.md pre { padding: 0.85em 1em; border-radius: 8px; background: var(--color-surface); overflow-x: auto; font-size: 13px; line-height: 1.55; }
+.md :not(pre) > code { padding: 0.1em 0.35em; border-radius: var(--radius-sm); background: var(--color-surface); }
+.md pre { padding: 0.85em 1em; border-radius: var(--radius-lg); background: var(--color-surface); overflow-x: auto; font-size: 13px; line-height: 1.55; }
 .md pre code { font-size: inherit; }
 .md table { display: block; overflow-x: auto; border-collapse: collapse; font-size: 0.93em; }
 .md :where(th, td) { padding: 0.4em 0.9em 0.4em 0; border-bottom: 1px solid var(--color-line); text-align: left; }
 .md th { font-weight: 500; color: var(--color-fg-2); }
-.md img { max-width: 100%; border-radius: 8px; }
+.md img { max-width: 100%; border-radius: var(--radius-lg); }
 /* Rendered ones open in the image viewer on a click; edited ones on a double click. */
 .md:not(.ProseMirror) img:not(a img) { cursor: zoom-in; }
 
@@ -186,7 +396,7 @@
 .md li > input[type="checkbox"], .md li[data-checked] > label { position: absolute; left: -1.25em; top: 0.42em; margin: 0; }
 .md li[data-checked] > label { display: flex; user-select: none; }
 /* Drawn here rather than by the browser, which fades chat's read-only (disabled) ones. Checked is a filled box with the tick cut out. */
-.md :where(li > input, li > label > input)[type="checkbox"] { appearance: none; display: block; width: 0.85em; height: 0.85em; margin: 0; border: 1.5px solid var(--color-fg-3); border-radius: 3px; }
+.md :where(li > input, li > label > input)[type="checkbox"] { appearance: none; display: block; width: 0.85em; height: 0.85em; margin: 0; border: 1.5px solid var(--color-fg-3); border-radius: calc(3px * var(--roundness)); }
 .md :where(li > input, li > label > input)[type="checkbox"]:checked {
   border: none;
   background: var(--color-fg-3);

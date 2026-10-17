@@ -16,7 +16,7 @@ import { attention } from '../attention.ts'
 const STATUS_OPTIONS = CARD_STATUSES.map((value) => ({ value, label: STATUS_LABELS[value] }))
 
 const menuTrigger = (open: boolean) =>
-  `flex h-7 items-center gap-1.5 rounded-md px-2 text-xs pointer-coarse:h-9 transition-colors hover:bg-surface hover:text-fg ${
+  `flex h-7 items-center gap-1.5 rounded-button-md px-2 text-xs pointer-coarse:h-9 transition-colors hover:bg-surface hover:text-fg ${
     open ? 'bg-surface text-fg' : 'text-fg-3'
   }`
 
@@ -120,7 +120,7 @@ export function CardView(props: {
       <button
         onClick={remove}
         title={isProject() ? 'Delete project' : 'Delete card'}
-        class="grid size-7 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-danger pointer-coarse:size-9"
+        class="grid size-7 place-items-center rounded-button-md text-fg-3 transition-colors hover:bg-surface hover:text-danger pointer-coarse:size-9"
       >
         <Trash2 class="size-3.5" />
       </button>
@@ -196,7 +196,7 @@ export function CardView(props: {
                 session={s}
                 title="Rename chat"
                 triggerClass={(open) =>
-                  `grid size-6 place-items-center rounded-md transition hover:bg-surface hover:text-fg group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:size-9 pointer-coarse:opacity-100 ${
+                  `grid size-6 place-items-center rounded-button-md transition hover:bg-surface hover:text-fg group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:size-9 pointer-coarse:opacity-100 ${
                     open ? 'bg-surface text-fg opacity-100' : 'text-fg-3 opacity-0'
                   }`
                 }
@@ -205,7 +205,7 @@ export function CardView(props: {
               <button
                 onClick={() => api.unlinkSession(props.card.id, s.id)}
                 title="Unlink chat"
-                class="grid size-6 place-items-center rounded-md text-fg-3 opacity-0 transition hover:bg-surface hover:text-fg group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:size-9 pointer-coarse:opacity-100"
+                class="grid size-6 place-items-center rounded-button-md text-fg-3 opacity-0 transition hover:bg-surface hover:text-fg group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:size-9 pointer-coarse:opacity-100"
               >
                 <X class="size-3.5" />
               </button>
@@ -235,7 +235,7 @@ export function CardView(props: {
       when={isProject()}
       fallback={
         <div class="flex h-full min-w-0 flex-1 flex-col overflow-y-auto">
-          <div class="flex h-12 shrink-0 items-center gap-1 px-5 text-[13px]">
+          <div class="bar flex h-12 shrink-0 items-center gap-1 px-5 text-[13px]">
             <button onClick={() => props.onOpenCard(null)} class="text-fg-3 transition-colors hover:text-fg">
               Projects
             </button>
@@ -261,7 +261,7 @@ export function CardView(props: {
       }
     >
       <div class="flex h-full min-w-0 flex-1 flex-col">
-        <div class="flex h-12 shrink-0 items-center gap-1 px-5 text-[13px]">
+        <div class="bar flex h-12 shrink-0 items-center gap-1 px-5 text-[13px]">
           <button onClick={() => props.onOpenCard(null)} class="text-fg-3 transition-colors hover:text-fg">
             Projects
           </button>
@@ -331,7 +331,7 @@ function WorktreeRow(props: { path: string; machine: string; sessions: SessionSu
         <button
           onClick={remove}
           title="Remove worktree (its branch goes too, if merged)"
-          class="grid size-6 place-items-center rounded-md text-fg-3 opacity-0 transition hover:bg-surface hover:text-danger group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:size-9 pointer-coarse:opacity-100"
+          class="grid size-6 place-items-center rounded-button-md text-fg-3 opacity-0 transition hover:bg-surface hover:text-danger group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:size-9 pointer-coarse:opacity-100"
         >
           <Trash2 class="size-3.5" />
         </button>

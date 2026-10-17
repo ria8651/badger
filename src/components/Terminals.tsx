@@ -30,7 +30,7 @@ export function TerminalButton(props: { ws: Ws; cwd: string }) {
       type="button"
       onClick={() => togglePanels(props.ws, props.cwd)}
       title={`${open() ? 'Hide' : 'Show'} terminals (${LEADER} P)`}
-      class={`flex h-7 items-center gap-1 rounded-md px-2 text-xs tabular-nums transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 ${
+      class={`flex h-7 items-center gap-1 rounded-button-md px-2 text-xs tabular-nums transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 ${
         open() ? 'bg-surface text-fg-2' : 'text-fg-3'
       }`}
     >
@@ -115,7 +115,7 @@ export function RenameTerminal(props: { terminal: TerminalInfo; onDone: () => vo
       }}
       onBlur={(e) => finish(e.currentTarget.value)}
       onPointerDown={(e) => e.stopPropagation()}
-      class={`min-w-0 rounded bg-bg px-1 text-fg ring-1 ring-edge outline-none placeholder:text-fg-3 pointer-coarse:text-base ${props.class ?? ''}`}
+      class={`min-w-0 rounded-sm bg-bg px-1 text-fg ring-1 ring-edge outline-none placeholder:text-fg-3 pointer-coarse:text-base ${props.class ?? ''}`}
     />
   )
 }
@@ -148,7 +148,7 @@ export function TerminalPage(props: { id: string; onClosed: () => void }) {
       >
         {(t) => (
           <>
-            <div class="flex h-12 shrink-0 items-center gap-2 px-5 text-[13px]">
+            <div class="bar flex h-12 shrink-0 items-center gap-2 px-5 text-[13px]">
               <StatusDot terminal={t()} />
               <Show
                 when={renaming()}

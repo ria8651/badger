@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { socket } from '../api.ts'
-import { isDark, palette } from '../theme.ts'
+import { palette, type Palette } from '../theme.ts'
 
 /** ANSI colours tuned to sit on the palette in index.css; the rest of the theme comes from its variables. */
 const ANSI = {
@@ -16,7 +16,13 @@ const ANSI = {
     black: '#45443f', red: '#e26d5f', green: '#7cb08a', yellow: '#d9b866', blue: '#7aa2d9', magenta: '#c597d0', cyan: '#6fb8bb', white: '#c9c7c2',
     brightBlack: '#6f6d68', brightRed: '#f08a7d', brightGreen: '#95c7a2', brightYellow: '#ebcb82', brightBlue: '#97b9e6', brightMagenta: '#d6b0df', brightCyan: '#8dcfd1', brightWhite: '#e9e7e2',
   },
+  // Phosphor-bright, so colour output still reads on green-on-black.
+  terminal: {
+    black: '#24502f', red: '#ff5f4f', green: '#6bff8f', yellow: '#ffb000', blue: '#5fafff', magenta: '#e07cff', cyan: '#5fffd7', white: '#45c867',
+    brightBlack: '#2f8a49', brightRed: '#ff8a7d', brightGreen: '#b4ffc6', brightYellow: '#ffd060', brightBlue: '#8cc8ff', brightMagenta: '#eda6ff', brightCyan: '#9dffe6', brightWhite: '#d8ffe2',
+  },
 }
+const ansi: Record<Palette, ITheme> = { light: ANSI.light, dark: ANSI.dark, black: ANSI.dark, terminal: ANSI.terminal, oms: ANSI.light, win95: ANSI.light }
 
 function theme(): ITheme {
   const css = getComputedStyle(document.documentElement)
@@ -30,7 +36,7 @@ function theme(): ITheme {
     selectionBackground: v('accent') + '40',
     scrollbarSliderBackground: v('fg-3') + '4d',
     scrollbarSliderHoverBackground: v('fg-3') + '80',
-    ...(isDark() ? ANSI.dark : ANSI.light),
+    ...ansi[palette()],
   }
 }
 

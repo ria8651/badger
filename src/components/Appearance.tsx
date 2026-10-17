@@ -1,9 +1,20 @@
 import { For, Show } from 'solid-js'
 import { FRAMES, PALETTES, setTheme, themeChoice, type Frame, type Mode, type Palette } from '../theme.ts'
 
-/** Settings' theme picker: a tile per palette and frame, each drawn in its own theme. */
+/**
+ * Settings' theme picker: a section per frame with a tile per everyday palette
+ * in it, then the fun ones, which bring their own frame. Each tile is drawn in its own theme.
+ */
 export function Appearance() {
-  const modes: { id: Mode; label: string }[] = [...PALETTES, { id: 'system', label: 'System' }]
+  const everyday: { id: Mode; label: string }[] = [...PALETTES.filter((p) => !p.frame), { id: 'system', label: 'System' }]
+  const sections = [
+    ...FRAMES.map((frame) => ({ ...frame, themes: everyday.map((mode) => ({ mode: mode.id, frame: frame.id, label: mode.label })) })),
+    {
+      label: 'Fun',
+      description: 'A whole look, frame and all',
+      themes: PALETTES.flatMap((p) => (p.frame ? [{ mode: p.id as Mode, frame: p.frame, label: p.label }] : [])),
+    },
+  ]
   const selected = (mode: Mode, frame: Frame) => themeChoice().mode === mode && themeChoice().frame === frame
 
   return (
@@ -11,33 +22,33 @@ export function Appearance() {
       <h3 class="text-sm font-medium text-fg">Theme</h3>
       <p class="mt-1 text-[13px] leading-relaxed text-fg-2">Saved in this browser, so a phone and a laptop can each have their own.</p>
 
-      <For each={FRAMES}>
-        {(frame) => (
+      <For each={sections}>
+        {(section) => (
           <div class="mt-5">
             <div class="mb-2 flex items-baseline gap-2 text-[13px]">
-              <span class="font-medium text-fg">{frame.label}</span>
-              <span class="text-fg-3">{frame.description}</span>
+              <span class="font-medium text-fg">{section.label}</span>
+              <span class="text-fg-3">{section.description}</span>
             </div>
             <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <For each={modes}>
-                {(mode) => (
+              <For each={section.themes}>
+                {(theme) => (
                   <button
                     type="button"
-                    aria-pressed={selected(mode.id, frame.id)}
-                    onClick={() => setTheme({ mode: mode.id, frame: frame.id })}
+                    aria-pressed={selected(theme.mode, theme.frame)}
+                    onClick={() => setTheme({ mode: theme.mode, frame: theme.frame })}
                     class="group text-left"
                   >
                     <div
                       class={`relative aspect-[8/5] overflow-hidden rounded-lg ring-offset-2 ring-offset-bg transition-shadow ${
-                        selected(mode.id, frame.id) ? 'ring-2 ring-fg-2' : 'ring-1 ring-line group-hover:ring-edge'
+                        selected(theme.mode, theme.frame) ? 'ring-2 ring-fg-2' : 'ring-1 ring-line group-hover:ring-edge'
                       }`}
                     >
-                      <Show when={mode.id === 'system'} fallback={<Preview palette={mode.id as Palette} frame={frame.id} />}>
-                        <Preview palette="light" frame={frame.id} />
-                        <Preview palette="dark" frame={frame.id} class="[clip-path:polygon(100%_0,100%_100%,0_100%)]" />
+                      <Show when={theme.mode === 'system'} fallback={<Preview palette={theme.mode as Palette} frame={theme.frame} />}>
+                        <Preview palette="light" frame={theme.frame} />
+                        <Preview palette="dark" frame={theme.frame} class="[clip-path:polygon(100%_0,100%_100%,0_100%)]" />
                       </Show>
                     </div>
-                    <div class={`mt-1.5 text-[13px] ${selected(mode.id, frame.id) ? 'text-fg' : 'text-fg-2 group-hover:text-fg'}`}>{mode.label}</div>
+                    <div class={`mt-1.5 text-[13px] ${selected(theme.mode, theme.frame) ? 'text-fg' : 'text-fg-2 group-hover:text-fg'}`}>{theme.label}</div>
                   </button>
                 )}
               </For>
@@ -66,7 +77,7 @@ function Preview(props: { palette: Palette; frame: Frame; class?: string }) {
       class={`absolute inset-0 flex bg-canvas ${props.class ?? ''}`}
       style={{ gap: 'max(1px, var(--pane-gutter) / 2)', padding: 'calc(var(--pane-margin) / 2)' }}
     >
-      <div class="pane flex w-[28%] shrink-0 flex-col gap-1.5 p-1.5" style={tile}>
+      <div class="pane sidebar relative z-10 flex w-[28%] shrink-0 flex-col gap-1.5 p-1.5" style={tile}>
         <div class="mb-0.5 flex items-center gap-1">
           <div class="size-1.5 rounded-full bg-accent" />
           {bar('45%', 'bg-fg')}
@@ -77,11 +88,14 @@ function Preview(props: { palette: Palette; frame: Frame; class?: string }) {
         <div class="px-1">{bar('40%')}</div>
       </div>
       <div class="pane flex min-w-0 flex-1 flex-col gap-1.5 p-1.5" style={tile}>
+        <div class="bar -mx-1.5 -mt-1.5 px-1.5 py-1">{bar('35%', 'bg-fg')}</div>
         <div class="ml-auto w-[55%] rounded-sm bg-surface px-1 py-[3px]">{bar('80%', 'bg-fg-2')}</div>
         {bar('85%', 'bg-fg-2')}
         {bar('70%', 'bg-fg-2')}
         {bar('50%', 'bg-fg-2')}
-        <div class="mt-auto h-3 rounded-sm border border-edge" />
+        <div class="mt-auto flex h-3 items-center justify-end rounded-sm border border-edge px-0.5">
+          <div class="size-1.5 rounded-full bg-primary" />
+        </div>
       </div>
       <div class="pane flex w-[30%] shrink-0 flex-col gap-1 p-1.5" style={tile}>
         {bar('60%', 'bg-ok')}
@@ -89,6 +103,7 @@ function Preview(props: { palette: Palette; frame: Frame; class?: string }) {
         {bar('45%')}
         {bar('70%', 'bg-danger')}
       </div>
+      <div class="pointer-events-none absolute inset-0" style={{ background: 'var(--screen)' }} />
     </div>
   )
 }

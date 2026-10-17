@@ -194,10 +194,10 @@ export function ChatHeader(props: {
       .join('\n')
   }
 
-  const button = 'flex h-7 items-center gap-1 rounded-md px-2 text-xs transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9'
+  const button = 'flex h-7 items-center gap-1 rounded-button-md px-2 text-xs transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9'
 
   return (
-    <div class="flex h-10 shrink-0 items-center gap-2 border-b border-line px-3 text-[13px] md:h-11 md:px-4">
+    <div class="bar relative z-10 flex h-10 shrink-0 items-center gap-2 border-b border-line shadow-(--shadow-bar) px-3 text-[13px] md:h-12 md:px-4">
       <Show when={props.session}>
         {(s) => (
           <>
@@ -269,7 +269,7 @@ export function ChatHeader(props: {
                         : `Publish to ${g().remote}`
                       : `Fast-forward from ${g().upstream}`
                   }
-                  class="flex h-6 shrink-0 items-center rounded-md border border-edge px-2 text-xs text-fg transition-colors hover:bg-surface disabled:opacity-60 pointer-coarse:h-8"
+                  class="flex h-6 shrink-0 items-center rounded-button-md border border-button-edge shadow-(--shadow-control) px-2 text-xs text-fg transition-colors hover:bg-surface disabled:opacity-60 pointer-coarse:h-8"
                 >
                   {busy() === 'push'
                     ? 'Pushing…'

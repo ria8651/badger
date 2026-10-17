@@ -46,14 +46,14 @@ export function Crashes() {
     void navigator.clipboard.writeText(crashes().map((c) => `${c.stack ?? c.message}${c.count > 1 ? `\n(${c.count} times)` : ''}`).join('\n\n'))
   return (
     <Show when={crashes().length}>
-      <div class="fixed right-4 bottom-4 z-50 w-96 max-w-[calc(100vw-2rem)] animate-[pop-in_120ms_ease-out] rounded-2xl border border-danger/40 bg-bg p-4 text-[13px] shadow-[0_12px_32px_-12px_rgb(0_0_0/0.35)]">
+      <div class="fixed right-4 bottom-4 z-50 w-96 max-w-[calc(100vw-2rem)] animate-[pop-in_120ms_ease-out] rounded-2xl border border-danger/40 bg-bg p-4 text-[13px] pop shadow-(--shadow-pop)">
         <div class="flex items-start gap-2.5">
           <TriangleAlert class="mt-0.5 size-4 shrink-0 text-danger" />
           <div class="min-w-0 flex-1">
             <p class="font-medium">Something broke in this page</p>
             <p class="mt-0.5 text-xs text-fg-3">What’s on screen may be out of date until you reload.</p>
           </div>
-          <button onClick={() => setCrashes([])} title="Dismiss" class="grid size-6 shrink-0 place-items-center rounded text-fg-3 transition-colors hover:text-fg">
+          <button onClick={() => setCrashes([])} title="Dismiss" class="grid size-6 shrink-0 place-items-center rounded-button-sm text-fg-3 transition-colors hover:text-fg">
             <X class="size-3.5" />
           </button>
         </div>

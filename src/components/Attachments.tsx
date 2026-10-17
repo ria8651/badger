@@ -88,7 +88,7 @@ export function Attachments(props: {
                   type="button"
                   title="Remove"
                   onClick={() => props.onRemoveImage!(i())}
-                  class="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full border border-edge bg-bg text-fg-3 hover:text-fg"
+                  class="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-button-round border border-edge bg-bg text-fg-3 hover:text-fg"
                 >
                   <X class="size-3" />
                 </button>
