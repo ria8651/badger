@@ -74,6 +74,7 @@ export interface LiveSnapshot {
   messages: WireMessage[]
   running: boolean
   makingWorktree: boolean
+  compacting?: number
   mode: PermissionMode
   model?: string
   cwd: string
@@ -394,6 +395,7 @@ export const RUNNER_REPLIES = {
       messages: z.array(z.looseObject({ type: z.string() })),
       running: z.boolean(),
       makingWorktree: z.boolean(),
+      compacting: z.number().optional(),
       mode: z.enum(['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions']),
       model: z.string().optional(),
       cwd: z.string(),

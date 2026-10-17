@@ -10,7 +10,7 @@ import { cardWorktreeName, isScratch, worktreeOf } from '../folders.ts'
 import { FileBrowser } from './FileBrowser.tsx'
 import { FolderPicker } from './FolderPicker.tsx'
 import { ForkDialog } from './ForkDialog.tsx'
-import { openView, planView, viewKey, viewShown, wide } from '../layout.ts'
+import { openTerminal, openView, planView, viewKey, viewShown, wide } from '../layout.ts'
 import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
 import { workspaceOf, type Ws } from '../terminals.ts'
 import { Checking, ChildChats, createChat } from '../useChat.ts'
@@ -468,6 +468,18 @@ export function Chat(props: {
                         cwd={cwd()}
                         children={state.children}
                         onFork={setForking}
+                        compacting={state.compacting}
+                        onLogin={() => {
+                          const w = ws()
+                          const dir = cwd()
+                          if (w && dir) void openTerminal(w, dir, undefined, 'claude auth login')
+                        }}
+                        onRetry={(retry) =>
+                          void api.fork(props.sessionId, { at: retry.at, draft: retry.text }).then(
+                            ({ sessionId }) => openChat(sessionId),
+                            (err: Error) => alert(`Couldn't fork the chat: ${err.message}`),
+                          )
+                        }
                       />
                     </Checking.Provider>
                   </ChildChats.Provider>

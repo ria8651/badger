@@ -339,8 +339,29 @@ function takeLines(batch: TranscriptLines) {
   // Chats sort by this, so one from the future would sit at the top of the sidebar for good.
   batch.mtime = Math.min(batch.mtime, Date.now())
   const result = store.transaction(() => transcripts.append(batch))
-  if (result.bytes === batch.bytes && (batch.lines.length || batch.reset)) transcriptChanged(batch.sessionId, !!batch.more, !batch.subpath && batch.fromLine === 0)
+  if (result.bytes === batch.bytes && (batch.lines.length || batch.reset)) {
+    transcriptChanged(batch.sessionId, !!batch.more, !batch.subpath && batch.fromLine === 0)
+    if (!batch.subpath) sendLiveContext(batch)
+  }
   return result
+}
+
+/** Context in a live chat's new lines that its process doesn't send, e.g. CLAUDE.md files loaded; history has it for everyone else. */
+function sendLiveContext(batch: TranscriptLines): void {
+  if (!machines.live(batch.sessionId) || !viewers.get(batch.sessionId)?.size) return
+  const lines = batch.lines.filter((l) => l.includes('"attachment"') || l.includes('"isMeta":true'))
+  if (!lines.length) return
+  const uuids = new Set(
+    lines.flatMap((l) => {
+      try {
+        const uuid = (JSON.parse(l) as { uuid?: unknown }).uuid
+        return typeof uuid === 'string' ? [uuid] : []
+      } catch {
+        return []
+      }
+    }),
+  )
+  for (const message of transcripts.liveContext(batch.sessionId, uuids)) broadcast({ type: 'message', sessionId: batch.sessionId, message })
 }
 
 const listChanged = debounced(sessionsChanged, 1000)
@@ -774,8 +795,9 @@ async function sessionsApi(method: string, path: string, req: IncomingMessage): 
  * first message. Files stay where they are. The copy is made here, so the
  * chat's own machine needn't be online, and written on the one it goes to.
  */
-async function forkChat(id: string, body: { at?: unknown; machine?: unknown; cwd?: unknown; worktree?: unknown }) {
+async function forkChat(id: string, body: { at?: unknown; machine?: unknown; cwd?: unknown; worktree?: unknown; draft?: unknown }) {
   if (body.at !== undefined && typeof body.at !== 'string') throw new BadRequest('at must be a message id')
+  if (body.draft !== undefined && typeof body.draft !== 'string') throw new BadRequest('draft must be a string')
   if (body.worktree !== undefined && typeof body.worktree !== 'string') throw new BadRequest('worktree must be a string')
   const info = await transcripts.info(id)
   const fromMachine = machines.machineOf(id)
@@ -794,9 +816,12 @@ async function forkChat(id: string, body: { at?: unknown; machine?: unknown; cwd
     ? renderMoveNote({ from: { machine: machines.name(fromMachine), cwd: fromCwd }, to: { machine: runner.name, cwd, worktree: worktree !== undefined || undefined } })
     : undefined
   const card = store.cards().find((c) => c.sessionIds.includes(id))
+  const draft = body.draft
   store.transaction(() => {
     machines.assign(fork.sessionId, runner.id)
     store.addFork({ sessionId: fork.sessionId, sourceId: id, cwd, worktree, note })
+    // e.g. the message to edit and send again.
+    if (draft) store.setDraft(fork.sessionId, { text: draft })
   })
   try {
     for (const file of fork.files) await runner.peer.remote.importTranscript(fork.sessionId, cwd, file)

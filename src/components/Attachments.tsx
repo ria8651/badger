@@ -1,4 +1,4 @@
-import { For, Show, createSignal } from 'solid-js'
+import { For, Show, createSignal, type Component, type JSX } from 'solid-js'
 import { Columns3, FileText, GitFork, X } from '../icons'
 import type { CardContext } from '../../shared/cardContext.ts'
 import type { Move, Place } from '../../shared/forkNote.ts'
@@ -10,9 +10,9 @@ import { viewImages } from './ImageViewer.tsx'
 import { plural } from './ui.tsx'
 
 /**
- * Images as thumbnails, and big pastes and the card Claude was told about as
- * chips. Clicking a paste or the card shows its text underneath; clicking an
- * image opens the viewer.
+ * Images as thumbnails, and big pastes, the card and other context Claude was
+ * given with the prompt as chips. Clicking a chip shows what it holds
+ * underneath; clicking an image opens the viewer.
  */
 export function Attachments(props: {
   pastes: string[]
@@ -20,11 +20,17 @@ export function Attachments(props: {
   card?: CardContext
   /** Where a fork moved to, as Claude was told. */
   move?: Move
+  /** Other context that went in with it, e.g. a skill's instructions or the CLAUDE.md files loaded. */
+  context?: ContextChip[]
   onRemovePaste?: (index: number) => void
   onRemoveImage?: (index: number) => void
   class?: string
 }) {
-  const [open, setOpen] = createSignal<number | 'card' | 'move'>()
+  const [open, setOpen] = createSignal<number | 'card' | 'move' | { context: number }>()
+  const openContext = () => {
+    const o = open()
+    return typeof o === 'object' ? props.context?.[o.context] : undefined
+  }
   const openText = () => {
     const i = open()
     return typeof i === 'number' ? props.pastes[i] : undefined
@@ -77,6 +83,25 @@ export function Attachments(props: {
             </button>
           )}
         </Show>
+        <For each={props.context}>
+          {(c, i) => {
+            const shown = () => openContext() === c
+            return (
+              <button
+                type="button"
+                title={c.label}
+                class={`${chip} max-w-72 gap-1.5 px-2.5 ${shown() ? 'border-fg-3' : 'border-edge'} ${c.danger ? 'text-danger' : shown() ? 'text-fg-2' : 'text-fg-3 hover:text-fg-2'}`}
+                onClick={() => setOpen(shown() ? undefined : { context: i() })}
+              >
+                <c.icon class="size-3.5 shrink-0" />
+                <span class="min-w-0 truncate">{c.label}</span>
+                <Show when={c.meta}>
+                  <span class="shrink-0 tabular-nums opacity-70">{c.meta}</span>
+                </Show>
+              </button>
+            )
+          }}
+        </For>
         <For each={props.images}>
           {(image, i) => (
             <div class="group relative">
@@ -120,6 +145,9 @@ export function Attachments(props: {
           </pre>
         )}
       </Show>
+      <Show when={openContext()}>
+        {(c) => <div class="mt-2 max-h-80 overflow-auto rounded-lg border border-edge px-3 py-2.5 text-[13px] text-fg-2">{c().body()}</div>}
+      </Show>
       <Show when={open() === 'card' && props.card?.card}>
         {(card) => (
           <div class="mt-2 max-h-80 overflow-auto rounded-lg border border-edge px-3 py-2.5 text-[13px] text-fg-2">
@@ -155,5 +183,15 @@ export function Attachments(props: {
 }
 
 const chip = 'flex h-7 items-center rounded-lg border text-xs transition-colors'
+
+/** Context that went in with a prompt, as a chip that opens to `body`. */
+export interface ContextChip {
+  icon: Component<{ class?: string }>
+  label: string
+  meta?: string
+  /** It's about something that failed, e.g. a hook. */
+  danger?: boolean
+  body: () => JSX.Element
+}
 
 const place = (p: Place) => `${p.worktree ? 'a new worktree of ' : ''}${p.cwd} on ${p.machine}`

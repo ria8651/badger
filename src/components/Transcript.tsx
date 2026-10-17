@@ -1,6 +1,6 @@
 import { For, Show, createContext, createMemo, createSignal, onCleanup, useContext, type Accessor, type JSX } from 'solid-js'
 import { unwrap } from 'solid-js/store'
-import { Columns3, Shield } from '../icons'
+import { BookOpen, ChevronRight, CircleAlert, Columns3, FileText, KeyRound, Repeat2, Scissors, Shield, ShieldAlert, Webhook } from '../icons'
 import { parseCardContext, type CardContext } from '../../shared/cardContext.ts'
 import { splitMoveNote, type Move } from '../../shared/forkNote.ts'
 import { unwrapPaste } from '../../shared/pastes.ts'
@@ -11,8 +11,9 @@ import { collectTasks, type Task } from '../tasks.ts'
 import { ChildChats, useChecking, type Partial } from '../useChat.ts'
 import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
-import { Disclosure, Pre, ToolBody, ToolCard, resultText, toolLabel, toolSummary, type ToolResult } from './ToolCard.tsx'
-import { Attachments } from './Attachments.tsx'
+import { Disclosure, Pre, ToolBody, ToolCard, resultText, splitSkill, toolLabel, toolSummary, type ToolContext, type ToolResult } from './ToolCard.tsx'
+import { Attachments, type ContextChip } from './Attachments.tsx'
+import { basename } from '../folders.ts'
 import { LiveDot, compact, plural } from './ui.tsx'
 
 type Block = { type: string; text?: string; thinking?: string; id?: string; name?: string; input?: Record<string, unknown> }
@@ -24,9 +25,26 @@ type Item =
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; id: string; name: string; input: Record<string, unknown> }
   | { kind: 'result'; ok: boolean; seconds: number; tokens?: { input: number; output: number }; endedAt?: number; error?: string }
-  | { kind: 'divider'; text: string }
+  | { kind: 'compact'; trigger?: string; preTokens?: number; postTokens?: number; seconds?: number }
   /** What Badger told Claude with a prompt: its card, and where a fork moved to. */
   | { kind: 'card'; context?: CardContext; move?: Move }
+  /** Other context that went in with a prompt; `anchor` is the message it came after, if known. */
+  | { kind: 'chip'; chip: Chip; anchor?: string }
+  /** What a built-in command like /cost printed. */
+  | { kind: 'output'; text: string }
+  /** Something Claude Code did to the conversation, said where it happened. */
+  | { kind: 'notice'; tone: 'cut' | 'safety' | 'compact_failed'; text: string }
+  /** Another model answered because the chosen one refused. `refused` is the prompt it refused. */
+  | { kind: 'fallback'; from?: string; to?: string; content: string; refused?: string }
+  /** An error from the API (or Claude Code) in place of Claude's reply. */
+  | { kind: 'api_error'; error: string; text: string }
+
+/** Context that went in with a prompt, as its chip shows it. */
+type Chip =
+  | { type: 'skill'; text: string }
+  | { type: 'instructions'; files: { path: string; type?: string; content: string }[] }
+  | { type: 'hook'; hook?: string; text: string }
+  | { type: 'hook_error'; hook?: string; command?: string; error: string }
 
 /** A stretch of Claude's work folded into one row, in result-only mode. */
 type Work = { kind: 'work' }
@@ -60,12 +78,26 @@ function messageItems(m: WireMessage): Item[] {
   if (m.type === 'user') {
     const sent = sentToSubagent(m)
     if (sent) return [{ kind: 'user', text: sent }]
+    // Shown in the compaction's divider.
+    if (m.isCompactSummary) return []
+    const raw = plainText(m)
+    if (raw.startsWith('Your response above was cut off')) return [{ kind: 'notice', tone: 'cut', text: 'Reply cut off; Claude was asked to carry on' }]
+    if (raw.startsWith('Your response above was stopped by a safety classifier'))
+      return [{ kind: 'notice', tone: 'safety', text: 'A safety check stopped the reply; Claude was asked to try another way' }]
     if (m.isMeta || m.isSynthetic) return []
+    // The turn's last line says it was interrupted.
+    if (raw.startsWith('[Request interrupted by user')) return []
+    const output = commandOutput(raw)
+    if (output !== undefined) return output ? [{ kind: 'output', text: output }] : []
     const { text, pastes, images } = userText(m)
     return text || pastes.length || images.length ? [{ kind: 'user', text, pastes, images }] : []
   }
   if (m.type === 'assistant') {
     const content = ((m.message as { content?: Block[] })?.content ?? []) as Block[]
+    const said = content.flatMap((b) => (b.type === 'text' && b.text?.trim() ? [b.text] : [])).join('\n')
+    if (m.isApiErrorMessage || m.error) return [{ kind: 'api_error', error: String(m.error ?? 'unknown'), text: said }]
+    // Not Claude: a built-in command's output, live. (After a reload it's a local_command message.)
+    if ((m.message as { model?: string })?.model === '<synthetic>') return said ? [{ kind: 'output', text: said }] : []
     const items: Item[] = []
     for (const b of content) {
       if (b.type === 'text' && b.text?.trim()) items.push({ kind: 'text', text: b.text })
@@ -91,14 +123,49 @@ function messageItems(m: WireMessage): Item[] {
       },
     ]
   }
+  // Context about a call shows with the call (see buildIndex).
+  if (m.tool_use_id) return []
+  const anchor = typeof m.anchor === 'string' ? m.anchor : undefined
   if (m.type === 'hook_context') {
-    // Other hooks' context isn't Badger's to show.
+    // Badger's own: the card, and where a fork moved to.
     const { move, rest } = splitMoveNote(String(m.text ?? ''))
     const context = rest ? parseCardContext(rest) : undefined
-    return context || move ? [{ kind: 'card', context, move }] : []
+    if (context || move) return [{ kind: 'card', context, move }]
+    return rest.trim() ? [{ kind: 'chip', anchor, chip: { type: 'hook', hook: str(m.hook), text: rest } }] : []
   }
-  if (m.type === 'system' && m.subtype === 'compact_boundary') return [{ kind: 'divider', text: 'Conversation compacted' }]
+  if (m.type === 'hook_error') return [{ kind: 'chip', anchor, chip: { type: 'hook_error', hook: str(m.hook), command: str(m.command), error: String(m.error ?? '') } }]
+  if (m.type === 'instructions' && Array.isArray(m.files) && m.files.length) return [{ kind: 'chip', anchor, chip: { type: 'instructions', files: m.files } }]
+  if (m.type === 'skill') return [{ kind: 'chip', anchor, chip: { type: 'skill', text: String(m.text ?? '') } }]
+  if (m.type === 'compact_failed') return [{ kind: 'notice', tone: 'compact_failed', text: `Couldn’t compact the conversation${m.error ? `: ${m.error}` : ''}` }]
+  if (m.type !== 'system') return []
+  if (m.subtype === 'compact_boundary') {
+    // Live, Claude Code says how big the context is after; the transcript doesn't keep that.
+    const meta = (m.compact_metadata ?? {}) as { trigger?: string; pre_tokens?: number; post_tokens?: number; duration_ms?: number }
+    const seconds = meta.duration_ms === undefined ? undefined : Math.round(meta.duration_ms / 1000)
+    return [{ kind: 'compact', trigger: meta.trigger, preTokens: meta.pre_tokens, postTokens: meta.post_tokens, seconds }]
+  }
+  if (m.subtype === 'local_command') {
+    const output = commandOutput(String(m.content ?? ''))
+    return output ? [{ kind: 'output', text: output }] : []
+  }
+  if (m.subtype === 'model_refusal_fallback')
+    return [{ kind: 'fallback', from: str(m.original_model), to: str(m.fallback_model), content: String(m.content ?? ''), refused: str(m.refused_user_message_uuid) }]
   return []
+}
+
+const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
+
+/** A user message's text, its blocks joined. */
+function plainText(m: WireMessage): string {
+  const content = (m.message as { content?: unknown })?.content
+  if (typeof content === 'string') return content
+  return Array.isArray(content) ? (content as ContentBlock[]).map((b) => (b.type === 'text' ? (b.text ?? '') : '')).join('\n') : ''
+}
+
+/** What a built-in command printed, from the tags Claude Code wraps it in; undefined for any other text. */
+function commandOutput(text: string): string | undefined {
+  const m = text.trim().match(/^<local-command-(stdout|stderr)>([\s\S]*)<\/local-command-\1>$/)
+  return m ? m[2].trim() : undefined
 }
 
 /** What a whole chat's messages say, shared by its transcript, the subagent transcripts nested in it and its task tray. */
@@ -114,6 +181,18 @@ export interface Index {
   parents: Map<string, string>
   /** Tool calls by tool_use_id. */
   uses: Map<string, { name: string; input: Record<string, unknown> }>
+  /** What Claude Code added about calls, by tool_use_id: a Skill call's instructions, hooks' context and failures. */
+  context: Map<string, ToolContext>
+}
+
+/** Adds context about a call to the index's. */
+function collectContext(m: WireMessage, context: Map<string, ToolContext>) {
+  const id = m.tool_use_id as string
+  let c = context.get(id)
+  if (!c) context.set(id, (c = { hooks: [], errors: [] }))
+  if (m.type === 'skill') c.skill = String(m.text ?? '')
+  else if (m.type === 'hook_context') c.hooks.push({ hook: str(m.hook), text: String(m.text ?? '') })
+  else if (m.type === 'hook_error') c.errors.push({ hook: str(m.hook), command: str(m.command), error: String(m.error ?? '') })
 }
 
 /** Whether a tool call was made inside the subagent started by `ancestor`, at any depth. */
@@ -127,7 +206,12 @@ export function buildIndex(messages: WireMessage[], sessionId?: string): Index {
   const results = new Map<string, ToolResult>()
   const parents = new Map<string, string>()
   const uses: Index['uses'] = new Map()
+  const context: Index['context'] = new Map()
   for (const m of messages) {
+    if (typeof m.tool_use_id === 'string' && m.type !== 'system') {
+      collectContext(m, context)
+      continue
+    }
     const parent = (m.parent_tool_use_id as string | null | undefined) ?? ''
     let group = groups.get(parent)
     if (!group) groups.set(parent, (group = []))
@@ -140,7 +224,7 @@ export function buildIndex(messages: WireMessage[], sessionId?: string): Index {
       uses.set(b.id, { name: b.name ?? '?', input: b.input ?? {} })
     }
   }
-  return { sessionId, groups, results, tasks: collectTasks(messages), parents, uses }
+  return { sessionId, groups, results, tasks: collectTasks(messages), parents, uses, context }
 }
 
 const TranscriptIndex = createContext<Accessor<Index>>()
@@ -160,31 +244,109 @@ function buildView(messages: WireMessage[], nested: boolean) {
       lastResult = undefined
     }
   }
-  // Card context goes in with the prompt it was injected for, so it's shown as one of its attachments.
-  const cards = new Map<Item, Extract<Item, { kind: 'card' }>>()
+  // Context goes in with the prompt it was given with, so it's shown as one of its attachments: where it
+  // says it came in, or else (Badger's own, live) right after the prompt.
+  const extras = new Map<Item, PromptExtras>()
   const attached = new Set<Item>()
+  const extrasOf = (prompt: Item) => {
+    let e = extras.get(prompt)
+    if (!e) extras.set(prompt, (e = { chips: [] }))
+    return e
+  }
+  /** The prompt of the turn each message is in, by uuid. */
+  const promptOf = new Map<string, Item>()
+  let turnPrompt: Item | undefined
+  for (const m of messages) {
+    const user = itemsFor(m).find((i) => i.kind === 'user')
+    if (user) turnPrompt = user
+    if (m.uuid && turnPrompt) promptOf.set(m.uuid, turnPrompt)
+  }
   let lastUser: Item | undefined
   // Each turn forks from its last answer: one rebuilt from the transcript says which, a live one follows it.
   const forkAt = new Map<Item, string>()
   let lastAnswer: string | undefined
+  // How each turn ended: stopped by the user, on an error already shown, or answered by another model.
+  const interrupted = new Set<Item>()
+  const shownError = new Set<Item>()
+  const answeredBy = new Map<Item, string>()
+  let interrupt = false
+  let errorShown = false
+  let fallback: string | undefined
+  // Each compaction's summary.
+  const summaries = new Map<Item, string>()
+  let compaction: Item | undefined
   for (const m of messages) {
     const items = itemsFor(m)
-    if (m.type === 'hook_context') {
-      if (lastUser && items[0]?.kind === 'card') {
-        cards.set(lastUser, items[0])
-        attached.add(items[0])
+    const first = items[0]
+    if (first?.kind === 'card' || first?.kind === 'chip') {
+      const anchor = typeof m.anchor === 'string' ? m.anchor : undefined
+      const prompt = (anchor && promptOf.get(anchor)) || lastUser
+      if (prompt) {
+        const e = extrasOf(prompt)
+        if (first.kind === 'card') {
+          e.card = first.context ?? e.card
+          e.move = first.move ?? e.move
+        } else addChip(e.chips, first.chip)
+        attached.add(first)
       }
     } else if (m.type === 'user' || m.type === 'assistant' || m.type === 'result') lastUser = items.find((i) => i.kind === 'user')
     if (m.type === 'assistant' && m.uuid) lastAnswer = m.uuid
-    if (m.type === 'result' && items[0]) {
+    if (m.type === 'user' && plainText(m).startsWith('[Request interrupted by user')) interrupt = true
+    if (first?.kind === 'api_error') errorShown = true
+    if (first?.kind === 'fallback') fallback = first.to
+    if (first?.kind === 'compact') compaction = first
+    if (compaction && m.isCompactSummary) {
+      summaries.set(compaction, plainText(m))
+      compaction = undefined
+    }
+    if (m.type === 'result' && first) {
       const at = typeof m.after_uuid === 'string' ? m.after_uuid : lastAnswer
-      if (at) forkAt.set(items[0], at)
+      if (at) forkAt.set(first, at)
+      if (interrupt) interrupted.add(first)
+      if (errorShown) shownError.add(first)
+      if (fallback) answeredBy.set(first, fallback)
+      interrupt = errorShown = false
+      fallback = undefined
     }
   }
-  const items = messages.flatMap(itemsFor).filter((i) => !attached.has(i))
+  // A refused reply is withdrawn when another model answers instead.
+  const retracted = new Set(messages.flatMap((m) => (m.subtype === 'model_refusal_fallback' && Array.isArray(m.retracted_message_uuids) ? m.retracted_message_uuids : [])))
+  let items = messages
+    .filter((m) => !retracted.has(m.uuid))
+    .flatMap(itemsFor)
+    .filter((i) => !attached.has(i))
+  items = tidyCompactions(items)
   // A subagent's prompt is shown with the call that started it; only messages sent to it later stay.
   const prompt = nested ? items.find((i) => i.kind === 'user') : undefined
-  return { items: prompt ? items.filter((i) => i !== prompt) : items, idleUntil, cards, forkAt }
+  return { items: prompt ? items.filter((i) => i !== prompt) : items, idleUntil, extras, forkAt, interrupted, shownError, answeredBy, summaries }
+}
+
+/** What went in with a prompt besides what the user typed. */
+interface PromptExtras {
+  card?: CardContext
+  move?: Move
+  chips: Chip[]
+}
+
+/** CLAUDE.md files loaded for one prompt make one chip, however many times they came in. */
+function addChip(chips: Chip[], chip: Chip) {
+  const files = chip.type === 'instructions' && chips.find((c) => c.type === 'instructions')
+  if (files && chip.type === 'instructions') files.files.push(...chip.files.filter((f) => !files.files.some((g) => g.path === f.path)))
+  else if (!chips.some((c) => JSON.stringify(c) === JSON.stringify(chip))) chips.push(chip)
+}
+
+/**
+ * After a reload, a /compact the user typed comes after the compaction it
+ * started (Claude Code saves it once it's done), and its "Compacted" output
+ * says what the divider does. The command goes first, as it was sent; the output goes.
+ */
+function tidyCompactions(items: Item[]): Item[] {
+  const out = items.filter((i, n) => !(i.kind === 'output' && /^Compacted\b/.test(i.text) && items.slice(0, n).some((j) => j.kind === 'compact')))
+  for (let i = 0; i < out.length; i++) {
+    const next = out[i + 1]
+    if (out[i].kind === 'compact' && next?.kind === 'user' && /^\/compact\b/.test(next.text)) [out[i], out[i + 1]] = [next, out[i]]
+  }
+  return out
 }
 
 const isWork = (i: Item) => i.kind === 'text' || i.kind === 'thinking' || i.kind === 'tool'
@@ -261,7 +423,10 @@ function userText(m: WireMessage): { text: string; pastes: string[]; images: Sho
   }
   const raw = typed.join('\n')
   const command = raw.match(/<command-name>(.*?)<\/command-name>/)
-  if (command) return { text: command[1], pastes, images }
+  if (command) {
+    const args = raw.match(/<command-args>([\s\S]*?)<\/command-args>/)?.[1].trim()
+    return { text: args ? `${command[1]} ${args}` : command[1], pastes, images }
+  }
   // Harness-injected content (system reminders, command output) is wrapped in tags.
   if (raw.trimStart().startsWith('<')) return { text: '', pastes, images }
   return { text: raw, pastes, images }
@@ -279,6 +444,12 @@ type TranscriptProps = {
   children?: Record<string, string>
   /** Given, each turn offers to fork the chat from its end, the id of its last message. */
   onFork?: (at: string) => void
+  /** When Claude Code started compacting the conversation, while it is. */
+  compacting?: number
+  /** Given, an expired login offers to log in again. */
+  onLogin?: () => void
+  /** Given, a prompt one model refused and another answered offers to fork from just before it, with its text to edit and send again. */
+  onRetry?: (retry: { at: string; text: string }) => void
 }
 
 /** Index a chat's messages. Tracks the array and its length, then walks the raw objects so the cache keys are stable. */
@@ -371,8 +542,9 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
             text={item.text}
             pastes={item.pastes}
             images={item.images}
-            card={view().cards.get(item)?.context}
-            move={view().cards.get(item)?.move}
+            card={view().extras.get(item)?.card}
+            move={view().extras.get(item)?.move}
+            context={view().extras.get(item)?.chips.map(contextChip)}
           />
         )
       case 'text':
@@ -399,16 +571,20 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
             running={props.running}
             cwd={props.cwd}
             task={index().tasks.get(item.id)}
+            context={index().context.get(item.id)}
             onBackground={!props.nested && item.name === 'Bash' && index().sessionId ? () => runInBackground(index().sessionId!, item.id) : undefined}
           />
         )
       }
-      case 'result':
+      case 'result': {
+        // Stopped by the user, or on an error already shown above, isn't news; any other way of stopping is.
+        const quiet = () => item.ok || view().interrupted.has(item) || view().shownError.has(item)
         return (
-          <div class={`mt-4 text-xs tabular-nums ${item.ok ? 'text-fg-3' : 'text-danger'}`}>
-            {item.ok ? '' : `Stopped: ${item.error} · `}
+          <div class={`mt-4 text-xs tabular-nums ${quiet() ? 'text-fg-3' : 'text-danger'}`}>
+            {view().interrupted.has(item) ? 'Interrupted · ' : quiet() ? '' : `Stopped: ${stopReason(item.error)} · `}
             {duration(item.seconds)}
             {item.tokens ? ` · ${compact(item.tokens.input)} in · ${compact(item.tokens.output)} out` : ''}
+            <Show when={view().answeredBy.get(item)}>{(model) => ` · ${modelName(model())}`}</Show>
             <Show when={item.endedAt}>{(at) => <Idle from={at()} until={view().idleUntil.get(item)} />}</Show>
             <Show when={!props.nested && props.onFork && view().forkAt.get(item)}>
               {(at) => (
@@ -427,20 +603,51 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
             </Show>
           </div>
         )
-      case 'divider':
-        return (
-          <div class="my-8 flex items-center gap-3 text-xs text-fg-3">
-            <div class="h-px flex-1 bg-line" />
-            {item.text}
-            <div class="h-px flex-1 bg-line" />
-          </div>
-        )
+      }
+      case 'compact':
+        return <CompactDivider item={item} summary={view().summaries.get(item)} />
       case 'card':
         return (
           <Show when={item.context}>
             {(context) => <CardContextBadge context={context()} />}
           </Show>
         )
+      case 'chip':
+        // Only when there's no prompt to go with, e.g. a hook's context before the first.
+        return (
+          <div class="my-3">
+            <Attachments pastes={[]} images={[]} context={[contextChip(item.chip)]} />
+          </div>
+        )
+      case 'output':
+        return (
+          <div class="my-3 space-y-1.5">
+            <div class="text-xs text-fg-3">Claude Code’s output (Claude sees it too)</div>
+            <Pre text={item.text} />
+          </div>
+        )
+      case 'notice':
+        return (
+          <Notice
+            icon={item.tone === 'cut' ? Scissors : item.tone === 'safety' ? ShieldAlert : CircleAlert}
+            text={item.text}
+            danger={item.tone === 'compact_failed'}
+          />
+        )
+      case 'fallback': {
+        const retry = props.onRetry && !props.nested ? retryOf(props.messages, item.refused) : undefined
+        return (
+          <Notice
+            icon={Repeat2}
+            text={`${modelName(item.from) ?? 'The model'} declined; ${modelName(item.to) ?? 'another model'} answered instead`}
+            action={retry ? { label: 'Edit and retry', run: () => props.onRetry!(retry) } : undefined}
+          >
+            <p class="whitespace-pre-wrap text-fg-3">{item.content}</p>
+          </Notice>
+        )
+      }
+      case 'api_error':
+        return <ApiError item={item} onLogin={props.nested ? undefined : props.onLogin} />
     }
   }
 
@@ -451,7 +658,7 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
         when={detail() === 'full'}
         fallback={
           // Nothing to fold yet: the turn has just started, or it's only thinking so far.
-          <Show when={props.running && !folded().tail && props.partial?.type !== 'text'}>
+          <Show when={props.running && !props.compacting && !folded().tail && props.partial?.type !== 'text'}>
             <WorkingLine detail={activity([])} />
           </Show>
         }
@@ -463,11 +670,217 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
           <Markdown text={props.partial?.text ?? ''} />
         </div>
       </Show>
-      <Show when={detail() === 'full' && props.working && !props.partial}>
-        <WorkingLine />
+      <Show when={props.compacting} fallback={<Show when={detail() === 'full' && props.working && !props.partial}><WorkingLine /></Show>}>
+        {(since) => <CompactingLine since={since()} tokens={lastContext(props.messages)} />}
       </Show>
     </div>
   )
+}
+
+/** Compacting now: how much is going in, and for how long so far. Claude Code says nothing in between. */
+function CompactingLine(props: { since: number; tokens?: number }) {
+  const [now, setNow] = createSignal(Date.now())
+  const timer = setInterval(() => setNow(Date.now()), 1000)
+  onCleanup(() => clearInterval(timer))
+  return (
+    <div class="my-8 flex items-center gap-3 text-xs text-fg-3">
+      <div class="h-px flex-1 bg-line" />
+      <span class="flex items-center gap-2 tabular-nums">
+        <LiveDot />
+        Compacting{props.tokens ? ` ${compact(props.tokens)} tokens` : ''} · {duration(Math.max(0, Math.round((now() - props.since) / 1000)))}
+      </span>
+      <div class="h-px flex-1 bg-line" />
+    </div>
+  )
+}
+
+/** How full the context was at Claude's last reply, from that call's usage. */
+function lastContext(messages: WireMessage[]): number | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.type !== 'assistant' || m.parent_tool_use_id) continue
+    const tokens = turnTokens((m.message as { usage?: unknown })?.usage)
+    if (tokens?.input) return tokens.input
+  }
+  return undefined
+}
+
+/**
+ * Where the conversation was compacted: how and how much, opening to the
+ * summary Claude carries on from in place of everything above.
+ */
+function CompactDivider(props: { item: Extract<Item, { kind: 'compact' }>; summary?: string }) {
+  const [open, setOpen] = createSignal(false)
+  const label = () => {
+    const how = props.item.trigger === 'manual' ? 'Compacted with /compact' : props.item.trigger === 'auto' ? 'Compacted automatically' : 'Compacted'
+    const size = props.item.preTokens ? `${compact(props.item.preTokens)}${props.item.postTokens ? ` → ${compact(props.item.postTokens)}` : ''} tokens` : ''
+    return [how, size, props.item.seconds ? duration(props.item.seconds) : ''].filter(Boolean).join(' · ')
+  }
+  return (
+    <div class="my-8">
+      <button
+        type="button"
+        disabled={!props.summary}
+        onClick={() => setOpen(!open())}
+        class="flex w-full items-center gap-3 text-xs text-fg-3 enabled:hover:text-fg-2"
+      >
+        <div class="h-px flex-1 bg-line" />
+        <span class="flex items-center gap-1 tabular-nums">
+          {label()}
+          <Show when={props.summary}>
+            <ChevronRight class={`size-3.5 transition-transform ${open() ? 'rotate-90' : ''}`} />
+          </Show>
+        </span>
+        <div class="h-px flex-1 bg-line" />
+      </button>
+      <Show when={open() && props.summary}>
+        {(summary) => (
+          <div class="mt-3 max-h-[32rem] overflow-auto rounded-lg border border-edge px-4 py-3 text-[13px] text-fg-2">
+            <p class="mb-2 text-xs text-fg-3">What Claude carries on from, in place of the conversation above:</p>
+            <Markdown text={summary()} />
+          </div>
+        )}
+      </Show>
+    </div>
+  )
+}
+
+/** Something Claude Code did to the conversation: a quiet line where it happened, opening to its details if it has any. */
+function Notice(props: { icon: typeof Scissors; text: string; danger?: boolean; action?: { label: string; run: () => void }; children?: JSX.Element }) {
+  const [open, setOpen] = createSignal(false)
+  return (
+    <div class="my-3 text-xs">
+      <div class={`flex items-center gap-1.5 ${props.danger ? 'text-danger' : 'text-fg-3'}`}>
+        <props.icon class="size-3.5 shrink-0" />
+        <Show when={props.children} fallback={<span>{props.text}</span>}>
+          <button type="button" class="flex min-w-0 items-center gap-1 text-left hover:text-fg-2" onClick={() => setOpen(!open())}>
+            {props.text}
+            <ChevronRight class={`size-3.5 shrink-0 transition-transform ${open() ? 'rotate-90' : ''}`} />
+          </button>
+        </Show>
+        <Show when={props.action}>
+          {(action) => (
+            <>
+              <span>·</span>
+              <button type="button" onClick={() => action().run()} class="-mx-1 shrink-0 rounded px-1 py-0.5 text-fg-2 transition-colors hover:bg-surface hover:text-fg">
+                {action().label}
+              </button>
+            </>
+          )}
+        </Show>
+      </div>
+      <Show when={open()}>
+        <div class="mt-2 pl-5">{props.children}</div>
+      </Show>
+    </div>
+  )
+}
+
+/** An error in place of Claude's reply, said once, with the fix where Badger can do it. */
+function ApiError(props: { item: Extract<Item, { kind: 'api_error' }>; onLogin?: () => void }) {
+  const login = () => props.item.error === 'authentication_failed'
+  return (
+    <div class="my-4 flex items-start gap-2.5 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2.5 text-[13px]">
+      {login() ? <KeyRound class="mt-0.5 size-4 shrink-0 text-danger" /> : <CircleAlert class="mt-0.5 size-4 shrink-0 text-danger" />}
+      <div class="min-w-0 flex-1">
+        <div class="text-fg">{login() ? 'Claude Code’s login has expired' : props.item.text || 'Claude Code couldn’t reach Claude'}</div>
+        <Show when={login()}>
+          <div class="text-xs text-fg-3">Log in again, then send your message again.</div>
+        </Show>
+      </div>
+      <Show when={login() && props.onLogin}>
+        <button
+          type="button"
+          onClick={() => props.onLogin!()}
+          class="shrink-0 rounded-md border border-edge px-2.5 py-1 text-xs text-fg-2 transition-colors hover:bg-surface hover:text-fg"
+        >
+          Log in in a terminal
+        </button>
+      </Show>
+    </div>
+  )
+}
+
+/** A prompt's context as a chip. */
+function contextChip(chip: Chip): ContextChip {
+  switch (chip.type) {
+    case 'skill': {
+      const { dir, body } = splitSkill(chip.text)
+      return {
+        icon: BookOpen,
+        label: `${dir ? basename(dir) : 'Skill'} skill`,
+        meta: `${compact(body.length)} chars`,
+        body: () => (
+          <>
+            <Show when={dir}>
+              <div class="mb-1.5 font-mono text-xs text-fg-3">{dir}</div>
+            </Show>
+            <Markdown text={body} />
+          </>
+        ),
+      }
+    }
+    case 'instructions': {
+      const names = [...new Set(chip.files.map((f) => (f.type === 'AutoMem' ? 'memory' : basename(f.path))))]
+      return {
+        icon: FileText,
+        label: names.join(', '),
+        meta: chip.files.length > 1 ? plural(chip.files.length, 'file') : undefined,
+        body: () => (
+          <For each={chip.files}>
+            {(f) => (
+              <div class="mb-3 last:mb-0">
+                <div class="mb-1 font-mono text-xs text-fg-3">{f.path}</div>
+                <Markdown text={f.content} />
+              </div>
+            )}
+          </For>
+        ),
+      }
+    }
+    case 'hook':
+      return { icon: Webhook, label: `${chip.hook ?? 'A'} hook`, body: () => <p class="whitespace-pre-wrap">{chip.text}</p> }
+    case 'hook_error':
+      return {
+        icon: CircleAlert,
+        label: `${chip.hook ?? 'A'} hook failed`,
+        danger: true,
+        body: () => (
+          <p class="whitespace-pre-wrap">
+            {chip.command ? <span class="font-mono text-xs">{chip.command}</span> : 'It'} failed
+            {chip.error && chip.error !== 'No stderr output' ? `: ${chip.error}` : ''}. Claude carried on.
+          </p>
+        ),
+      }
+  }
+}
+
+/** Where to fork to send a refused prompt again, edited: Claude's last answer before it. None for the chat's first prompt. */
+function retryOf(messages: WireMessage[], prompt?: string): { at: string; text: string } | undefined {
+  const i = prompt ? messages.findIndex((m) => m.uuid === prompt) : -1
+  if (i < 0) return undefined
+  const at = messages.slice(0, i).findLast((m) => m.type === 'assistant' && !m.parent_tool_use_id && m.uuid)?.uuid
+  return at ? { at, text: userText(messages[i]).text } : undefined
+}
+
+/** Why a turn stopped, from its result's subtype. */
+function stopReason(error?: string): string {
+  switch (error) {
+    case 'error_max_turns':
+      return 'hit the turn limit'
+    case 'error_max_budget_usd':
+      return 'hit the spending limit'
+    case 'error_during_execution':
+      return 'something went wrong'
+    default:
+      return error ?? 'something went wrong'
+  }
+}
+
+/** "Opus 4.8" for claude-opus-4-8, and other ids as they are. */
+function modelName(id?: string): string | undefined {
+  const m = id?.match(/^claude-([a-z]+)-(\d+)-(\d+)(?:-\d{8})?/)
+  return m ? `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}.${m[3]}` : id
 }
 
 /**
@@ -804,6 +1217,8 @@ export function UserMessage(props: {
   card?: CardContext
   /** Where a fork moved to, as Claude was told with this message. */
   move?: Move
+  /** Other context Claude was given with it. */
+  context?: ContextChip[]
   /** Replaces the spacing it has in the transcript. */
   class?: string
   /** How tall it gets before it's clamped. */
@@ -816,8 +1231,15 @@ export function UserMessage(props: {
   return (
     <div class={`flex items-center justify-start gap-1 ${props.class ?? 'mt-8 mb-4 first:mt-0'}`}>
       <div class="-ml-4 max-w-[80%] min-w-0 bg-surface rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed">
-        <Show when={props.pastes?.length || props.images?.length || props.card || props.move}>
-          <Attachments pastes={props.pastes ?? []} images={props.images ?? []} card={props.card} move={props.move} class={props.text ? 'mb-2' : ''} />
+        <Show when={props.pastes?.length || props.images?.length || props.card || props.move || props.context?.length}>
+          <Attachments
+            pastes={props.pastes ?? []}
+            images={props.images ?? []}
+            card={props.card}
+            move={props.move}
+            context={props.context}
+            class={props.text ? 'mb-2' : ''}
+          />
         </Show>
         <Show when={props.text}>
           <div

@@ -18,6 +18,8 @@ export interface ChatState {
   running: boolean
   /** Claude Code is still making the worktree it was started in, so nothing's happening yet. */
   makingWorktree: boolean
+  /** When Claude Code started compacting the conversation, while it is. */
+  compacting?: number
   mode: PermissionMode
   /** Absent for a chat that hasn't run yet. */
   model?: string
@@ -52,6 +54,7 @@ function apply(state: ChatState, event: ServerEvent): void {
       state.messages = event.messages
       state.running = event.running
       state.makingWorktree = !!event.makingWorktree
+      state.compacting = event.compacting
       state.mode = event.mode
       state.model = event.model
       state.cwd = event.cwd
@@ -80,6 +83,7 @@ function apply(state: ChatState, event: ServerEvent): void {
     case 'status':
       state.running = event.running
       state.makingWorktree = event.makingWorktree
+      state.compacting = event.compacting
       state.mode = event.mode
       if (event.model) state.model = event.model
       state.cwd = event.cwd

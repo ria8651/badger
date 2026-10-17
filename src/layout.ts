@@ -375,13 +375,13 @@ export function placeTerminals(ws: Ws, ids: string[]): void {
 }
 
 /**
- * Opens a shell and shows it: in a group, beside a leaf, or by default in
- * the group last worked in (a new panel under the chat if there's none).
+ * Opens a shell, or runs `command`, and shows it: in a group, beside a leaf,
+ * or by default in the group last worked in (a new panel under the chat if there's none).
  */
-export async function openTerminal(ws: Ws, cwd: string, where?: { group: string } | { beside: string; edge: Edge }): Promise<void> {
+export async function openTerminal(ws: Ws, cwd: string, where?: { group: string } | { beside: string; edge: Edge }, command?: string): Promise<void> {
   let id: string
   try {
-    id = (await api.createTerminal({ cwd, machine: ws.machine })).id
+    id = (await api.createTerminal({ cwd, machine: ws.machine, command })).id
   } catch (err) {
     showError("Couldn't open a terminal", err instanceof Error ? err.message : String(err))
     return

@@ -69,6 +69,8 @@ export class LiveSession {
   running = false
   /** Started with --worktree and Claude Code hasn't come up in it yet, e.g. a WorktreeCreate hook is still copying files. */
   makingWorktree: boolean
+  /** When Claude Code started compacting the conversation, while it is. */
+  compacting?: number
 
   private queue = new MessageQueue()
   private agent: Query
@@ -230,6 +232,7 @@ export class LiveSession {
       messages: [...this.live],
       running: this.running,
       makingWorktree: this.makingWorktree,
+      compacting: this.compacting,
       mode: this.mode,
       model: this.model,
       cwd: this.cwd,
@@ -417,6 +420,7 @@ export class LiveSession {
     } finally {
       this.queue.close()
       this.makingWorktree = false
+      this.compacting = undefined
       this.setRunning(false)
       this.onClose()
     }
@@ -463,6 +467,16 @@ export class LiveSession {
         this.mode = mode
         this.emitStatus()
       }
+    }
+    // Compacting is one call with no progress in between: Claude Code says when it starts and how it ended.
+    if (msg.type === 'system' && msg.subtype === 'status') {
+      const compacting = msg.status === 'compacting'
+      if (compacting !== (this.compacting !== undefined)) {
+        this.compacting = compacting ? Date.now() : undefined
+        this.emitStatus()
+      }
+      // Claude Code doesn't save a failed compaction, so only this process's chat shows it.
+      if (msg.compact_result === 'failed') this.record({ type: 'compact_failed', uuid: msg.uuid, error: msg.compact_error, timestamp: new Date().toISOString() })
     }
     if (msg.type === 'system' && msg.subtype === 'task_started' && msg.task_type === 'local_agent') this.agents.set(msg.task_id, msg.description)
     if (msg.type === 'system' && msg.subtype === 'background_tasks_changed') {
@@ -582,7 +596,7 @@ export class LiveSession {
   }
 
   private emitStatus(): void {
-    this.emit({ type: 'status', sessionId: this.id, running: this.running, makingWorktree: this.makingWorktree, mode: this.mode, model: this.model, cwd: this.cwd })
+    this.emit({ type: 'status', sessionId: this.id, running: this.running, makingWorktree: this.makingWorktree, compacting: this.compacting, mode: this.mode, model: this.model, cwd: this.cwd })
   }
 
   /** The card context for the next turn. It comes from the hub, which may not answer, and then there's none. */
@@ -610,7 +624,7 @@ function isTranscriptMessage(msg: SDKMessage): boolean {
 }
 
 /** Task events say how subagents and background work are going. Claude Code doesn't save them, so they only cover this process. */
-const TRANSCRIPT_SYSTEM = new Set(['compact_boundary', 'task_started', 'task_progress', 'task_updated', 'task_notification'])
+const TRANSCRIPT_SYSTEM = new Set(['compact_boundary', 'model_refusal_fallback', 'task_started', 'task_progress', 'task_updated', 'task_notification'])
 
 function toolResultIds(m: WireMessage): string[] {
   const content = (m.message as { content?: unknown } | undefined)?.content
