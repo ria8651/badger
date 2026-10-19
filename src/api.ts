@@ -81,7 +81,8 @@ type Listener = (event: ServerEvent) => void
 class Socket {
   private ws: WebSocket | null = null
   private listeners = new Set<Listener>()
-  private subscriptions = new Set<string>()
+  /** Open views per session. Each subscribe gets a fresh snapshot; the server only hears unsubscribe once the last closes. */
+  private subscriptions = new Map<string, number>()
   /** Open views per terminal; the server counts them too, and each subscribe gets a fresh snapshot. */
   private terminals = new Map<string, number>()
   private outbox: ClientEvent[] = []
@@ -99,7 +100,7 @@ class Socket {
       this.setConnected(true)
       // Queued events go first so the fresh snapshots already include them, e.g. a draft typed while offline.
       for (const e of this.outbox.splice(0)) this.raw(e)
-      for (const id of this.subscriptions) this.raw({ type: 'subscribe', sessionId: id })
+      for (const id of this.subscriptions.keys()) this.raw({ type: 'subscribe', sessionId: id })
       for (const [id, views] of this.terminals) for (let i = 0; i < views; i++) this.raw({ type: 'term_subscribe', id })
     }
     ws.onmessage = (e) => {
@@ -131,8 +132,12 @@ class Socket {
   }
 
   send(event: ClientEvent): void {
-    if (event.type === 'subscribe') this.subscriptions.add(event.sessionId)
-    if (event.type === 'unsubscribe') this.subscriptions.delete(event.sessionId)
+    if (event.type === 'subscribe') this.subscriptions.set(event.sessionId, (this.subscriptions.get(event.sessionId) ?? 0) + 1)
+    if (event.type === 'unsubscribe') {
+      const views = (this.subscriptions.get(event.sessionId) ?? 1) - 1
+      if (views > 0) return void this.subscriptions.set(event.sessionId, views)
+      this.subscriptions.delete(event.sessionId)
+    }
     if (event.type === 'term_subscribe') this.terminals.set(event.id, (this.terminals.get(event.id) ?? 0) + 1)
     if (event.type === 'term_unsubscribe') {
       const views = (this.terminals.get(event.id) ?? 1) - 1

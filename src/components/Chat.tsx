@@ -477,7 +477,7 @@ export function Chat(props: {
                         onRetry={(retry) =>
                           void api.fork(props.sessionId, { at: retry.at, draft: retry.text }).then(
                             ({ sessionId }) => openChat(sessionId),
-                            (err: Error) => alert(`Couldn't fork the chat: ${err.message}`),
+                            (err: Error) => showError("Couldn't fork the chat", err.message),
                           )
                         }
                       />

@@ -47,7 +47,12 @@ export interface ChatState {
 /** Live Bash output kept per command; the final tool_result has the full text. */
 const BASH_KEEP = 64 * 1024
 
-function apply(state: ChatState, event: ServerEvent): void {
+/** Per chat, and not state anyone reads: the message whose blocks are streaming in. Children stream alongside their parent. */
+interface Stream {
+  messageId: string
+}
+
+function apply(state: ChatState, event: ServerEvent, stream: Stream): void {
   switch (event.type) {
     case 'snapshot':
       state.loaded = true
@@ -115,14 +120,14 @@ function apply(state: ChatState, event: ServerEvent): void {
       state.error = event.error
       break
     case 'message':
-      applyMessage(state, event.message)
+      applyMessage(state, event.message, stream)
       break
   }
 }
 
-function applyMessage(state: ChatState, msg: WireMessage): void {
+function applyMessage(state: ChatState, msg: WireMessage, stream: Stream): void {
   if (msg.type === 'stream_event') {
-    if (!msg.parent_tool_use_id) applyStreamEvent(state, msg.event as StreamEvent)
+    if (!msg.parent_tool_use_id) applyStreamEvent(state, msg.event as StreamEvent, stream)
     return
   }
   if (msg.uuid && state.messages.some((m) => m.uuid === msg.uuid)) return
@@ -137,17 +142,15 @@ type StreamEvent =
   | { type: 'content_block_delta'; delta: { type: string; text?: string; thinking?: string; partial_json?: string } }
   | { type: string }
 
-let currentMessageId = ''
-
-function applyStreamEvent(state: ChatState, e: StreamEvent): void {
+function applyStreamEvent(state: ChatState, e: StreamEvent, stream: Stream): void {
   if (e.type === 'message_start' && 'message' in e) {
-    currentMessageId = e.message.id
+    stream.messageId = e.message.id
     state.partial = null
   } else if (e.type === 'content_block_start' && 'content_block' in e) {
     const t = e.content_block.type
     state.partial =
       t === 'text' || t === 'thinking' || t === 'tool_use'
-        ? { messageId: currentMessageId, type: t, text: '', toolName: e.content_block.name }
+        ? { messageId: stream.messageId, type: t, text: '', toolName: e.content_block.name }
         : null
   } else if (e.type === 'content_block_delta' && 'delta' in e && state.partial) {
     const d = e.delta
@@ -174,8 +177,9 @@ export function createChat(sessionId: string) {
     error: null,
   })
 
+  const stream: Stream = { messageId: '' }
   const off = socket.on((event) => {
-    if ('sessionId' in event && event.sessionId === sessionId) setState(produce((s) => apply(s, event)))
+    if ('sessionId' in event && event.sessionId === sessionId) setState(produce((s) => apply(s, event, stream)))
   })
   socket.send({ type: 'subscribe', sessionId })
   onCleanup(() => {
