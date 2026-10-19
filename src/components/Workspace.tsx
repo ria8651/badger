@@ -6,26 +6,26 @@ import {
   CHAT,
   LEADER,
   activeOf,
-  dropOtherChats,
   focusRequest,
   groupOf,
   groupsOf,
   isLeader,
   layoutOf,
   measure,
-  moveView,
-  narrowTree,
+  moveShown,
   openPreview,
   openTerminal,
+  openedIn,
   panelsShown,
   placeTerminals,
   movePreview,
   reloadPreview,
   removeView,
-  sessionOf,
+  resizeShown,
+  screenTree,
+  shownTree,
   setActive,
   setFocusRequest,
-  setSizes,
   togglePanels,
   updateLayout,
   viewKey,
@@ -117,20 +117,14 @@ export function Workspace(props: {
   const chat = children(() => props.children)
   let container!: HTMLDivElement
 
-  const tree = createMemo(() => {
-    const ws = props.ws
-    if (!ws || !panelsShown(ws)) return CHAT
-    return wide() ? layoutOf(ws).tree : narrowTree(layoutOf(ws))
-  })
+  const tree = createMemo(() => (props.ws ? screenTree(props.ws, props.sessionId) : CHAT))
   const measured = createMemo(() => measure(tree()))
   const rect = (id: string) => measured().rects.get(id)
   const boxOf = (id: string) => measured().boxes.get(id)
   const groupIds = createMemo(() => groupsOf(tree()).map((g) => g.id))
   const groupById = (id: string) => groupsOf(tree()).find((g) => g.id === id)
   // Every view in the workspace, shown or not, so hiding or moving one never unmounts it.
-  const keys = createMemo(() =>
-    props.ws ? viewsOf(layoutOf(props.ws).tree).filter((v) => (sessionOf(v) ?? props.sessionId) === props.sessionId).map(viewKey) : [],
-  )
+  const keys = createMemo(() => (props.ws ? viewsOf(shownTree(layoutOf(props.ws).tree, props.sessionId)).map(viewKey) : []))
 
   const update = (change: Parameters<typeof updateLayout>[1]) => props.ws && updateLayout(props.ws, change)
   const viewOf = (key: string) => (props.ws ? viewsOf(layoutOf(props.ws).tree).find((v) => viewKey(v) === key) : undefined)
@@ -147,8 +141,7 @@ export function Workspace(props: {
     untrack(() => placeTerminals(ws, ids))
   })
 
-  // Another chat's tasks and plan don't belong beside this one.
-  createEffect(() => props.ws && untrack(() => dropOtherChats(props.ws!, props.sessionId)))
+  createEffect(() => props.ws && untrack(() => openedIn(props.ws!, props.sessionId)))
 
   // ── Focus ──
 
@@ -223,7 +216,7 @@ export function Workspace(props: {
     props.onFocusChat()
   }
 
-  const newTerminal = (where?: Parameters<typeof openTerminal>[2]) => props.ws && props.cwd && void openTerminal(props.ws, props.cwd, where)
+  const newTerminal = (where?: Parameters<typeof openTerminal>[3]) => props.ws && props.cwd && void openTerminal(props.ws, props.sessionId, props.cwd, where)
 
   // ── Resizing ──
 
@@ -258,7 +251,7 @@ export function Workspace(props: {
           const sizes = [...d.sizes]
           sizes[i - 1] = before
           sizes[i] = pair - before
-          return wide() ? { ...l, tree: setSizes(l.tree, d.path, sizes) } : { ...l, narrow: sizes[1] }
+          return wide() ? { ...l, tree: resizeShown(l.tree, props.sessionId, d.path, sizes) } : { ...l, narrow: sizes[1] }
         }, l),
       )
     }
@@ -354,7 +347,7 @@ export function Workspace(props: {
       setDragging()
       if (!d?.drop) return
       update((l) => {
-        const moved = moveView(l.tree, key, d.drop!)
+        const moved = moveShown(l.tree, props.sessionId, key, d.drop!)
         return { ...l, tree: moved.tree, focus: moved.group ?? l.focus }
       })
       focusView(key)
@@ -404,8 +397,8 @@ export function Workspace(props: {
       case '0':
         return props.onFocusChat()
       case 'p':
-        if (panelsShown(props.ws!)) return hide()
-        return props.cwd && togglePanels(props.ws!, props.cwd)
+        if (panelsShown(props.ws!, props.sessionId)) return hide()
+        return props.cwd && togglePanels(props.ws!, props.sessionId, props.cwd)
     }
   }
   const cancelLeader = () => setLeader(false)

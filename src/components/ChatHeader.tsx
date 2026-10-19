@@ -72,6 +72,7 @@ type GitItem = MenuItem & { run: () => void }
  * and what the sidebar does to a chat: move, rename and archive.
  */
 export function ChatHeader(props: {
+  sessionId: string
   /** Absent until the chat is listed, e.g. before its first message. */
   session?: SessionSummary
   cards: Card[]
@@ -315,7 +316,7 @@ export function ChatHeader(props: {
           />
         </Show>
         <Show when={props.ws && props.cwd}>
-          <TerminalButton ws={props.ws!} cwd={props.cwd!} />
+          <TerminalButton ws={props.ws!} session={props.sessionId} cwd={props.cwd!} />
         </Show>
       </div>
     </div>

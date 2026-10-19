@@ -19,7 +19,7 @@ import { ChatSummary, MachineName } from './components/ChatSummary.tsx'
 import { Settings } from './components/Settings.tsx'
 import { ImageViewer } from './components/ImageViewer.tsx'
 import { Loading, Menu, inputClass, modalOpen } from './components/ui.tsx'
-import { terminalLabel, terminalTooltip, terminalWs, terminals, terminalsLoaded, wsKey } from './terminals.ts'
+import { knowRoots, terminalLabel, terminalTooltip, terminalWs, terminals, terminalsLoaded, wsKey } from './terminals.ts'
 import { accountUsage } from './usage.ts'
 import { SIDEBAR_DEFAULT, dragSidebar, setSidebarWidth, sidebarWidth } from './sidebar.ts'
 
@@ -105,6 +105,7 @@ export function App() {
   const [loaded, setLoaded] = createSignal(false)
   const refresh = () => {
     api.sessions().then((list) => {
+      knowRoots(list.flatMap((s) => (s.cwd && s.root ? [{ machine: s.machine ?? LOCAL, cwd: s.cwd, root: s.root }] : [])))
       setSessions(list)
       setLoaded(true)
     })
@@ -740,7 +741,8 @@ export function App() {
               return (
                 <Chat
                   sessionId={id}
-                  draftCwd={drafts()[id] ?? defaultCwd()}
+                  // A chat that has started is wherever the list says, so it opens beside its own panels, not a guess at them.
+                  draftCwd={drafts()[id] ?? (loaded() && !sessions().some((s) => s.id === id) ? defaultCwd() : undefined)}
                   draftMachine={sessions().find((s) => s.id === id)?.machine ?? draftMachine(id)}
                   worktree={worktreeDrafts()[id]}
                   onPickCwd={(cwd, machine) => {

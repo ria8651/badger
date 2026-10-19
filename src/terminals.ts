@@ -55,7 +55,7 @@ export const terminalWs = (t: TerminalInfo): Ws => ({ machine: t.machine || LOCA
 
 export const inWs = (t: TerminalInfo, ws: Ws) => t.root === ws.root && (t.machine || LOCAL) === ws.machine
 
-const roots = new Map<string, Accessor<string | undefined>>()
+const roots = new Map<string, { get: Accessor<string | undefined>; set: (root: string) => void }>()
 
 /** How long a workspace root that couldn't be looked up stands in as its folder before it's asked for again; doubling each time. */
 const RETRY_ROOT_MS = 30 * 1000
@@ -71,14 +71,35 @@ function retryRoots(machine?: string) {
 socket.onConnection((connected) => connected && retryRoots())
 
 /**
+ * Roots the server already knows, e.g. from the chat list, so a chat's workspace is there the moment it opens.
+ * One being looked up, or standing in as its folder, gets the real one.
+ */
+export function knowRoots(known: { machine: string; cwd: string; root: string }[]): void {
+  for (const { machine, cwd, root } of known) {
+    const key = wsKey({ machine, root: cwd })
+    const found = roots.get(key)
+    if (found) {
+      if (found.get() !== root) (retries.delete(key), found.set(root))
+    } else {
+      const [get, set] = createSignal<string | undefined>(root)
+      roots.set(key, { get, set })
+    }
+  }
+}
+
+/** A folder's workspace if it's already known, without asking: e.g. for a machine that's offline. */
+export const knownRoot = (machine: string, cwd: string) => roots.get(wsKey({ machine, root: cwd }))?.get()
+
+/**
  * The workspace (git root) a directory on a machine belongs to, as that machine sees it. Terminals are grouped by this.
- * Until it can be looked up the directory stands in for it; it's asked for again in the background, and when the hub
- * or the machine comes back, and the same accessor gets the real one.
+ * Known at once for any chat's folder in the chat list; others are looked up. Until then the directory stands in
+ * for it; it's asked for again in the background, and when the hub or the machine comes back, and the same accessor
+ * gets the real one.
  */
 export function workspaceOf(machine: string, cwd: string): Accessor<string | undefined> {
   const key = wsKey({ machine, root: cwd })
-  let root = roots.get(key)
-  if (!root) {
+  let found = roots.get(key)
+  if (!found) {
     const [get, set] = createSignal<string>()
     let wait = RETRY_ROOT_MS
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -95,9 +116,9 @@ export function workspaceOf(machine: string, cwd: string): Accessor<string | und
       )
     }
     ask()
-    roots.set(key, (root = get))
+    roots.set(key, (found = { get, set }))
   }
-  return root
+  return found.get
 }
 
 /** What a terminal is called: its name, else the command it runs, else (from older hosts) whatever the shell last titled it. */
