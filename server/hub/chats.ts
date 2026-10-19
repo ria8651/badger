@@ -1,6 +1,6 @@
 import type { WebSocket } from 'ws'
 import { renderMoveNote } from '../../shared/forkNote.ts'
-import { LOCAL_MACHINE, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../../shared/protocol.ts'
+import { LOCAL_MACHINE, type ChatCommand, type ChatCommandReply, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../../shared/protocol.ts'
 import type { Attention } from '../attention.ts'
 import type { ChatInfo } from '../boardTools.ts'
 import type { Board } from '../board.ts'
@@ -275,14 +275,16 @@ export class Chats {
 
   async handle(ws: WebSocket, event: ChatEvent): Promise<void> {
     const { meta, viewers } = this.d
-    const runner = () => this.d.machines.runnerFor(event.sessionId)?.remote
+    const remote = this.d.machines.runnerFor(event.sessionId)?.remote
+    // On the chat's machine. One that's on none has no process to ask.
+    const command = <C extends ChatCommand>(sessionId: string, c: C) => remote?.command(sessionId, c) as Promise<ChatCommandReply<C['type']>> | undefined
     switch (event.type) {
       case 'send':
         return this.send(ws, event)
       case 'draft':
         return this.saveDraft(event.sessionId, { text: event.text, attachments: event.attachments }, ws)
       case 'unqueue': {
-        const message = await runner()?.unqueue(event.sessionId, event.id)
+        const message = await command(event.sessionId, { type: 'unqueue', id: event.id })
         if (!message || !event.edit) return
         // Back into the composer, ahead of anything typed since, in every tab.
         const saved = meta.draft(event.sessionId)
@@ -291,34 +293,20 @@ export class Chats {
           attachments: { pastes: [...message.pastes, ...saved.attachments.pastes], images: [...message.images, ...saved.attachments.images] },
         })
       }
-      case 'interrupt': {
+      case 'interrupt':
         // Stopping a chat stops whatever it's waiting on too. Children run on their parent's machine.
-        const remote = runner()
-        if (!remote) return
-        await Promise.all([event.sessionId, ...Object.values(meta.children(event.sessionId))].map((id) => remote.interrupt(id)))
+        await Promise.all([event.sessionId, ...Object.values(meta.children(event.sessionId))].map((id) => command(id, { type: 'interrupt' })))
         return
-      }
-      case 'stop_task':
-        return runner()?.stopTask(event.sessionId, event.taskId)
-      case 'background_task':
-        return runner()?.backgroundTask(event.sessionId, event.toolUseId)
-      case 'set_mode':
-        return runner()?.setMode(event.sessionId, event.mode)
-      case 'set_model':
-        // A chat that isn't running takes the model with its next message.
-        return runner()?.setModel(event.sessionId, event.model)
-      case 'permission':
-        return runner()?.resolvePermission(event.sessionId, event.requestId, event.decision, event.message, event.updatedInput)
       // Drafts of an answer are shown to the chat's other viewers; the one answering already has them.
-      case 'answer_draft': {
-        const { sessionId, requestId, answers } = event
-        if (await runner()?.draftAnswers(sessionId, requestId, answers)) viewers.toChat(sessionId, { type: 'answer_draft', sessionId, requestId, answers }, { except: ws })
+      case 'answer_draft':
+      case 'plan_draft': {
+        const { sessionId, ...c } = event
+        if (await command(sessionId, c)) viewers.toChat(sessionId, event, { except: ws })
         return
       }
-      case 'plan_draft': {
-        const { sessionId, requestId, plan } = event
-        if (await runner()?.draftPlan(sessionId, requestId, plan)) viewers.toChat(sessionId, { type: 'plan_draft', sessionId, requestId, plan }, { except: ws })
-        return
+      default: {
+        const { sessionId, ...c } = event
+        return command(sessionId, c)
       }
     }
   }

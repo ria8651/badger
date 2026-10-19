@@ -2,7 +2,7 @@ import { mkdir, readFile, stat } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { extname, isAbsolute } from 'node:path'
 import { renameSession } from '@anthropic-ai/claude-agent-sdk'
-import { IMAGE_EXTENSIONS, IMAGE_TYPES, type AnswerDraft, type ImageAttachment, type PermissionMode } from '../shared/protocol.ts'
+import { IMAGE_EXTENSIONS, IMAGE_TYPES, type ChatCommand, type ChatCommandReply, type ImageAttachment } from '../shared/protocol.ts'
 import { BOARD_INSTRUCTIONS, BOARD_SERVER, boardOps } from './boardTools.ts'
 import { Children } from './children.ts'
 import { listModels } from './claudeProbe.ts'
@@ -240,47 +240,11 @@ export class Runner implements RunnerApi {
     if (!session.send(text, pastes, images)) throw new Error('Session is closed; try again')
   }
 
-  async unqueue(sessionId: string, id: string) {
-    return this.manager.get(sessionId)?.unqueue(id)
-  }
-
-  async interrupt(sessionId: string): Promise<void> {
-    await this.manager.get(sessionId)?.interrupt()
-  }
-
-  async stopTask(sessionId: string, taskId: string): Promise<void> {
-    await this.manager.get(sessionId)?.stopTask(taskId)
-  }
-
-  async backgroundTask(sessionId: string, toolUseId?: string): Promise<void> {
-    await this.manager.get(sessionId)?.backgroundTask(toolUseId)
-  }
-
-  async setMode(sessionId: string, mode: PermissionMode): Promise<void> {
-    await this.manager.get(sessionId)?.setMode(mode)
-  }
-
-  async setModel(sessionId: string, model: string): Promise<void> {
-    // A chat that isn't running takes the model with its next message.
-    await this.manager.get(sessionId)?.setModel(model)
-  }
-
-  resolvePermission(
-    sessionId: string,
-    requestId: string,
-    decision: 'allow' | 'allow_always' | 'deny',
-    message?: string,
-    updatedInput?: Record<string, unknown>,
-  ): void {
-    this.manager.get(sessionId)?.resolvePermission(requestId, decision, message, updatedInput)
-  }
-
-  draftAnswers(sessionId: string, requestId: string, answers: AnswerDraft): boolean {
-    return !!this.manager.get(sessionId)?.draftAnswers(requestId, answers)
-  }
-
-  draftPlan(sessionId: string, requestId: string, plan: string): boolean {
-    return !!this.manager.get(sessionId)?.draftPlan(requestId, plan)
+  async command(sessionId: string, command: ChatCommand): Promise<ChatCommandReply> {
+    const session = this.manager.get(sessionId)
+    if (session) return session.command(command)
+    // With no live process there's nothing to stop or answer, and no draft pending.
+    if (command.type === 'answer_draft' || command.type === 'plan_draft') return false
   }
 
   liveSnapshot(sessionId: string): Later<LiveSnapshot | null> {

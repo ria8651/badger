@@ -310,6 +310,38 @@ export interface LiveState extends ChatStatus {
   queued: QueuedMessage[]
 }
 
+/** What a browser can ask of a chat's live process. The hub passes each on to the runner the chat is on as it is. */
+export type ChatCommand =
+  | { type: 'interrupt' }
+  /** Withdraw a queued message if Claude Code hasn't taken it in. */
+  | { type: 'unqueue'; id: string }
+  /** Stop one subagent or background task, leaving the rest of the chat running. */
+  | { type: 'stop_task'; taskId: string }
+  /** Stop waiting on a running subagent or command and let it carry on in the background; without toolUseId, every one. */
+  | { type: 'background_task'; toolUseId?: string }
+  | { type: 'set_mode'; mode: PermissionMode }
+  /** A chat that isn't running takes the model with its next message. */
+  | { type: 'set_model'; model: string }
+  | {
+      type: 'permission'
+      requestId: string
+      decision: 'allow' | 'allow_always' | 'deny'
+      message?: string
+      /** Replacement tool input, e.g. AskUserQuestion answers. */
+      updatedInput?: Record<string, unknown>
+    }
+  /** Answers picked so far in a pending AskUserQuestion; replaces what's saved. */
+  | { type: 'answer_draft'; requestId: string; answers: AnswerDraft }
+  /** The plan in a pending ExitPlanMode as edited so far; replaces what's saved. */
+  | { type: 'plan_draft'; requestId: string; plan: string }
+
+/** What a command answers: unqueue the message it withdrew, if Claude Code hadn't taken it in; a draft whether it's still pending. */
+export type ChatCommandReply<T extends ChatCommand['type'] = ChatCommand['type']> = T extends 'unqueue'
+  ? QueuedMessage | undefined
+  : T extends 'answer_draft' | 'plan_draft'
+    ? boolean
+    : void
+
 export type ClientEvent =
   | { type: 'subscribe'; sessionId: string }
   | { type: 'unsubscribe'; sessionId: string }
@@ -329,30 +361,11 @@ export type ClientEvent =
       /** Start a new chat in a git worktree of cwd with this name (reused if it exists); empty lets Claude name it. */
       worktree?: string
     }
-  | { type: 'interrupt'; sessionId: string }
-  /** Withdraw a queued message if Claude Code hasn't taken it in; with edit, it goes back into the composer ahead of what's typed there. */
+  /** With edit, a withdrawn message goes back into the composer ahead of what's typed there. */
   | { type: 'unqueue'; sessionId: string; id: string; edit?: boolean }
-  /** Stop one subagent or background task, leaving the rest of the chat running. */
-  | { type: 'stop_task'; sessionId: string; taskId: string }
-  /** Stop waiting on a running subagent or command and let it carry on in the background; without toolUseId, every one. */
-  | { type: 'background_task'; sessionId: string; toolUseId?: string }
+  | (Exclude<ChatCommand, { type: 'unqueue' }> & { sessionId: string })
   /** The composer's unsent text and attachments; each one given replaces what's saved. */
   | { type: 'draft'; sessionId: string; text?: string; attachments?: DraftAttachments }
-  | { type: 'set_mode'; sessionId: string; mode: PermissionMode }
-  | { type: 'set_model'; sessionId: string; model: string }
-  | {
-      type: 'permission'
-      sessionId: string
-      requestId: string
-      decision: 'allow' | 'allow_always' | 'deny'
-      message?: string
-      /** Replacement tool input, e.g. AskUserQuestion answers. */
-      updatedInput?: Record<string, unknown>
-    }
-  /** Answers picked so far in a pending AskUserQuestion; replaces what's saved. */
-  | { type: 'answer_draft'; sessionId: string; requestId: string; answers: AnswerDraft }
-  /** The plan in a pending ExitPlanMode as edited so far; replaces what's saved. */
-  | { type: 'plan_draft'; sessionId: string; requestId: string; plan: string }
   /** An uncaught error in the page, for the server to log. */
   | { type: 'client_error'; message: string; stack?: string; url: string }
   /** The user is looking at this chat, so it's no longer unread. */

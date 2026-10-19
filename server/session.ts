@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { getSessionInfo, query, type McpServerConfig, type Query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { AnswerDraft, BackgroundTask, ChatStatus, ImageAttachment, PermissionMode, QueuedMessage, ServerEvent, WireMessage } from '../shared/protocol.ts'
+import type { BackgroundTask, ChatCommand, ChatCommandReply, ChatStatus, ImageAttachment, PermissionMode, QueuedMessage, ServerEvent, WireMessage } from '../shared/protocol.ts'
 import { wrapPaste } from '../shared/pastes.ts'
 import { BashStreams } from './bashStream.ts'
 import { readContext, readLimits } from './claudeProbe.ts'
@@ -191,8 +191,37 @@ export class LiveSession {
     return true
   }
 
+  /** Carries out what a browser asked of this chat. */
+  async command(c: ChatCommand): Promise<ChatCommandReply> {
+    switch (c.type) {
+      case 'interrupt':
+        return this.interrupt()
+      case 'unqueue':
+        return this.unqueue(c.id)
+      case 'stop_task':
+        return void (await this.agent.stopTask(c.taskId))
+      case 'background_task':
+        return void (await this.agent.backgroundTasks(c.toolUseId))
+      case 'set_mode':
+        await this.agent.setPermissionMode(c.mode)
+        this.mode = c.mode
+        return this.emitStatus()
+      case 'set_model':
+        await this.agent.setModel(c.model === 'default' ? undefined : c.model)
+        this.model = c.model
+        return this.emitStatus()
+      case 'permission':
+        return this.permissions.resolve(c.requestId, c.decision, c.message, c.updatedInput)
+      // False if the question or plan is no longer pending.
+      case 'answer_draft':
+        return this.permissions.draftAnswers(c.requestId, c.answers)
+      case 'plan_draft':
+        return this.permissions.draftPlan(c.requestId, c.plan)
+    }
+  }
+
   /** Withdraws a queued message from Claude Code. Undefined if it was already taken in. */
-  async unqueue(id: string): Promise<QueuedMessage | undefined> {
+  private async unqueue(id: string): Promise<QueuedMessage | undefined> {
     // In the SDK but not yet in its types.
     const cancel = (this.agent as Query & { cancelAsyncMessage?: (uuid: string) => Promise<boolean> }).cancelAsyncMessage
     const queued = this.outbox.get(id)
@@ -210,41 +239,6 @@ export class LiveSession {
   async interrupt(): Promise<void> {
     this.permissions.interrupt()
     await this.agent.interrupt().catch(() => {})
-  }
-
-  async stopTask(taskId: string): Promise<void> {
-    await this.agent.stopTask(taskId)
-  }
-
-  /** Moves a running subagent or command to the background so the turn carries on; without an id, every one. */
-  async backgroundTask(toolUseId?: string): Promise<void> {
-    await this.agent.backgroundTasks(toolUseId)
-  }
-
-  async setMode(mode: PermissionMode): Promise<void> {
-    await this.agent.setPermissionMode(mode)
-    this.mode = mode
-    this.emitStatus()
-  }
-
-  async setModel(model: string): Promise<void> {
-    await this.agent.setModel(model === 'default' ? undefined : model)
-    this.model = model
-    this.emitStatus()
-  }
-
-  resolvePermission(requestId: string, decision: 'allow' | 'allow_always' | 'deny', message?: string, updatedInput?: Record<string, unknown>): void {
-    this.permissions.resolve(requestId, decision, message, updatedInput)
-  }
-
-  /** Keeps answers picked so far with the pending question. False if it's no longer pending. */
-  draftAnswers(requestId: string, answers: AnswerDraft): boolean {
-    return this.permissions.draftAnswers(requestId, answers)
-  }
-
-  /** Keeps the plan as edited so far with the pending ExitPlanMode. False if it's no longer pending. */
-  draftPlan(requestId: string, plan: string): boolean {
-    return this.permissions.draftPlan(requestId, plan)
   }
 
   /**

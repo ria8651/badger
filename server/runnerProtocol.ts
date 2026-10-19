@@ -1,8 +1,9 @@
 import { z, type ZodType } from 'zod'
 import type {
   AccountUsage,
-  AnswerDraft,
   Card,
+  ChatCommand,
+  ChatCommandReply,
   ChatStatus,
   GitStatus,
   ContextUsage,
@@ -32,7 +33,7 @@ import type { CreateSpec } from './ptyProtocol.ts'
  * Runners and the hub are updated separately, so bump this when either side
  * would misread the other; the hub turns away runners on another version.
  */
-export const RUNNER_PROTOCOL = 6
+export const RUNNER_PROTOCOL = 7
 
 /** Header a runner sends its protocol version in, so a mismatch is caught before the upgrade. */
 export const PROTOCOL_HEADER = 'x-badger-protocol'
@@ -130,24 +131,8 @@ export interface FileData {
 export interface RunnerApi {
   /** Starts or resumes the chat if it isn't live, then sends it a message. */
   send(sessionId: string, opts: OpenOptions, text: string, pastes: string[], images: ImageAttachment[]): Promise<void>
-  /** Undefined if Claude Code had already taken it in. */
-  unqueue(sessionId: string, id: string): Promise<QueuedMessage | undefined>
-  interrupt(sessionId: string): Promise<void>
-  stopTask(sessionId: string, taskId: string): Promise<void>
-  backgroundTask(sessionId: string, toolUseId?: string): Promise<void>
-  setMode(sessionId: string, mode: PermissionMode): Promise<void>
-  setModel(sessionId: string, model: string): Promise<void>
-  resolvePermission(
-    sessionId: string,
-    requestId: string,
-    decision: 'allow' | 'allow_always' | 'deny',
-    message?: string,
-    updatedInput?: Record<string, unknown>,
-  ): void
-  /** False if the question is no longer pending. */
-  draftAnswers(sessionId: string, requestId: string, answers: AnswerDraft): boolean
-  /** False if the plan is no longer pending. */
-  draftPlan(sessionId: string, requestId: string, plan: string): boolean
+  /** Passes a browser's command to the chat's live process; one without a process has nothing to do. */
+  command(sessionId: string, command: ChatCommand): Promise<ChatCommandReply>
   /** Null when the chat has no live process. Settled in order with the chat's events. */
   liveSnapshot(sessionId: string): Later<LiveSnapshot | null>
   contextUsage(sessionId: string): Promise<ContextUsage | undefined>
@@ -189,15 +174,7 @@ export interface RunnerApi {
 
 export const RUNNER_METHODS = [
   'send',
-  'unqueue',
-  'interrupt',
-  'stopTask',
-  'backgroundTask',
-  'setMode',
-  'setModel',
-  'resolvePermission',
-  'draftAnswers',
-  'draftPlan',
+  'command',
   'liveSnapshot',
   'contextUsage',
   'accountUsage',
@@ -412,9 +389,7 @@ export const RUNNER_REPLIES = {
     })
     .loose()
     .nullable(),
-  unqueue: queuedMessage.optional(),
-  draftAnswers: z.boolean(),
-  draftPlan: z.boolean(),
+  command: z.union([queuedMessage, z.boolean()]).optional(),
   inaccessible: z.array(z.string()),
   workspaceRoot: z.string(),
   makeDir: z.string(),
