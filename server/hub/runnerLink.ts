@@ -3,7 +3,9 @@ import { splitMoveNote } from '../../shared/forkNote.ts'
 import { LOCAL_MACHINE, type ServerEvent } from '../../shared/protocol.ts'
 import type { Attention } from '../attention.ts'
 import { cardContext, contextSeen } from '../boardTools.ts'
-import type { Store } from '../db.ts'
+import type { Board } from '../board.ts'
+import type { ChatMeta } from '../chatMeta.ts'
+import type { Database } from '../db.ts'
 import { BadRequest } from '../errors.ts'
 import type { Connection, MachineEvents, Machines } from '../machines.ts'
 import { OpError, parseInput, type Op } from '../ops.ts'
@@ -16,7 +18,9 @@ import type { HubTerminals } from './terminals.ts'
 import type { Viewers } from './viewers.ts'
 
 export interface RunnerLinkDeps {
-  store: Store
+  db: Database
+  board: Board
+  meta: ChatMeta
   transcripts: Transcripts
   machines: Machines
   placement: ChatPlacement
@@ -95,7 +99,7 @@ export class RunnerLink implements MachineEvents {
    * can change any card, and archive any chat, as Claude can from any chat.
    */
   api = (machine: string): Omit<HubApi, 'hello'> => {
-    const { store, transcripts, machines, placement, chats, viewers } = this.d
+    const { db, board, meta, transcripts, machines, placement, chats, viewers } = this.d
     const own = (sessionId: string): string => {
       if (!placement.owns(machine, sessionId)) throw new BadRequest(`Chat ${sessionId} isn't on this machine`)
       return sessionId
@@ -116,18 +120,18 @@ export class RunnerLink implements MachineEvents {
         }
       },
       chatCard: async (chat) => {
-        const card = store.cardOf(own(chat))
+        const card = board.cardOf(own(chat))
         if (!card) return undefined
-        const archived = store.archivedIds()
+        const archived = meta.archivedIds()
         const infos = await chats.info(card.sessionIds)
         return { ...card, chats: infos.map(({ id, cwd, machine }) => ({ id, cwd, machine, archived: archived.has(id) })) }
       },
       // A fork that moved is told so first, then about its card.
-      cardContext: (chat) => [store.forkNote(own(chat)), cardContext(store, chat)].filter(Boolean).join('\n\n') || undefined,
+      cardContext: (chat) => [meta.forkNote(own(chat)), cardContext(board, meta, chat)].filter(Boolean).join('\n\n') || undefined,
       contextSeen: (chat, text) => {
         const { move, rest } = splitMoveNote(text)
-        if (move) store.forkNoteSeen(own(chat))
-        if (rest) contextSeen(store, own(chat), rest)
+        if (move) meta.forkNoteSeen(own(chat))
+        if (rest) contextSeen(meta, own(chat), rest)
       },
       openPreview: (chat, { root, port, name, path }) => {
         own(chat)
@@ -140,9 +144,9 @@ export class RunnerLink implements MachineEvents {
         own(parentId)
         // Children run on their parent's machine. Recorded before the chat exists, so the sidebar never lists it.
         const sessionId = randomUUID()
-        store.transaction(() => {
+        db.transaction(() => {
           placement.assign(sessionId, machine)
-          store.addChild({ sessionId, parentId, toolUseId, kind })
+          meta.addChild({ sessionId, parentId, toolUseId, kind })
         })
         return sessionId
       },
@@ -155,7 +159,7 @@ export class RunnerLink implements MachineEvents {
   /** A chat's event from a runner (already checked to be a kind a chat emits), if the chat is on that runner's machine. */
   private sessionEvent(machine: string, event: ServerEvent): ServerEvent | undefined {
     if (!('sessionId' in event) || !SESSION_EVENTS.includes(event.type as never) || !this.d.placement.owns(machine, event.sessionId)) return undefined
-    if (event.type === 'child_started' && (!isUuid(event.childId) || this.d.store.parentOf(event.childId) !== event.sessionId)) return undefined
+    if (event.type === 'child_started' && (!isUuid(event.childId) || this.d.meta.parentOf(event.childId) !== event.sessionId)) return undefined
     return event
   }
 }

@@ -1,5 +1,6 @@
 import { IMAGE_TYPES, LOCAL_MACHINE } from '../../shared/protocol.ts'
-import type { Actor, Store } from '../db.ts'
+import type { Board } from '../board.ts'
+import type { Actor } from '../db.ts'
 import { BadRequest, absolutePath } from '../errors.ts'
 import type { Machines } from '../machines.ts'
 import { IMAGE_PATH, entryImage } from '../transcriptImages.ts'
@@ -14,7 +15,7 @@ const UI: Actor = { source: 'ui' }
 const TEMP_DIR = /^\/(private\/)?(tmp|var\/folders)\//
 
 export interface ApiDeps {
-  store: Store
+  board: Board
   transcripts: Transcripts
   machines: Machines
   chats: Chats
@@ -30,7 +31,7 @@ export function apiRoutes(d: ApiDeps): Route[] {
 }
 
 /** The board. Every change tells every open tab to refetch. */
-function cardRoutes({ store, cardsChanged }: ApiDeps): Route[] {
+function cardRoutes({ board, cardsChanged }: ApiDeps): Route[] {
   const changed = (result: Reply): Reply => {
     if (Array.isArray(result) && result[0] < 300) cardsChanged()
     return result
@@ -41,30 +42,30 @@ function cardRoutes({ store, cardsChanged }: ApiDeps): Route[] {
   const LINK = new RegExp(`^/api/cards/(\\d+)/sessions/${CHAT_ID}$`)
   const withCard = (fn: (id: number, params: string[], json: () => Promise<any>) => Reply | Promise<Reply>): Route[2] => ({ params, json }) => {
     const id = Number(params[0])
-    return store.card(id) ? fn(id, params, json) : [404, { error: 'No such card' }]
+    return board.card(id) ? fn(id, params, json) : [404, { error: 'No such card' }]
   }
   return [
-    ['GET', '/api/cards', () => [200, store.cards()]],
-    ['POST', '/api/cards', async ({ json }) => changed([201, store.createCard(await json(), UI)])],
-    ['GET', CARD, ({ params: [id] }) => found(store.card(Number(id)))],
-    ['PATCH', CARD, async ({ params: [id], json }) => changed(found(store.updateCard(Number(id), await json(), UI)))],
-    ['DELETE', CARD, ({ params: [id] }) => changed(store.deleteCard(Number(id), UI) ? [204, null] : [404, { error: 'No such card' }])],
+    ['GET', '/api/cards', () => [200, board.cards()]],
+    ['POST', '/api/cards', async ({ json }) => changed([201, board.createCard(await json(), UI)])],
+    ['GET', CARD, ({ params: [id] }) => found(board.card(Number(id)))],
+    ['PATCH', CARD, async ({ params: [id], json }) => changed(found(board.updateCard(Number(id), await json(), UI)))],
+    ['DELETE', CARD, ({ params: [id] }) => changed(board.deleteCard(Number(id), UI) ? [204, null] : [404, { error: 'No such card' }])],
     [
       'POST',
       LINKS,
       withCard(async (id, _, json) => {
         const { sessionId } = await json()
         if (typeof sessionId !== 'string' || !new RegExp(`^${CHAT_ID}$`).test(sessionId)) throw new BadRequest('sessionId is required')
-        store.linkSession(id, sessionId, UI)
-        return changed([200, store.card(id)])
+        board.linkSession(id, sessionId, UI)
+        return changed([200, board.card(id)])
       }),
     ],
     [
       'DELETE',
       LINK,
       withCard((id, [, sessionId]) => {
-        store.unlinkSession(id, sessionId, UI)
-        return changed([200, store.card(id)])
+        board.unlinkSession(id, sessionId, UI)
+        return changed([200, board.card(id)])
       }),
     ],
   ]
@@ -88,7 +89,7 @@ function machineRoutes({ machines }: ApiDeps): Route[] {
  * is its runner's to answer. Making worktrees is Claude Code's job
  * (--worktree); these look and clean up.
  */
-function machineFileRoutes({ store, machines, chats, listChanged }: ApiDeps): Route[] {
+function machineFileRoutes({ machines, chats, listChanged }: ApiDeps): Route[] {
   const query = (url: URL) => ({ runner: machines.fromRequest(url.searchParams.get('machine')), path: () => absolutePath(url.searchParams.get('path')) })
   return [
     [
@@ -157,7 +158,7 @@ function machineFileRoutes({ store, machines, chats, listChanged }: ApiDeps): Ro
           if ((s.machine ?? LOCAL_MACHINE) !== runner.id || !s.cwd || s.gone || TEMP_DIR.test(s.cwd)) continue
           used.set(s.cwd, Math.max(s.lastModified, used.get(s.cwd) ?? 0))
         }
-        const { added, hidden } = store.folders(runner.id)
+        const { added, hidden } = machines.folders(runner.id)
         return [200, await runner.remote.listFolders([...used], [...added], [...hidden])]
       },
     ],
@@ -169,12 +170,12 @@ function machineFileRoutes({ store, machines, chats, listChanged }: ApiDeps): Ro
         const runner = machines.fromRequest(body.machine)
         const dir = absolutePath(body.path)
         if ((await runner.remote.inaccessible([dir])).length) throw new BadRequest(`${dir} isn't a folder Badger can open`)
-        store.addFolder(runner.id, dir)
+        machines.addFolder(runner.id, dir)
         return [204, null]
       },
     ],
     // Hiding needs no runner, so it works while the machine is offline.
-    ['DELETE', '/api/folders', ({ url }) => (store.hideFolder(url.searchParams.get('machine') || LOCAL_MACHINE, absolutePath(url.searchParams.get('path'))), [204, null])],
+    ['DELETE', '/api/folders', ({ url }) => (machines.hideFolder(url.searchParams.get('machine') || LOCAL_MACHINE, absolutePath(url.searchParams.get('path'))), [204, null])],
     [
       'GET',
       '/api/folders/size',

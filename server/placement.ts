@@ -1,7 +1,8 @@
 import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import type { DatabaseSync, StatementSync } from 'node:sqlite'
+import type { StatementSync } from 'node:sqlite'
 import { LOCAL_MACHINE } from '../shared/protocol.ts'
+import type { Database } from './db.ts'
 import { isUuid } from './runnerProtocol.ts'
 
 /**
@@ -12,15 +13,11 @@ import { isUuid } from './runnerProtocol.ts'
 export class ChatPlacement {
   private machineOfQuery?: StatementSync
 
-  constructor(
-    private db: DatabaseSync,
-    /** The store's, so a write here can join a transaction around it. */
-    private transaction: <T>(fn: () => T) => T,
-  ) {}
+  constructor(private db: Database) {}
 
   machineOf(sessionId: string): string | undefined {
     // Asked on every event a runner sends, so prepared once.
-    this.machineOfQuery ??= this.db.prepare('SELECT machine FROM chat_machines WHERE session_id = ?')
+    this.machineOfQuery ??= this.db.sql.prepare('SELECT machine FROM chat_machines WHERE session_id = ?')
     const row = this.machineOfQuery.get(sessionId) as { machine: string } | undefined
     return row?.machine
   }
@@ -36,23 +33,23 @@ export class ChatPlacement {
    * starts; a runner can't put chats anywhere.
    */
   assign(sessionId: string, machine: string): string {
-    this.db.prepare('INSERT INTO chat_machines (session_id, machine, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING').run(sessionId, machine, Date.now())
+    this.db.sql.prepare('INSERT INTO chat_machines (session_id, machine, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING').run(sessionId, machine, Date.now())
     return this.machineOf(sessionId)!
   }
 
   /** Takes back a chat that never started where it was put, e.g. its folder wasn't there, so it can start somewhere else. */
   unassign(sessionId: string, machine: string): void {
-    this.db.prepare('DELETE FROM chat_machines WHERE session_id = ? AND machine = ?').run(sessionId, machine)
+    this.db.sql.prepare('DELETE FROM chat_machines WHERE session_id = ? AND machine = ?').run(sessionId, machine)
   }
 
   /** Every chat on a machine. */
   chatsOn(machine: string): string[] {
-    const rows = this.db.prepare('SELECT session_id FROM chat_machines WHERE machine = ?').all(machine) as { session_id: string }[]
+    const rows = this.db.sql.prepare('SELECT session_id FROM chat_machines WHERE machine = ?').all(machine) as { session_id: string }[]
     return rows.map((r) => r.session_id)
   }
 
   machinesOf(sessionIds: string[]): Map<string, string> {
-    const rows = this.db
+    const rows = this.db.sql
       .prepare('SELECT session_id, machine FROM chat_machines WHERE session_id IN (SELECT value FROM json_each(?))')
       .all(JSON.stringify(sessionIds)) as { session_id: string; machine: string }[]
     return new Map(rows.map((r) => [r.session_id, r.machine]))
@@ -60,7 +57,7 @@ export class ChatPlacement {
 
   /** Whether any chat was ever put on this id, so a new machine mustn't take it. */
   used(machine: string): boolean {
-    return !!this.db.prepare('SELECT 1 FROM chat_machines WHERE machine = ?').get(machine)
+    return !!this.db.sql.prepare('SELECT 1 FROM chat_machines WHERE machine = ?').get(machine)
   }
 
   /**
@@ -71,9 +68,9 @@ export class ChatPlacement {
    * chats started in Badger are added.
    */
   importOlderChats(projects: string): void {
-    if (!this.db.prepare('SELECT 1 FROM pending_import').get()) return
-    const insert = this.db.prepare('INSERT OR IGNORE INTO chat_machines (session_id, machine, created_at) VALUES (?, ?, ?)')
-    this.transaction(() => {
+    if (!this.db.sql.prepare('SELECT 1 FROM pending_import').get()) return
+    const insert = this.db.sql.prepare('INSERT OR IGNORE INTO chat_machines (session_id, machine, created_at) VALUES (?, ?, ?)')
+    this.db.transaction(() => {
       for (const project of readdirSafe(projects)) {
         for (const name of readdirSafe(join(projects, project))) {
           const sessionId = name.slice(0, -'.jsonl'.length)
@@ -82,7 +79,7 @@ export class ChatPlacement {
           if (info?.isFile()) insert.run(sessionId, LOCAL_MACHINE, Math.floor(info.mtimeMs))
         }
       }
-      this.db.exec('DELETE FROM pending_import')
+      this.db.sql.exec('DELETE FROM pending_import')
     })
   }
 }

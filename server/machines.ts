@@ -243,6 +243,36 @@ export class Machines {
     return true
   }
 
+  /** A machine's folders added by hand and folders taken off the list, by path. */
+  folders(machine: string): { added: Map<string, number>; hidden: Set<string> } {
+    const rows = this.db.prepare('SELECT path, added_at, hidden_at FROM machine_folders WHERE machine = ?').all(machine) as {
+      path: string
+      added_at: number
+      hidden_at: number | null
+    }[]
+    return {
+      added: new Map(rows.filter((r) => r.hidden_at === null).map((r) => [r.path, r.added_at])),
+      hidden: new Set(rows.filter((r) => r.hidden_at !== null).map((r) => r.path)),
+    }
+  }
+
+  addFolder(machine: string, path: string): void {
+    this.db
+      .prepare(
+        'INSERT INTO machine_folders (machine, path, added_at) VALUES (?, ?, ?) ON CONFLICT(machine, path) DO UPDATE SET added_at = excluded.added_at, hidden_at = NULL',
+      )
+      .run(machine, path, Date.now())
+  }
+
+  hideFolder(machine: string, path: string): void {
+    const now = Date.now()
+    this.db
+      .prepare(
+        'INSERT INTO machine_folders (machine, path, added_at, hidden_at) VALUES (?, ?, ?, ?) ON CONFLICT(machine, path) DO UPDATE SET hidden_at = excluded.hidden_at',
+      )
+      .run(machine, path, now, now)
+  }
+
   /** Which machine a runner's token is for, if any. */
   byToken(token: string): string | undefined {
     const row = this.db.prepare('SELECT id FROM machines WHERE token_hash = ?').get(hash(token)) as { id: string } | undefined

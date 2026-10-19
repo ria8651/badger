@@ -7,7 +7,9 @@ import { LOCAL_MACHINE } from '../shared/protocol.ts'
 import { Attention } from './attention.ts'
 import { BRIDGE_PATH, Bridges } from './bridge.ts'
 import { boardOps } from './boardTools.ts'
-import { Store } from './db.ts'
+import { Board } from './board.ts'
+import { ChatMeta } from './chatMeta.ts'
+import { Database } from './db.ts'
 import { loadDotEnv, shellEnv } from './env.ts'
 import { apiRoutes } from './hub/api.ts'
 import { serveBrowser } from './hub/browsers.ts'
@@ -59,25 +61,29 @@ const listChanged = debounced(() => viewers.toAll({ type: 'sessions_changed' }),
 const machinesChanged = debounced(() => viewers.toAll({ type: 'machines', machines: machines.list() }), LIST_DEBOUNCE_MS)
 const cardsChanged = () => viewers.toAll({ type: 'cards_changed' })
 
-const store = new Store(DATA_DIR, listChanged)
-const transcripts = new Transcripts(store.db)
-const placement = new ChatPlacement(store.db, (fn) => store.transaction(fn))
+const db = new Database(DATA_DIR)
+const meta = new ChatMeta(db, listChanged)
+const board = new Board(db, meta)
+const transcripts = new Transcripts(db.sql)
+const placement = new ChatPlacement(db)
 const bridges = new Bridges()
 const bridge = bridgeOps(bridges)
 
-const machines: Machines = new Machines(store.db, placement, {
+const machines: Machines = new Machines(db.sql, placement, {
   onChange: (id, runner) => link.onChange(id, runner),
   onEvent: (machine, event) => link.onEvent(machine, event),
 })
-const attention = new Attention(store, () => machines.allLive().flatMap((s) => (s.waiting ? [s.id] : [])), (e) => viewers.publish(e))
+const attention = new Attention(meta, () => machines.allLive().flatMap((s) => (s.waiting ? [s.id] : [])), (e) => viewers.publish(e))
 const account = new AccountLimits(
   () => machines.any()?.remote.accountUsage(),
   (usage) => viewers.toAll({ type: 'account_usage', usage }),
 )
 const terminals = new HubTerminals(machines, placement, viewers)
-const chats = new Chats({ store, transcripts, machines, placement, viewers, attention, scratchDir: SCRATCH_DIR, listChanged, cardsChanged })
+const chats = new Chats({ db, board, meta, transcripts, machines, placement, viewers, attention, scratchDir: SCRATCH_DIR, listChanged, cardsChanged })
 const link: RunnerLink = new RunnerLink({
-  store,
+  db,
+  board,
+  meta,
   transcripts,
   machines,
   placement,
@@ -86,7 +92,7 @@ const link: RunnerLink = new RunnerLink({
   viewers,
   attention,
   account,
-  ops: [...boardOps({ store, onChange: cardsChanged, chats: (ids) => chats.info(ids) }), ...bridge],
+  ops: [...boardOps({ board, meta, onChange: cardsChanged, chats: (ids) => chats.info(ids) }), ...bridge],
   hubOnly: new Set(bridge.map((o) => o.script)),
   listChanged,
   machinesChanged,
@@ -101,7 +107,7 @@ const PREVIEW_HOSTS = { ownPort: PORT, localOnly: CHECK_HOST }
 
 const api = httpHandler(
   [
-    ...apiRoutes({ store, transcripts, machines, chats, cardsChanged, listChanged, config: { defaultCwd: WORKSPACE_DIR, scratchCwd: SCRATCH_DIR, port: PORT } }),
+    ...apiRoutes({ board, transcripts, machines, chats, cardsChanged, listChanged, config: { defaultCwd: WORKSPACE_DIR, scratchCwd: SCRATCH_DIR, port: PORT } }),
     ...chats.routes(),
     ...terminals.routes(),
   ],
