@@ -1,11 +1,11 @@
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, type Component } from 'solid-js'
-import { Dynamic, Portal } from 'solid-js/web'
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, type Component } from 'solid-js'
+import { Dynamic } from 'solid-js/web'
 import { Check, CircleCheck, Copy, Ellipsis, Laptop, Loader2, Palette, Pencil, Plus, Server, TriangleAlert, X } from '../icons'
 import type { Machine } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { machines } from '../machines.ts'
 import { Appearance } from './Appearance.tsx'
-import { Button, Menu, inputClass, ltr, plural, setModalOpen } from './ui.tsx'
+import { Button, Menu, inputClass, ltr, plural, Dialog, DialogTitle } from './ui.tsx'
 
 interface Section {
   id: string
@@ -19,82 +19,37 @@ const SECTIONS: Section[] = [
   { id: 'runners', label: 'Runners', icon: Server, view: Runners },
 ]
 
-const toolButton = 'grid size-8 shrink-0 place-items-center rounded-lg text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-10'
-
 /** Badger's settings in a modal: sections listed on the left, or across the top on narrow screens. */
 export function Settings(props: { onClose: () => void }) {
   const [section, setSection] = createSignal(SECTIONS[0].id)
   const current = () => SECTIONS.find((s) => s.id === section()) ?? SECTIONS[0]
-  const before = document.activeElement as HTMLElement | null
-  let dialog!: HTMLDivElement
-  // Only a click that starts and ends on the backdrop closes, so selecting text out past the edge doesn't.
-  let downOnBackdrop = false
-
-  // Escape inside goes to what has focus first (an open menu, a name being edited), which marks it handled.
-  const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !e.defaultPrevented && props.onClose()
-  // From outside, say with focus left in the composer, it's caught first so it closes this rather than also stopping Claude.
-  const onKeyOutside = (e: KeyboardEvent) => {
-    if (e.key !== 'Escape' || dialog.contains(e.target as Node)) return
-    e.stopPropagation()
-    props.onClose()
-  }
-  addEventListener('keydown', onKey)
-  addEventListener('keydown', onKeyOutside, true)
-  setModalOpen(true)
-  onCleanup(() => {
-    setModalOpen(false)
-    removeEventListener('keydown', onKey)
-    removeEventListener('keydown', onKeyOutside, true)
-    before?.focus()
-  })
-  onMount(() => dialog.focus())
 
   return (
-    <Portal>
-      <div
-        class="fixed inset-0 z-50 flex animate-[fade-in_120ms_ease-out] items-center justify-center bg-black/40 sm:p-6"
-        onPointerDown={(e) => (downOnBackdrop = e.target === e.currentTarget)}
-        onClick={(e) => e.target === e.currentTarget && downOnBackdrop && props.onClose()}
-      >
-        <div
-          ref={dialog}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Settings"
-          tabindex={-1}
-          class="flex h-full w-full flex-col overflow-hidden border-edge bg-bg p-(--inset) shadow-(--shadow-modal) outline-none sm:h-[min(42rem,90vh)] sm:max-w-3xl sm:rounded-xl sm:border-(length:--dialog-border)"
-        >
-          <div class="bar flex items-center gap-2 border-b border-line px-4 py-3">
-            <h2 class="flex-1 text-sm font-medium text-fg">Settings</h2>
-            <button type="button" title="Close" onClick={props.onClose} class={toolButton}>
-              <X class="size-4" />
-            </button>
-          </div>
-          <div class="flex min-h-0 flex-1 flex-col sm:flex-row">
-            <nav class="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-3 py-2 sm:w-48 sm:flex-col sm:border-r sm:border-b-0 sm:py-3">
-              <For each={SECTIONS}>
-                {(s) => (
-                  <button
-                    type="button"
-                    aria-current={s.id === section() ? 'page' : undefined}
-                    onClick={() => setSection(s.id)}
-                    class={`flex h-8 shrink-0 items-center gap-2 rounded-lg px-2.5 text-[13px] transition-colors pointer-coarse:h-10 ${
-                      s.id === section() ? 'bg-surface text-fg' : 'text-fg-2 hover:bg-surface hover:text-fg'
-                    }`}
-                  >
-                    <s.icon class="size-4 text-fg-3" />
-                    {s.label}
-                  </button>
-                )}
-              </For>
-            </nav>
-            <div class="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
-              <Dynamic component={current().view} />
-            </div>
-          </div>
+    <Dialog label="Settings" onClose={props.onClose} size="sm:h-[min(42rem,90vh)] sm:max-w-3xl">
+      <DialogTitle title="Settings" onClose={props.onClose} />
+      <div class="flex min-h-0 flex-1 flex-col sm:flex-row">
+        <nav class="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-3 py-2 sm:w-48 sm:flex-col sm:border-r sm:border-b-0 sm:py-3">
+          <For each={SECTIONS}>
+            {(s) => (
+              <button
+                type="button"
+                aria-current={s.id === section() ? 'page' : undefined}
+                onClick={() => setSection(s.id)}
+                class={`flex h-8 shrink-0 items-center gap-2 rounded-lg px-2.5 text-[13px] transition-colors pointer-coarse:h-10 ${
+                  s.id === section() ? 'bg-surface text-fg' : 'text-fg-2 hover:bg-surface hover:text-fg'
+                }`}
+              >
+                <s.icon class="size-4 text-fg-3" />
+                {s.label}
+              </button>
+            )}
+          </For>
+        </nav>
+        <div class="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
+          <Dynamic component={current().view} />
         </div>
       </div>
-    </Portal>
+    </Dialog>
   )
 }
 

@@ -1,17 +1,13 @@
-import { For, Show, createSignal, type JSX } from 'solid-js'
+import { For, Show, type JSX } from 'solid-js'
 import { render } from 'solid-js/web'
 import { X } from '../icons'
-import { Button, floatBy, inputClass, modalOpen, setModalOpen } from './ui.tsx'
+import { Button, floatBy, inputClass, openModal, setPopoverOpen } from './ui.tsx'
 
 /**
  * What a popover floats by: the control it's about, or a spot on the page such as a text selection.
  * Without one, or once the control has gone from the page, it sits at the top.
  */
 export type Anchor = Element | DOMRect | undefined
-
-/** A popover is open. Escape is its to close, so dialogs behind it leave Escape be. */
-const [popoverOpen, setPopoverOpen] = createSignal(false)
-export { popoverOpen }
 
 /** Closes the one open now, since a new one replaces it. */
 let closeCurrent: (() => void) | undefined
@@ -30,7 +26,6 @@ function float(
   closeCurrent?.()
   const width = Math.min(opts.width, innerWidth - 16)
   const before = document.activeElement as HTMLElement | null
-  const wasModal = modalOpen()
   const host = document.createElement('div')
   document.body.append(host)
 
@@ -46,7 +41,7 @@ function float(
     host.remove()
     setPopoverOpen(false)
     if (opts.modal) {
-      setModalOpen(wasModal)
+      modal?.release()
       if (before?.isConnected) before.focus()
     }
     onClose?.()
@@ -81,7 +76,7 @@ function float(
   addEventListener('keydown', onKey, true)
   addEventListener('resize', close)
   setPopoverOpen(true)
-  if (opts.modal) setModalOpen(true)
+  const modal = opts.modal ? openModal() : undefined
   closeCurrent = close
 }
 

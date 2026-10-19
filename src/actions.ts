@@ -1,5 +1,6 @@
 import type { GitStatus } from '../shared/protocol.ts'
 import { worktreeOf } from './folders.ts'
+import { plural } from './format.ts'
 
 /**
  * Something a chat can be asked to do from the composer. Each is a prompt;
@@ -12,8 +13,6 @@ export interface ChatAction {
   description: string
   prompt: string
 }
-
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 /** cwd decides whether it can be merged: Badger merges the worktrees Claude Code makes, not others. */
 export function chatActions(git?: GitStatus, cwd?: string): ChatAction[] {

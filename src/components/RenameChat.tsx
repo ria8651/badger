@@ -4,7 +4,7 @@ import { RefreshCw, Sparkles } from '../icons'
 import type { SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { showError } from './Popover.tsx'
-import { floatBy } from './ui.tsx'
+import { createDismiss, floatBy } from './ui.tsx'
 
 /**
  * A trigger that opens a box to rename a chat, floating over the page, with a
@@ -61,18 +61,9 @@ export function RenameChat(props: {
     if (refocus) trigger.focus()
   }
 
-  const onOutside = (e: PointerEvent) => {
-    const target = e.target as Node
-    if (open() && !panel?.contains(target) && !trigger.contains(target)) close(typed ? input?.value : undefined, false)
-  }
-  const onResize = () => close(typed ? input?.value : undefined, false)
-  document.addEventListener('pointerdown', onOutside)
-  addEventListener('resize', onResize)
-  onCleanup(() => {
-    document.removeEventListener('pointerdown', onOutside)
-    removeEventListener('resize', onResize)
-    if (open()) props.onOpenChange?.(false)
-  })
+  // What's typed is kept; leaving it as suggested isn't.
+  createDismiss(open, () => [panel, trigger], () => close(typed ? input?.value : undefined, false), { resize: true })
+  onCleanup(() => open() && props.onOpenChange?.(false))
 
   return (
     <>

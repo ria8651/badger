@@ -2,7 +2,7 @@ import { For, Show, createMemo, type JSX } from 'solid-js'
 import { projectOf } from '../../shared/cardTree.ts'
 import type { Card, SessionSummary } from '../../shared/protocol.ts'
 import { attention } from '../attention.ts'
-import { STATUS_LABELS } from './Board.tsx'
+import { STATUS_LABELS } from '../stores/cards.ts'
 import { ChatDot } from './ui.tsx'
 
 const DAY = 24 * 60 * 60 * 1000

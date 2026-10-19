@@ -1,6 +1,7 @@
-import { For, Show, createSignal, onCleanup } from 'solid-js'
+import { For, Show, createSignal } from 'solid-js'
 import type { AccountUsage, ContextUsage } from '../../shared/protocol.ts'
 import { resets, tokens } from '../usage.ts'
+import { createDismiss } from './ui.tsx'
 
 /** Past this much of the window, the meter turns red: autocompact is close. */
 const CONTEXT_FULL = 85
@@ -9,9 +10,7 @@ const CONTEXT_FULL = 85
 export function ContextMeter(props: { usage: ContextUsage }) {
   const [open, setOpen] = createSignal(false)
   let root!: HTMLDivElement
-  const onOutside = (e: PointerEvent) => open() && !root.contains(e.target as Node) && setOpen(false)
-  document.addEventListener('pointerdown', onOutside)
-  onCleanup(() => document.removeEventListener('pointerdown', onOutside))
+  createDismiss(open, () => [root], () => setOpen(false))
 
   const full = () => props.usage.percent >= CONTEXT_FULL
   const rows = () => props.usage.categories.filter((c) => c.tokens > 0)

@@ -24,7 +24,7 @@ import { TaskPane, Transcript, UserMessage, createIndex, detail, runInBackground
 import { ContextMeter } from './Usage.tsx'
 import { Workspace, type ChatPanes } from './Workspace.tsx'
 import { showError } from './Popover.tsx'
-import { IconButton, Loading, Select, modalOpen, touch, type Option } from './ui.tsx'
+import { IconButton, Loading, Notice, Select, createDismiss, touch, type Option } from './ui.tsx'
 
 const MODES: Option<PermissionMode>[] = [
   { value: 'default', label: 'Ask before edits', description: 'Claude asks before changing files or running commands.' },
@@ -369,17 +369,7 @@ export function Chat(props: {
   }
   let moreButton!: HTMLButtonElement
   let morePanel: HTMLDivElement | undefined
-  const onOutside = (e: PointerEvent) => {
-    const target = e.target as Node
-    if (more() && !morePanel?.contains(target) && !moreButton.contains(target)) setMore(false)
-  }
-  const onEscape = (e: KeyboardEvent) => e.key === 'Escape' && !modalOpen() && more() && setMore(false)
-  document.addEventListener('pointerdown', onOutside)
-  document.addEventListener('keydown', onEscape)
-  onCleanup(() => {
-    document.removeEventListener('pointerdown', onOutside)
-    document.removeEventListener('keydown', onEscape)
-  })
+  createDismiss(more, () => [morePanel, moreButton], () => setMore(false), { escape: true })
 
   return (
     <Workspace
@@ -546,29 +536,26 @@ export function Chat(props: {
                   <TaskTray sessionId={props.sessionId} items={tasks} onOpen={openTask} />
                 </Show>
                 <Show when={state.error}>
-                  <div class="flex items-start gap-3 bg-danger/10 rounded-lg px-3 py-2 text-[13px] text-danger">
+                  <Notice tone="danger">
                     <span class="flex-1">{state.error}</span>
                     <button onClick={clearError} class="opacity-70 hover:opacity-100">Dismiss</button>
-                  </div>
+                  </Notice>
                 </Show>
                 <Show when={state.loaded && !connected()}>
-                  <div class="flex items-start gap-3 bg-surface rounded-lg px-3 py-2 text-[13px] text-fg-2">
-                    <WifiOff class="size-4 shrink-0 mt-0.5" />
+                  <Notice icon={WifiOff}>
                     <span class="flex-1">Can’t reach the server. Retrying… What you send goes out once it’s back.</span>
-                  </div>
+                  </Notice>
                 </Show>
                 {/* A folder on a machine that's offline can't be looked at, so it's only gone once the machine's back. */}
                 <Show when={state.gone && !offline()}>
-                  <div class="flex items-start gap-3 bg-surface rounded-lg px-3 py-2 text-[13px] text-fg-2">
-                    <FolderX class="size-4 shrink-0 mt-0.5" />
+                  <Notice icon={FolderX}>
                     <span class="flex-1">
                       This chat's folder is gone or can't be opened, so it can't take messages. <span class="text-fg-3 break-all">{cwd()}</span>
                     </span>
-                  </div>
+                  </Notice>
                 </Show>
                 <Show when={state.loaded && stranded()}>
-                  <div class="flex items-start gap-3 bg-surface rounded-lg px-3 py-2 text-[13px] text-fg-2">
-                    <MonitorOff class="size-4 shrink-0 mt-0.5" />
+                  <Notice icon={MonitorOff}>
                     <span class="flex-1">
                       <Show
                         when={isRemoved(machine())}
@@ -582,7 +569,7 @@ export function Chat(props: {
                         {picking() ? 'Pick another runner above to start this chat.' : 'This chat ran there, so it can only be read now.'}
                       </Show>
                     </span>
-                  </div>
+                  </Notice>
                 </Show>
                 <div
                   inert={state.gone || stranded()}

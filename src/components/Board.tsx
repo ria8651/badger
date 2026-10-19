@@ -6,14 +6,7 @@ import { api } from '../api.ts'
 import { folderLabel, worktreeOf } from '../folders.ts'
 import { ChatDot, inputClass } from './ui.tsx'
 import { attention } from '../attention.ts'
-
-export const STATUS_LABELS: Record<CardStatus, string> = {
-  backlog: 'Backlog',
-  todo: 'To do',
-  in_progress: 'In progress',
-  review: 'Review',
-  done: 'Done',
-}
+import { STATUS_LABELS } from '../stores/cards.ts'
 
 /** Where a dragged card would land: before the card at `index` in the column, ignoring the dragged card itself. */
 interface DropTarget {

@@ -8,7 +8,7 @@ import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '.
 import { inWs, terminalLabel, terminalState, terminalTooltip, terminals, terminalsListed, type Ws } from '../terminals.ts'
 import { TerminalView } from './TerminalView.tsx'
 import { showError } from './Popover.tsx'
-import { Loading, ltr } from './ui.tsx'
+import { Loading, ghostClass, ltr } from './ui.tsx'
 
 /** Green while running, red if it failed or was killed, grey once it exited cleanly. */
 export function StatusDot(props: { terminal: TerminalInfo }) {
@@ -17,9 +17,6 @@ export function StatusDot(props: { terminal: TerminalInfo }) {
 }
 
 const inWorkspace = (ws: Ws) => terminals().filter((t) => inWs(t, ws))
-
-export const ghost = (active = false) =>
-  `grid size-7 shrink-0 place-items-center rounded-md transition-colors hover:bg-surface hover:text-fg ${active ? 'text-fg' : 'text-fg-3'}`
 
 /** For the composer: shows or hides the panels and says how many terminals are running here. */
 export function TerminalButton(props: { ws: Ws; cwd: string }) {
@@ -44,7 +41,7 @@ export function TerminalButton(props: { ws: Ws; cwd: string }) {
 export function RestartButton(props: { terminal: TerminalInfo }) {
   return (
     <Show when={props.terminal.command}>
-      <button onClick={() => api.restartTerminal(props.terminal.id)} title="Restart: stop it and run the command again" class={ghost()}>
+      <button onClick={() => api.restartTerminal(props.terminal.id)} title="Restart: stop it and run the command again" class={ghostClass()}>
         <RotateCw class="size-3.5" />
       </button>
     </Show>
@@ -168,7 +165,7 @@ export function TerminalPage(props: { id: string; onClosed: () => void }) {
               <button
                 onClick={() => api.closeTerminal(t().id).then(props.onClosed)}
                 title="Delete terminal: stops it and everything it started"
-                class={ghost()}
+                class={ghostClass()}
               >
                 <Trash2 class="size-3.5" />
               </button>

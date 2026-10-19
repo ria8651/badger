@@ -1,4 +1,5 @@
-import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup, on, onMount, untrack } from 'solid-js'
+import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup, on, onMount, untrack, type Component, type JSX } from 'solid-js'
+import { Dynamic } from 'solid-js/web'
 import { createStore, reconcile } from 'solid-js/store'
 import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, FolderInput, PanelLeft, Pencil, Plus, Radar as RadarIcon, Search, Settings as SettingsIcon, Trash2, X } from './icons'
 import { descendants, projectOf } from '../shared/cardTree.ts'
@@ -18,7 +19,7 @@ import { StatusDot, TerminalPage } from './components/Terminals.tsx'
 import { ChatSummary, MachineName } from './components/ChatSummary.tsx'
 import { Settings } from './components/Settings.tsx'
 import { ImageViewer } from './components/ImageViewer.tsx'
-import { Loading, Menu, inputClass, modalOpen } from './components/ui.tsx'
+import { GhostButton, Loading, Menu, ghostClass, inputClass, modalOpen } from './components/ui.tsx'
 import { terminalLabel, terminalTooltip, terminalWs, terminals, terminalsLoaded, wsKey } from './terminals.ts'
 import { accountUsage } from './usage.ts'
 import { SIDEBAR_DEFAULT, dragSidebar, setSidebarWidth, sidebarWidth } from './sidebar.ts'
@@ -322,9 +323,7 @@ export function App() {
             cards={cards()}
             title={cardOf().has(s().id) ? 'Move to another project or card' : 'Put in a project'}
             onOpenChange={keepOpen(s().id)}
-            triggerClass={(open) =>
-              `grid size-5 place-items-center rounded-button-sm transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-6 ${open ? 'bg-surface text-fg' : 'text-fg-3'}`
-            }
+            triggerClass={(open) => ghostClass('sm', open)}
             trigger={() => <FolderInput class="size-3.5" />}
           />
           <RenameChat
@@ -332,20 +331,14 @@ export function App() {
             onSaved={(title) => renamed(s().id, title)}
             title="Rename"
             onOpenChange={keepOpen(s().id)}
-            triggerClass={(open) =>
-              `grid size-5 place-items-center rounded-button-sm transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-6 ${open ? 'bg-surface text-fg' : 'text-fg-3'}`
-            }
+            triggerClass={(open) => ghostClass('sm', open)}
             trigger={() => <Pencil class="size-3.5" />}
           />
-          <button
-            onClick={() => toggleArchived(s())}
-            title={s().archived ? 'Unarchive' : 'Archive'}
-            class="grid size-5 place-items-center rounded-button-sm text-fg-3 transition-colors hover:bg-surface hover:text-fg pointer-coarse:size-6"
-          >
+          <GhostButton size="sm" onClick={() => toggleArchived(s())} title={s().archived ? 'Unarchive' : 'Archive'}>
             <Show when={s().archived} fallback={<Archive class="size-3.5" />}>
               <ArchiveRestore class="size-3.5" />
             </Show>
-          </button>
+          </GhostButton>
         </div>
       </div>
     )
@@ -585,35 +578,23 @@ export function App() {
               </>
             )}
           />
-          <button
-            onClick={() => go({ kind: 'radar' })}
-            title="Everything on your radar, across projects"
-            class={`mb-px flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[13px] transition-colors hover:bg-surface hover:text-fg pointer-coarse:h-10 ${
-              route().kind === 'radar' ? 'bg-surface text-fg' : 'text-fg-2'
-            }`}
-          >
-            <RadarIcon class="size-4" /> Radar
+          <NavItem icon={RadarIcon} onClick={() => go({ kind: 'radar' })} active={route().kind === 'radar'} title="Everything on your radar, across projects" class="mb-px">
+            Radar
             <Show when={needsYou()}>
               <span class="ml-auto text-[11px] text-accent tabular-nums">{needsYou()}</span>
             </Show>
-          </button>
-          <button
+          </NavItem>
+          <NavItem
+            icon={Columns3}
             onClick={() => go(focus() ? { kind: 'card', id: focus()!.id } : { kind: 'board' })}
-            class={`mb-px flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[13px] transition-colors hover:bg-surface hover:text-fg pointer-coarse:h-10 ${
-              route().kind === 'board' || route().kind === 'card' ? 'bg-surface text-fg' : 'text-fg-2'
-            }`}
+            active={route().kind === 'board' || route().kind === 'card'}
+            class="mb-px"
           >
-            <Columns3 class="size-4" /> {focus() ? 'Board' : 'Projects'}
-          </button>
-          <button
-            onClick={newHomeChat}
-            title={focus() ? `A chat on ${focus()!.title}` : undefined}
-            class={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[13px] transition-colors hover:bg-surface hover:text-fg pointer-coarse:h-10 ${
-              route().kind === 'home' ? 'bg-surface text-fg' : 'text-fg-2'
-            }`}
-          >
-            <Plus class="size-4" /> New chat
-          </button>
+            {focus() ? 'Board' : 'Projects'}
+          </NavItem>
+          <NavItem icon={Plus} onClick={newHomeChat} active={route().kind === 'home'} title={focus() ? `A chat on ${focus()!.title}` : undefined}>
+            New chat
+          </NavItem>
         </div>
         <Show when={sortedTerminals().length}>
           <div class="px-2 pb-3">
@@ -791,3 +772,19 @@ function loadRecord<T>(key: string): T {
 }
 
 const TEMP = /^\/(private\/)?(tmp|var\/folders)\//
+
+/** A row in the sidebar's nav: an icon and a label, filled in while it's where you are. */
+function NavItem(props: { icon: Component<{ class?: string }>; onClick: () => void; active: boolean; title?: string; class?: string; children: JSX.Element }) {
+  return (
+    <button
+      onClick={props.onClick}
+      title={props.title}
+      class={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[13px] transition-colors hover:bg-surface hover:text-fg pointer-coarse:h-10 ${
+        props.active ? 'bg-surface text-fg' : 'text-fg-2'
+      } ${props.class ?? ''}`}
+    >
+      <Dynamic component={props.icon} class="size-4" />
+      {props.children}
+    </button>
+  )
+}
