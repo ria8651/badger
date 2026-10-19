@@ -1,15 +1,16 @@
 import { mkdir, readFile, stat } from 'node:fs/promises'
 import { hostname } from 'node:os'
-import { extname, isAbsolute, resolve } from 'node:path'
+import { extname, isAbsolute } from 'node:path'
 import { renameSession } from '@anthropic-ai/claude-agent-sdk'
 import { IMAGE_EXTENSIONS, IMAGE_TYPES, type AnswerDraft, type ImageAttachment, type PermissionMode } from '../shared/protocol.ts'
 import { BOARD_INSTRUCTIONS, BOARD_SERVER, boardOps } from './boardTools.ts'
 import { Children } from './children.ts'
-import { BadRequest } from './db.ts'
+import { listModels } from './claudeProbe.ts'
+import { BadRequest, absolutePath, badRequest } from './errors.ts'
 import { folderSize, forgetSize, listDir, listFolders } from './folders.ts'
 import { MERGE_TOOL, mergeTool } from './merge.ts'
 import { OpError, forwarded, mcpServer, toolName, type Op } from './ops.ts'
-import { Later, Peer, type Link, type Remote } from './peer.ts'
+import { Later, Peer, remote, type Link, type Remote } from './peer.ts'
 import { bridgeOps, openPreviewOp, previewInstructions } from './previewTools.ts'
 import type { CreateSpec } from './ptyProtocol.ts'
 import { REVIEW_TOOL, reviewTool } from './review.ts'
@@ -28,12 +29,12 @@ import {
   type RunnerWelcome,
 } from './runnerProtocol.ts'
 import { scriptOp } from './scripts.ts'
-import { SessionManager, listModels } from './session.ts'
+import { SessionManager } from './session.ts'
 import { TranscriptSync, writeTranscript } from './sync.ts'
 import { TERMINAL_INSTRUCTIONS, TERMINAL_SERVER, terminalOps } from './terminalTools.ts'
 import { Terminals } from './terminals.ts'
 import { ContextReader, readAccount } from './usage.ts'
-import { excludeWorktrees, gitPull, gitPush, gitStatus, inaccessible, removeWorktree, workspaceRoot, worktreeStatus } from './workspace.ts'
+import { excludeWorktrees, gitPull, gitPush, gitStatus, inaccessible, removeWorktree, rootOf, worktreeStatus } from './workspace.ts'
 
 // Merging only starts a chat in the main checkout, and that chat asks for anything risky itself.
 const MERGE_TOOL_NAME = `mcp__${BOARD_SERVER}__${MERGE_TOOL}`
@@ -71,7 +72,6 @@ export class Runner implements RunnerApi {
   private children: Children
   private sync: TranscriptSync
   private contexts: ContextReader
-  private roots = new Map<string, string>()
   /** Per chat, its turns that have ended, as LiveInfo.turns. Kept after it closes, so a chat that starts again counts on. */
   private turns = new Map<string, number>()
   /** The hub, as whichever link is up now; calls fail while none is. */
@@ -79,12 +79,7 @@ export class Runner implements RunnerApi {
   private opList?: Op[]
 
   constructor(private opts: RunnerOptions) {
-    this.hub = new Proxy({} as Remote<HubApi>, {
-      get: (_, method) =>
-        typeof method === 'string'
-          ? (...args: unknown[]) => (this.peer ? this.peer.call(method, args) : Promise.reject(new Error('Not connected to the Badger hub')))
-          : undefined,
-    })
+    this.hub = remote<HubApi>((method, args) => (this.peer ? this.peer.call(method, args) : Promise.reject(new Error('Not connected to the Badger hub'))))
     this.terminals = new Terminals(opts.dataDir, opts.env)
     this.manager = new SessionManager(
       () => this.sendLive(),
@@ -322,8 +317,7 @@ export class Runner implements RunnerApi {
   }
 
   workspaceRoot(cwd: string): string {
-    if (!this.roots.has(cwd)) this.roots.set(cwd, workspaceRoot(cwd))
-    return this.roots.get(cwd)!
+    return rootOf(cwd)
   }
 
   worktreeStatus(path: string) {
@@ -339,12 +333,12 @@ export class Runner implements RunnerApi {
   }
 
   async gitPull(path: string) {
-    if (this.manager.in(path).some((s) => s.running)) throw new BadRequest('A chat is working here. Pull once it has finished.')
+    if (this.manager.busyIn(path)) throw new BadRequest('A chat is working here. Pull once it has finished.')
     await gitPull(path).catch(badRequest)
   }
 
   async removeWorktree(dir: string): Promise<void> {
-    if (this.manager.in(dir).some((s) => s.running)) throw new BadRequest('A chat is still working in this worktree')
+    if (this.manager.busyIn(dir)) throw new BadRequest('A chat is still working in this worktree')
     if (this.terminals.terminals.some((t) => t.root === dir)) throw new BadRequest('Close its terminals first')
     for (const s of this.manager.in(dir)) s.close()
     await removeWorktree(dir).catch(badRequest)
@@ -360,21 +354,21 @@ export class Runner implements RunnerApi {
   }
 
   folderSize(path: string) {
-    return folderSize(absolute(path))
+    return folderSize(absolutePath(path))
   }
 
   listDir(path: string | undefined, hidden: boolean) {
-    return listDir(path ? absolute(path) : this.home(), hidden).catch(badRequest)
+    return listDir(path ? absolutePath(path) : this.home(), hidden).catch(badRequest)
   }
 
   async makeDir(path: string): Promise<string> {
-    const dir = absolute(path)
+    const dir = absolutePath(path)
     await mkdir(dir).catch(badRequest)
     return dir
   }
 
   async readFile(path: string): Promise<FileData> {
-    const file = absolute(path)
+    const file = absolutePath(path)
     const info = await stat(file).catch(badRequest)
     if (info.isDirectory()) throw new BadRequest('path must be a file')
     if (info.size > MAX_FILE_BYTES) throw new BadRequest(`${file} is too big to open here`)
@@ -408,16 +402,7 @@ export class Runner implements RunnerApi {
   }
 }
 
-const badRequest = (err: Error): never => {
-  throw new BadRequest(err.message)
-}
-
 /** A failure the hub says the caller should read, as an op's own. */
 const asOpError = (err: unknown): never => {
   throw err instanceof BadRequest ? new OpError(err.message) : err
-}
-
-function absolute(path: string): string {
-  if (!isAbsolute(path)) throw new BadRequest('path must be an absolute path')
-  return resolve(path)
 }

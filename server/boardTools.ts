@@ -3,8 +3,11 @@ import { z } from 'zod'
 import { CARD_STATUSES, type Card } from '../shared/protocol.ts'
 import { NO_CARD_CONTEXT, renderCardContext } from '../shared/cardContext.ts'
 import { ancestors, descendants, projectOf } from '../shared/cardTree.ts'
-import type { Actor, Store } from './db.ts'
-import { OpError, op, type Op, type OpContext } from './ops.ts'
+import type { Board } from './board.ts'
+import type { ChatMeta } from './chatMeta.ts'
+import type { Actor } from './db.ts'
+import { fail, op, type Op, type OpContext } from './ops.ts'
+import { UUID } from './runnerProtocol.ts'
 
 export const BOARD_SERVER = 'badger'
 
@@ -27,18 +30,17 @@ const status = z.enum(CARD_STATUSES)
  * doesn't count it as seen: `contextSeen` does, once it's gone in, so a reply
  * lost on the way can't lose it.
  */
-export function cardContext(store: Store, sessionId: string): string | undefined {
-  const cards = store.cards()
-  const card = cards.find((c) => c.sessionIds.includes(sessionId))
-  const last = store.contextHash(sessionId)
+export function cardContext(board: Board, meta: ChatMeta, sessionId: string): string | undefined {
+  const card = board.cardOf(sessionId)
+  const last = meta.contextHash(sessionId)
   if (!card) return last === undefined ? undefined : NO_CARD_CONTEXT
-  const rendered = renderCardContext(card, ancestors(cards, card.id))
+  const rendered = renderCardContext(card, ancestors(board.cards(), card.id))
   return hashOf(rendered) === last ? undefined : rendered
 }
 
 /** Claude has been given this card context, so it isn't repeated. */
-export function contextSeen(store: Store, sessionId: string, text: string): void {
-  store.setContextHash(sessionId, text === NO_CARD_CONTEXT ? null : hashOf(text))
+export function contextSeen(meta: ChatMeta, sessionId: string, text: string): void {
+  meta.setContextHash(sessionId, text === NO_CARD_CONTEXT ? null : hashOf(text))
 }
 
 const hashOf = (text: string) => createHash('sha1').update(text).digest('hex')
@@ -56,7 +58,8 @@ export interface ChatInfo {
 }
 
 export interface BoardDeps {
-  store: Store
+  board: Board
+  meta: ChatMeta
   /** Board data changed. */
   onChange: () => void
   /** What the hub knows of these chats, wherever they run. */
@@ -68,18 +71,18 @@ export interface BoardDeps {
  * the one whose script it is. The board is the hub's; runners run these
  * there (ops.ts forwarded).
  */
-export function boardOps({ store, onChange, chats }: BoardDeps): Op[] {
+export function boardOps({ board, meta, onChange, chats }: BoardDeps): Op[] {
   const actor = (ctx: OpContext): Actor => ({ source: 'claude', sessionId: ctx.sessionId })
-  const cardOf = (ctx: OpContext) => store.cards().find((c) => c.sessionIds.includes(ctx.sessionId))
+  const cardOf = (ctx: OpContext) => board.cardOf(ctx.sessionId)
   // Claude already knows this state (it wrote or just read it), so don't inject it next turn.
   const markSeen = (card: Card, ctx: OpContext) => {
-    if (card.sessionIds.includes(ctx.sessionId)) store.setContextHash(ctx.sessionId, hashOf(renderCardContext(card, ancestors(store.cards(), card.id))))
+    if (card.sessionIds.includes(ctx.sessionId)) meta.setContextHash(ctx.sessionId, hashOf(renderCardContext(card, ancestors(board.cards(), card.id))))
   }
   const changed = <T>(value: T): T => {
     onChange()
     return value
   }
-  const need = (id: number) => store.card(id) ?? fail(`No card #${id}.`)
+  const need = (id: number) => board.card(id) ?? fail(`No card #${id}.`)
   const s = { server: BOARD_SERVER }
 
   return [
@@ -96,7 +99,7 @@ export function boardOps({ store, onChange, chats }: BoardDeps): Op[] {
       autoAllow: true,
       annotations: { readOnlyHint: true },
       async run(args, ctx) {
-        const all = store.cards()
+        const all = board.cards()
         if (args.parent_id !== undefined) need(args.parent_id)
         const listed = tree(all, args.parent_id ?? null, args.status)
         const mine = cardOf(ctx)?.id
@@ -116,7 +119,7 @@ export function boardOps({ store, onChange, chats }: BoardDeps): Op[] {
       async run(args, ctx) {
         const card = args.id === undefined ? (cardOf(ctx) ?? fail('This chat is not on a card.')) : need(args.id)
         markSeen(card, ctx)
-        return detail(card, store.cards(), ctx.sessionId, store.archivedIds(), await chats([...card.sessionIds, ctx.sessionId]))
+        return detail(card, board.cards(), ctx.sessionId, meta.archivedIds(), await chats([...card.sessionIds, ctx.sessionId]))
       },
     }),
     op({
@@ -140,10 +143,10 @@ export function boardOps({ store, onChange, chats }: BoardDeps): Op[] {
       autoAllow: true,
       async run(args, ctx) {
         const mine = cardOf(ctx)
-        const parentId = args.parent_id !== undefined ? args.parent_id : ((mine && projectOf(store.cards(), mine.id)?.id) ?? null)
-        const card = store.createCard({ ...args, parentId }, actor(ctx))
-        if (args.link_this_chat) store.linkSession(card.id, ctx.sessionId, actor(ctx))
-        const created = store.card(card.id)!
+        const parentId = args.parent_id !== undefined ? args.parent_id : ((mine && projectOf(board.cards(), mine.id)?.id) ?? null)
+        const card = board.createCard({ ...args, parentId }, actor(ctx))
+        if (args.link_this_chat) board.linkSession(card.id, ctx.sessionId, actor(ctx))
+        const created = board.card(card.id)!
         markSeen(created, ctx)
         const where = parentId === null ? ' as a new project' : ` in project #${parentId}`
         return changed({ text: `Created ${summary(created, !!args.link_this_chat)}${where}`, value: created })
@@ -165,7 +168,7 @@ export function boardOps({ store, onChange, chats }: BoardDeps): Op[] {
       autoAllow: true,
       annotations: { idempotentHint: true },
       async run({ id, parent_id, ...patch }, ctx) {
-        const card = store.updateCard(id, { ...patch, parentId: parent_id }, actor(ctx)) ?? fail(`No card #${id}.`)
+        const card = board.updateCard(id, { ...patch, parentId: parent_id }, actor(ctx)) ?? fail(`No card #${id}.`)
         markSeen(card, ctx)
         return changed({ text: `Updated ${summary(card, card.id === cardOf(ctx)?.id)}`, value: card })
       },
@@ -181,8 +184,8 @@ export function boardOps({ store, onChange, chats }: BoardDeps): Op[] {
       annotations: { idempotentHint: true },
       async run({ id }, ctx) {
         need(id)
-        store.linkSession(id, ctx.sessionId, actor(ctx))
-        return changed({ text: `This chat is now on card #${id}.`, value: store.card(id) })
+        board.linkSession(id, ctx.sessionId, actor(ctx))
+        return changed({ text: `This chat is now on card #${id}.`, value: board.card(id) })
       },
     }),
     op({
@@ -194,7 +197,7 @@ export function boardOps({ store, onChange, chats }: BoardDeps): Op[] {
       input: {
         session_id: z
           .string()
-          .regex(/^[0-9a-f-]{36}$/)
+          .regex(UUID)
           .optional()
           .describe('Chat id, as listed by get_card. Omit for this chat'),
         archived: z.boolean().optional().describe('false to unarchive. Defaults to true'),
@@ -205,7 +208,7 @@ export function boardOps({ store, onChange, chats }: BoardDeps): Op[] {
       async run(args, ctx) {
         const id = args.session_id ?? ctx.sessionId
         const archived = args.archived ?? true
-        store.setArchived(id, archived, actor(ctx))
+        meta.setArchived(id, archived, actor(ctx))
         const which = id === ctx.sessionId ? 'This chat' : `Chat ${id}`
         return { text: `${which} is ${archived ? 'archived' : 'not archived'}.`, value: { sessionId: id, archived } }
       },
@@ -219,16 +222,13 @@ export function boardOps({ store, onChange, chats }: BoardDeps): Op[] {
       returns: '{ deleted: id }',
       annotations: { destructiveHint: true },
       async run({ id }, ctx) {
-        if (!store.deleteCard(id, actor(ctx))) fail(`No card #${id}.`)
+        if (!board.deleteCard(id, actor(ctx))) fail(`No card #${id}.`)
         return changed({ text: `Deleted card #${id}.`, value: { deleted: id } })
       },
     }),
   ]
 }
 
-const fail = (message: string): never => {
-  throw new OpError(message)
-}
 
 function summary(c: Card, mine: boolean, cards: Card[] = []): string {
   const chats = c.sessionIds.length ? `, ${c.sessionIds.length} chat${c.sessionIds.length === 1 ? '' : 's'}` : ''

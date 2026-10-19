@@ -1,11 +1,12 @@
+import type { Socket } from 'node:net'
 import type { WebSocket } from 'ws'
 import type { ZodType } from 'zod'
-import { BadRequest } from './db.ts'
+import { BadRequest, message } from './errors.ts'
 
 /**
- * One end of the connection between the hub and a runner: the runner built
- * into the hub talks over an in-memory pair, remote ones over a WebSocket.
- * Frames arrive in the order they were sent.
+ * One end of a connection between two Peers. The hub and its own runner talk
+ * over an in-memory pair, remote runners over a WebSocket, the PTY host over
+ * a unix socket. Frames arrive in the order they were sent.
  */
 export interface Link {
   send(frame: Frame): void
@@ -43,8 +44,23 @@ export function memoryLinks(): [Link, Link] {
   return [end(a, b), end(b, a)]
 }
 
-/** A link over a WebSocket, one JSON frame per message. */
-export function wsLink(ws: WebSocket): Link {
+/**
+ * A link over a WebSocket, one JSON frame per message. With `pingMs`, the
+ * other end is pinged that often, and the connection dropped if it hasn't
+ * answered the last ping by the next: a laptop gone to sleep can leave it
+ * half-open, answering nothing.
+ */
+export function wsLink(ws: WebSocket, opts: { pingMs?: number } = {}): Link {
+  if (opts.pingMs) {
+    let alive = true
+    ws.on('pong', () => (alive = true))
+    const ping = setInterval(() => {
+      if (!alive) return ws.terminate()
+      alive = false
+      ws.ping()
+    }, opts.pingMs)
+    ws.on('close', () => clearInterval(ping))
+  }
   return {
     send: (frame) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(frame)),
     onFrame: (fn) =>
@@ -59,6 +75,44 @@ export function wsLink(ws: WebSocket): Link {
       }),
     onClose: (fn) => void ws.on('close', fn),
     close: (now) => (now ? ws.terminate() : ws.close()),
+  }
+}
+
+/** Frames as another protocol's messages, for a link that speaks it. */
+export interface Codec {
+  encode(frame: Frame): unknown
+  /** Undefined for a message that isn't a frame, which is dropped. */
+  decode(message: any): Frame | undefined
+}
+
+/** A link over a stream socket, one JSON message per line: frames, or with a codec, what it makes of them. */
+export function ndjsonLink(socket: Socket, codec?: Codec): Link {
+  const listeners = new Set<(frame: Frame) => void>()
+  let buf = ''
+  socket.setEncoding('utf8')
+  socket.on('data', (chunk: string) => {
+    buf += chunk
+    let nl: number
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl)
+      buf = buf.slice(nl + 1)
+      let frame: Frame | undefined
+      try {
+        const message = JSON.parse(line)
+        frame = codec ? codec.decode(message) : message
+      } catch {
+        continue
+      }
+      if (frame) for (const fn of listeners) fn(frame)
+    }
+  })
+  // Errors end in a close, which is what's listened for.
+  socket.on('error', () => {})
+  return {
+    send: (frame) => void (!socket.destroyed && socket.write(JSON.stringify(codec ? codec.encode(frame) : frame) + '\n')),
+    onFrame: (fn) => void listeners.add(fn),
+    onClose: (fn) => void socket.on('close', fn),
+    close: (now) => void (now ? socket.destroy() : socket.end()),
   }
 }
 
@@ -77,6 +131,13 @@ export type Replies = Readonly<Record<string, ZodType>>
 /** Every method of T, called remotely: same arguments, always a promise. */
 export type Remote<T> = {
   [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<R extends Later<infer V> ? V : Awaited<R>> : never
+}
+
+/** A Remote whose every method goes through `call`. It has no `then`, so it can be awaited or returned from an async function as itself. */
+export function remote<T>(call: (method: string, args: unknown[]) => Promise<any>): Remote<T> {
+  return new Proxy({} as Remote<T>, {
+    get: (_, method) => (typeof method === 'string' && method !== 'then' ? (...args: unknown[]) => call(method, args) : undefined),
+  })
 }
 
 /**
@@ -125,9 +186,7 @@ export class Peer<Theirs> {
       this.waiting.clear()
       onClose()
     })
-    this.remote = new Proxy({} as Remote<Theirs>, {
-      get: (_, method) => (typeof method === 'string' ? (...args: unknown[]) => this.call(method, args) : undefined),
-    })
+    this.remote = remote((method, args) => this.call(method, args))
   }
 
   call(method: string, args: unknown[], timeoutMs?: number): Promise<any> {
@@ -141,9 +200,7 @@ export class Peer<Theirs> {
    * it. Calls that send a lot, or take a while to do, go through `remote`.
    */
   within(ms: number): Remote<Theirs> {
-    return new Proxy({} as Remote<Theirs>, {
-      get: (_, method) => (typeof method === 'string' ? (...args: unknown[]) => this.call(method, args, ms) : undefined),
-    })
+    return remote((method, args) => this.call(method, args, ms))
   }
 
   /**
@@ -197,8 +254,7 @@ export class Peer<Theirs> {
   }
 
   private async serve(frame: Extract<Frame, { t: 'call' }>): Promise<void> {
-    const fail = (err: unknown) =>
-      this.link.send({ t: 'reply', id: frame.id, error: err instanceof Error ? err.message : String(err), bad: err instanceof BadRequest })
+    const fail = (err: unknown) => this.link.send({ t: 'reply', id: frame.id, error: message(err), bad: err instanceof BadRequest })
     try {
       const args = this.argsFor(String(frame.method), frame.args)
       const fn = (this.methods as Record<string, Handler>)[frame.method]

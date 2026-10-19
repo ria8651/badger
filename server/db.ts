@@ -1,8 +1,6 @@
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { descendants } from '../shared/cardTree.ts'
-import { CARD_STATUSES, type Card, type CardStatus, type DraftAttachments } from '../shared/protocol.ts'
 
 /**
  * Transcript lines holding images, and the uuid the SDK's reader gives each one's message: a message sent while
@@ -169,62 +167,35 @@ const MIGRATIONS = [
   `CREATE INDEX transcript_lines_images ON transcript_lines (session_id, ${IMAGE_LINE_UUID}) WHERE ${IMAGE_LINE};`,
 ]
 
-/**
- * Cards that aren't deleted and aren't inside one that is. Only the card someone deleted is marked, so restoring
- * one later is clearing that mark, and a card deleted on its own before its project would stay deleted.
- */
-const VISIBLE = `WITH RECURSIVE hidden(id) AS (
-    SELECT id FROM cards WHERE deleted_at IS NOT NULL
-    UNION SELECT cards.id FROM cards JOIN hidden ON cards.parent_id = hidden.id
-  )
-  SELECT * FROM cards WHERE id NOT IN (SELECT id FROM hidden)`
-
-interface CardRow {
-  id: number
-  parent_id: number | null
-  deleted_at: number | null
-  title: string
-  description: string
-  status: CardStatus
-  position: number
-  created_at: number
-  updated_at: number
-}
-
-export type CardPatch = Partial<Pick<Card, 'title' | 'description' | 'status' | 'position' | 'parentId'>>
-
 /** Who made a change. There are no users yet, so for now it's where the change came from. */
-/** A chat's unsent composer contents. */
-export type Draft = { text: string; attachments: DraftAttachments }
-
 export type Actor = { source: 'ui' } | { source: 'claude'; sessionId: string }
 
 type AuditEntity = 'card' | 'card_session' | 'archived_session'
 type AuditAction = 'create' | 'update' | 'delete' | 'link' | 'unlink' | 'archive' | 'unarchive'
 
-/** Project data that spans repos and users: cards and which chats belong to them. */
-export class Store {
-  /** Shared with the other tables' owners: machines and transcripts. */
-  readonly db: DatabaseSync
+/**
+ * Badger's SQLite database, migrated to the latest schema. Each table has one
+ * owner, which alone runs SQL on it: the board's are Board's, a chat's
+ * draft, archive and the like ChatMeta's, machines' Machines', which machine
+ * each chat is on ChatPlacement's, and transcripts Transcripts'.
+ */
+export class Database {
+  readonly sql: DatabaseSync
   private inTransaction = false
 
-  /** @param onArchived called whenever a chat is archived or unarchived, including by a card's status changing. */
-  constructor(
-    dir: string,
-    private onArchived: () => void = () => {},
-  ) {
+  constructor(dir: string) {
     mkdirSync(dir, { recursive: true })
-    this.db = new DatabaseSync(join(dir, 'badger.db'))
-    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON')
+    this.sql = new DatabaseSync(join(dir, 'badger.db'))
+    this.sql.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON')
     this.migrate()
   }
 
   private migrate(): void {
-    const { user_version } = this.db.prepare('PRAGMA user_version').get() as { user_version: number }
+    const { user_version } = this.sql.prepare('PRAGMA user_version').get() as { user_version: number }
     for (let v = user_version; v < MIGRATIONS.length; v++) {
       this.transaction(() => {
-        this.db.exec(MIGRATIONS[v])
-        this.db.exec(`PRAGMA user_version = ${v + 1}`)
+        this.sql.exec(MIGRATIONS[v])
+        this.sql.exec(`PRAGMA user_version = ${v + 1}`)
       })
     }
   }
@@ -232,23 +203,23 @@ export class Store {
   /** Joins the enclosing transaction if there is one, so writes that call each other stay atomic. */
   transaction<T>(fn: () => T): T {
     if (this.inTransaction) return fn()
-    this.db.exec('BEGIN')
+    this.sql.exec('BEGIN')
     this.inTransaction = true
     try {
       const result = fn()
-      this.db.exec('COMMIT')
+      this.sql.exec('COMMIT')
       return result
     } catch (err) {
-      this.db.exec('ROLLBACK')
+      this.sql.exec('ROLLBACK')
       throw err
     } finally {
       this.inTransaction = false
     }
   }
 
-  /** Call inside the same transaction as the change it records. */
-  private audit(actor: Actor, entity: AuditEntity, entityId: string | number, action: AuditAction, before: object | null, after: object | null): void {
-    this.db
+  /** Records a change to board data, append-only. Call inside the same transaction as the change it records. */
+  audit(actor: Actor, entity: AuditEntity, entityId: string | number, action: AuditAction, before: object | null, after: object | null): void {
+    this.sql
       .prepare('INSERT INTO audit_log (at, actor, actor_session, entity, entity_id, action, before, after) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .run(
         Date.now(),
@@ -261,324 +232,4 @@ export class Store {
         after && JSON.stringify(after),
       )
   }
-
-  /** Every card that isn't deleted. */
-  cards(): Card[] {
-    const rows = this.db.prepare(`${VISIBLE} ORDER BY position`).all() as unknown as CardRow[]
-    const links = this.db.prepare('SELECT card_id, session_id FROM card_sessions ORDER BY created_at').all() as {
-      card_id: number
-      session_id: string
-    }[]
-    const sessions = new Map<number, string[]>()
-    for (const l of links) sessions.set(l.card_id, [...(sessions.get(l.card_id) ?? []), l.session_id])
-    const moved = this.statusChanges()
-    return rows.map((r) => toCard(r, sessions.get(r.id) ?? [], moved.get(r.id)))
-  }
-
-  card(id: number): Card | undefined {
-    const row = this.db.prepare(`${VISIBLE} AND id = ?`).get(id) as CardRow | undefined
-    if (!row) return undefined
-    const links = this.db.prepare('SELECT session_id FROM card_sessions WHERE card_id = ? ORDER BY created_at').all(id) as {
-      session_id: string
-    }[]
-    return toCard(
-      row,
-      links.map((l) => l.session_id),
-      this.statusChanges(id).get(id),
-    )
-  }
-
-  /** When each card (or just `id`) last changed status, by the audit log. Creating one counts. */
-  private statusChanges(id?: number): Map<number, number> {
-    const rows = this.db
-      .prepare(
-        `SELECT entity_id, MAX(at) AS at FROM audit_log
-         WHERE entity = 'card' AND action IN ('create', 'update') AND json_extract(after, '$.status') IS NOT NULL ${id === undefined ? '' : 'AND entity_id = ?'}
-         GROUP BY entity_id`,
-      )
-      .all(...(id === undefined ? [] : [String(id)])) as { entity_id: string; at: number }[]
-    return new Map(rows.map((r) => [Number(r.entity_id), r.at]))
-  }
-
-  createCard(input: { title: string; description?: string; status?: CardStatus; parentId?: number | null }, actor: Actor): Card {
-    const title = requireTitle(input.title)
-    const status = requireStatus(input.status ?? 'backlog')
-    const parentId = this.requireParent(input.parentId ?? null)
-    const now = Date.now()
-    return this.transaction(() => {
-      const { lastInsertRowid } = this.db
-        .prepare('INSERT INTO cards (title, description, status, position, parent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .run(title, input.description ?? '', status, this.endOf(status), parentId, now, now)
-      const card = this.card(Number(lastInsertRowid))!
-      this.audit(actor, 'card', card.id, 'create', null, editable(card))
-      return card
-    })
-  }
-
-  updateCard(id: number, patch: CardPatch, actor: Actor): Card | undefined {
-    const current = this.card(id)
-    if (!current) return undefined
-    const next = { ...current }
-    if (patch.title !== undefined) next.title = requireTitle(patch.title)
-    if (patch.description !== undefined) next.description = String(patch.description)
-    if (patch.status !== undefined) next.status = requireStatus(patch.status)
-    if (patch.parentId !== undefined) next.parentId = this.requireParent(patch.parentId, id)
-    if (patch.position !== undefined) next.position = Number(patch.position)
-    // Moving columns without a position lands at the bottom of the new one.
-    else if (next.status !== current.status) next.position = this.endOf(next.status)
-    const before: CardPatch = {}
-    const after: CardPatch = {}
-    for (const key of ['title', 'description', 'status', 'position', 'parentId'] as const) {
-      if (next[key] === current[key]) continue
-      Object.assign(before, { [key]: current[key] })
-      Object.assign(after, { [key]: next[key] })
-    }
-    // Repeating an update changes nothing, so it isn't written or logged.
-    if (!Object.keys(after).length) return current
-    this.transaction(() => {
-      this.db
-        .prepare('UPDATE cards SET title = ?, description = ?, status = ?, position = ?, parent_id = ?, updated_at = ? WHERE id = ?')
-        .run(next.title, next.description, next.status, next.position, next.parentId, Date.now(), id)
-      this.audit(actor, 'card', id, 'update', before, after)
-      // Finishing a card puts its chats away. Reopening it leaves them archived; messaging one brings it back.
-      if (next.status === 'done' && current.status !== 'done') for (const s of current.sessionIds) this.setArchived(s, true, actor)
-    })
-    return this.card(id)
-  }
-
-  /** Marks just this card deleted; the cards inside it are hidden with it. Chats stay linked but are no longer on a card. */
-  deleteCard(id: number, actor: Actor): boolean {
-    if (!this.card(id)) return false
-    this.transaction(() => {
-      this.db.prepare('UPDATE cards SET deleted_at = ? WHERE id = ?').run(Date.now(), id)
-      this.audit(actor, 'card', id, 'delete', null, null)
-    })
-    return true
-  }
-
-  /** Attaches a chat to a card, moving it off any card it was on. */
-  linkSession(cardId: number, sessionId: string, actor: Actor): void {
-    this.transaction(() => {
-      const current = this.db.prepare('SELECT card_id FROM card_sessions WHERE session_id = ?').get(sessionId) as { card_id: number } | undefined
-      if (current?.card_id === cardId) return
-      this.db
-        .prepare(
-          'INSERT INTO card_sessions (session_id, card_id, created_at) VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET card_id = excluded.card_id',
-        )
-        .run(sessionId, cardId, Date.now())
-      this.audit(actor, 'card_session', sessionId, 'link', current ? { cardId: current.card_id } : null, { cardId })
-    })
-  }
-
-  unlinkSession(cardId: number, sessionId: string, actor: Actor): boolean {
-    return this.transaction(() => {
-      const removed = this.db.prepare('DELETE FROM card_sessions WHERE card_id = ? AND session_id = ?').run(cardId, sessionId).changes > 0
-      if (removed) this.audit(actor, 'card_session', sessionId, 'unlink', { cardId }, null)
-      return removed
-    })
-  }
-
-  archivedIds(): Set<string> {
-    const rows = this.db.prepare('SELECT session_id FROM archived_sessions').all() as { session_id: string }[]
-    return new Set(rows.map((r) => r.session_id))
-  }
-
-  /** Returns whether anything changed. */
-  setArchived(sessionId: string, archived: boolean, actor: Actor): boolean {
-    const changed = this.transaction(() => {
-      const result = archived
-        ? this.db.prepare('INSERT INTO archived_sessions (session_id, archived_at) VALUES (?, ?) ON CONFLICT DO NOTHING').run(sessionId, Date.now())
-        : this.db.prepare('DELETE FROM archived_sessions WHERE session_id = ?').run(sessionId)
-      if (result.changes > 0) this.audit(actor, 'archived_session', sessionId, archived ? 'archive' : 'unarchive', null, null)
-      return result.changes > 0
-    })
-    if (changed) this.onArchived()
-    return changed
-  }
-
-  draft(sessionId: string): Draft {
-    const row = this.db.prepare('SELECT text, attachments FROM session_drafts WHERE session_id = ?').get(sessionId) as
-      | { text: string; attachments: string | null }
-      | undefined
-    return { text: row?.text ?? '', attachments: row?.attachments ? JSON.parse(row.attachments) : { pastes: [], images: [] } }
-  }
-
-  /** Replaces the parts of the draft given. An empty draft is deleted rather than stored. */
-  setDraft(sessionId: string, change: Partial<Draft>): void {
-    const saved = this.draft(sessionId)
-    const text = change.text ?? saved.text
-    const attachments = change.attachments ?? saved.attachments
-    const attached = attachments.pastes.length > 0 || attachments.images.length > 0
-    if (!text && !attached) this.db.prepare('DELETE FROM session_drafts WHERE session_id = ?').run(sessionId)
-    else
-      this.db
-        .prepare(
-          'INSERT INTO session_drafts (session_id, text, attachments, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET text = excluded.text, attachments = excluded.attachments, updated_at = excluded.updated_at',
-        )
-        .run(sessionId, text, attached ? JSON.stringify(attachments) : null, Date.now())
-  }
-
-  unreadIds(): Set<string> {
-    const rows = this.db.prepare('SELECT session_id FROM unread_sessions').all() as { session_id: string }[]
-    return new Set(rows.map((r) => r.session_id))
-  }
-
-  /** Returns whether anything changed. */
-  setUnread(sessionId: string, unread: boolean): boolean {
-    const result = unread
-      ? this.db.prepare('INSERT INTO unread_sessions (session_id, at) VALUES (?, ?) ON CONFLICT DO NOTHING').run(sessionId, Date.now())
-      : this.db.prepare('DELETE FROM unread_sessions WHERE session_id = ?').run(sessionId)
-    return result.changes > 0
-  }
-
-  /** The chat that started this one, if it's a child. */
-  parentOf(sessionId: string): string | undefined {
-    const row = this.db.prepare('SELECT parent_session FROM child_sessions WHERE session_id = ?').get(sessionId) as { parent_session: string } | undefined
-    return row?.parent_session
-  }
-
-  addChild(child: { sessionId: string; parentId: string; toolUseId: string; kind: string }): void {
-    this.db
-      .prepare('INSERT INTO child_sessions (session_id, parent_session, tool_use_id, kind, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(child.sessionId, child.parentId, child.toolUseId, child.kind, Date.now())
-  }
-
-  /** Every child chat's id, to keep them out of the sidebar. */
-  childIds(): Set<string> {
-    const rows = this.db.prepare('SELECT session_id FROM child_sessions').all() as { session_id: string }[]
-    return new Set(rows.map((r) => r.session_id))
-  }
-
-  /** A chat's children by the tool call that started each one. */
-  children(parentId: string): Record<string, string> {
-    const rows = this.db.prepare('SELECT session_id, tool_use_id FROM child_sessions WHERE parent_session = ?').all(parentId) as {
-      session_id: string
-      tool_use_id: string
-    }[]
-    return Object.fromEntries(rows.map((r) => [r.tool_use_id, r.session_id]))
-  }
-
-  addFork(fork: { sessionId: string; sourceId: string; cwd: string; worktree?: string; note?: string }): void {
-    this.db
-      .prepare('INSERT INTO forks (session_id, source_id, cwd, worktree, note, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(fork.sessionId, fork.sourceId, fork.cwd, fork.worktree ?? null, fork.note ?? null, Date.now())
-  }
-
-  /** A fork's folder, and the new worktree it starts in, while it hasn't. */
-  forkStart(sessionId: string): { cwd: string; worktree: string } | undefined {
-    const row = this.db.prepare('SELECT cwd, worktree FROM forks WHERE session_id = ? AND worktree IS NOT NULL').get(sessionId) as
-      | { cwd: string; worktree: string }
-      | undefined
-    return row
-  }
-
-  /** The fork has started in its worktree, so later starts resume wherever it is. */
-  forkStarted(sessionId: string): void {
-    this.db.prepare('UPDATE forks SET worktree = NULL WHERE session_id = ?').run(sessionId)
-  }
-
-  /** What a fork that moved is told about it, until Claude has been. */
-  forkNote(sessionId: string): string | undefined {
-    const row = this.db.prepare('SELECT note FROM forks WHERE session_id = ?').get(sessionId) as { note: string | null } | undefined
-    return row?.note ?? undefined
-  }
-
-  forkNoteSeen(sessionId: string): void {
-    this.db.prepare('UPDATE forks SET note = NULL WHERE session_id = ?').run(sessionId)
-  }
-
-  removeFork(sessionId: string): void {
-    this.db.prepare('DELETE FROM forks WHERE session_id = ?').run(sessionId)
-  }
-
-  contextHash(sessionId: string): string | undefined {
-    const row = this.db.prepare('SELECT hash FROM session_context WHERE session_id = ?').get(sessionId) as { hash: string } | undefined
-    return row?.hash
-  }
-
-  setContextHash(sessionId: string, hash: string | null): void {
-    if (hash === null) this.db.prepare('DELETE FROM session_context WHERE session_id = ?').run(sessionId)
-    else
-      this.db
-        .prepare('INSERT INTO session_context (session_id, hash) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET hash = excluded.hash')
-        .run(sessionId, hash)
-  }
-
-  /** A machine's folders added by hand and folders taken off the list, by path. */
-  folders(machine: string): { added: Map<string, number>; hidden: Set<string> } {
-    const rows = this.db.prepare('SELECT path, added_at, hidden_at FROM machine_folders WHERE machine = ?').all(machine) as {
-      path: string
-      added_at: number
-      hidden_at: number | null
-    }[]
-    return {
-      added: new Map(rows.filter((r) => r.hidden_at === null).map((r) => [r.path, r.added_at])),
-      hidden: new Set(rows.filter((r) => r.hidden_at !== null).map((r) => r.path)),
-    }
-  }
-
-  addFolder(machine: string, path: string): void {
-    this.db
-      .prepare(
-        'INSERT INTO machine_folders (machine, path, added_at) VALUES (?, ?, ?) ON CONFLICT(machine, path) DO UPDATE SET added_at = excluded.added_at, hidden_at = NULL',
-      )
-      .run(machine, path, Date.now())
-  }
-
-  hideFolder(machine: string, path: string): void {
-    const now = Date.now()
-    this.db
-      .prepare(
-        'INSERT INTO machine_folders (machine, path, added_at, hidden_at) VALUES (?, ?, ?, ?) ON CONFLICT(machine, path) DO UPDATE SET hidden_at = excluded.hidden_at',
-      )
-      .run(machine, path, now, now)
-  }
-
-  /** A card to put cards on, checked to exist and, when moving `cardId`, not to be it or below it. */
-  private requireParent(parentId: unknown, cardId?: number): number | null {
-    if (parentId === null) return null
-    const id = Number(parentId)
-    if (!Number.isInteger(id) || !this.card(id)) throw new BadRequest(`No card #${parentId}`)
-    if (cardId !== undefined && (id === cardId || descendants(this.cards(), cardId).some((c) => c.id === id)))
-      throw new BadRequest(`Card #${cardId} can't go inside itself`)
-    return id
-  }
-
-  private endOf(status: CardStatus): number {
-    const { max } = this.db.prepare('SELECT MAX(position) AS max FROM cards WHERE status = ?').get(status) as { max: number | null }
-    return (max ?? 0) + 1
-  }
 }
-
-function editable(c: Card): CardPatch {
-  return { title: c.title, description: c.description, status: c.status, position: c.position, parentId: c.parentId }
-}
-
-function toCard(r: CardRow, sessionIds: string[], statusChangedAt?: number): Card {
-  return {
-    id: r.id,
-    parentId: r.parent_id,
-    title: r.title,
-    description: r.description,
-    status: r.status,
-    position: r.position,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-    // Cards older than the audit log have no record of it.
-    statusChangedAt: statusChangedAt ?? r.created_at,
-    sessionIds,
-  }
-}
-
-function requireTitle(title: unknown): string {
-  const t = typeof title === 'string' ? title.trim() : ''
-  if (!t) throw new BadRequest('Title is required')
-  return t
-}
-
-function requireStatus(status: unknown): CardStatus {
-  if (!CARD_STATUSES.includes(status as CardStatus)) throw new BadRequest(`Unknown status: ${status}`)
-  return status as CardStatus
-}
-
-export class BadRequest extends Error {}

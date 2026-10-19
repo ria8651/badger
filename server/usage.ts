@@ -1,6 +1,8 @@
-import { getSessionInfo, type Query, type SDKControlGetContextUsageResponse, type SDKControlGetUsageResponse } from '@anthropic-ai/claude-agent-sdk'
+import { getSessionInfo, type SDKControlGetContextUsageResponse, type SDKControlGetUsageResponse } from '@anthropic-ai/claude-agent-sdk'
 import type { AccountUsage, ContextUsage } from '../shared/protocol.ts'
-import { oneOff, type SessionManager } from './session.ts'
+import { oneOff, readContext, readLimits } from './claudeProbe.ts'
+import { message } from './errors.ts'
+import type { SessionManager } from './session.ts'
 import { inaccessible } from './workspace.ts'
 
 /** Plan limits change slowly; read them again at most this often. */
@@ -20,24 +22,21 @@ export class ContextReader {
 
   async context(sessionId: string): Promise<ContextUsage | undefined> {
     const live = this.manager.get(sessionId)
-    if (live) return contextUsage(await live.ask((q) => q.getContextUsage({ detail: 'summary' })))
+    if (live) return contextUsage(await live.contextUsage())
     const info = await getSessionInfo(sessionId)
     if (!info?.cwd || inaccessible(info.cwd)) return undefined
     const cached = this.contexts.get(sessionId)
     if (cached?.modified === info.lastModified) return cached.usage
-    const usage = contextUsage(
-      await oneOff({ cwd: info.cwd, resume: sessionId }, (q) => q.getContextUsage({ detail: 'summary' })),
-    )
+    const usage = contextUsage(await oneOff({ cwd: info.cwd, resume: sessionId }, readContext))
     this.contexts.set(sessionId, { modified: info.lastModified, usage })
     return usage
   }
-
 }
 
 /** The plan's limits, from any live process on this machine or a one-off one. They're the account's, not a chat's. */
 export async function readAccount(manager: SessionManager): Promise<AccountUsage> {
   const live = manager.any()
-  return accountUsage(live ? await live.ask(readLimits) : await oneOff({ cwd: process.cwd() }, readLimits))
+  return accountUsage(live ? await live.planUsage() : await oneOff({ cwd: process.cwd() }, readLimits))
 }
 
 /**
@@ -69,7 +68,7 @@ export class AccountLimits {
         this.onAccount(this.account)
         return this.account
       } catch (err) {
-        console.error('Reading plan usage failed:', err instanceof Error ? err.message : err)
+        console.error('Reading plan usage failed:', message(err))
         return this.account
       } finally {
         this.reading = undefined
@@ -79,8 +78,6 @@ export class AccountLimits {
   }
 }
 
-/** Skips the scan of local transcripts that says what's using the limits; only the limits are wanted. */
-const readLimits = (q: Query) => q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true })
 
 function contextUsage(raw: SDKControlGetContextUsageResponse): ContextUsage {
   return {

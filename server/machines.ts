@@ -1,9 +1,22 @@
 import { createHash, randomBytes } from 'node:crypto'
-import type { DatabaseSync, StatementSync } from 'node:sqlite'
-import { LOCAL_MACHINE, type Machine, type TerminalInfo } from '../shared/protocol.ts'
-import { BadRequest } from './db.ts'
-import { Peer, type Link } from './peer.ts'
-import { HUB_ARGS, RUNNER_EVENT, RUNNER_PROTOCOL, RUNNER_REPLIES, isUuid, type HubApi, type LiveInfo, type RunnerApi, type RunnerEvent, type RunnerHello } from './runnerProtocol.ts'
+import type { DatabaseSync } from 'node:sqlite'
+import { LOCAL_MACHINE, type Machine } from '../shared/protocol.ts'
+import { BadRequest } from './errors.ts'
+import { Peer, type Link, type Remote } from './peer.ts'
+import type { ChatPlacement } from './placement.ts'
+import {
+  HUB_ARGS,
+  RUNNER_EVENT,
+  RUNNER_PROTOCOL,
+  RUNNER_REPLIES,
+  type HubApi,
+  type HubEvent,
+  type LiveInfo,
+  type LiveSnapshot,
+  type RunnerApi,
+  type RunnerEvent,
+  type RunnerHello,
+} from './runnerProtocol.ts'
 
 /** A runner that hasn't said hello by then is cut off. */
 const HELLO_TIMEOUT_MS = 30 * 1000
@@ -14,21 +27,54 @@ const HELLO_TIMEOUT_MS = 30 * 1000
  */
 const CALL_TIMEOUT_MS = 10 * 60 * 1000
 
-/** The hub's own machine. */
-export const LOCAL = LOCAL_MACHINE
-
 /** A runner that's connected and has said hello. */
-export interface Connection {
-  id: string
-  name: string
-  peer: Peer<RunnerApi>
-  hello: RunnerHello
+export class Connection {
   /** Its live chats, by id. */
-  live: Map<string, LiveInfo>
-  /** With the runner's own ids; `terminals()` gives the browser's. */
-  terminals: TerminalInfo[]
-  /** False until its PTY host has said what terminals there are. */
-  terminalsKnown: boolean
+  live = new Map<string, LiveInfo>()
+
+  constructor(
+    readonly id: string,
+    public name: string,
+    readonly hello: RunnerHello,
+    private peer: Peer<RunnerApi>,
+  ) {}
+
+  /** The runner's methods. */
+  get remote(): Remote<RunnerApi> {
+    return this.peer.remote
+  }
+
+  /**
+   * Its methods, giving up on an answer after `ms`. Only for quick questions
+   * someone is waiting on: a half-open connection (a laptop gone to sleep)
+   * answers nothing until the ping drops it.
+   */
+  within(ms: number): Remote<RunnerApi> {
+    return this.peer.within(ms)
+  }
+
+  /** A live chat's state, or null with no process; `done` runs in order with the chat's events, so none falls between. */
+  liveSnapshot(sessionId: string, done: (err: Error | null, live?: LiveSnapshot | null) => void): void {
+    this.peer.request('liveSnapshot', [sessionId], done)
+  }
+
+  /** A terminal's screen; `done` runs in order with its output, so none falls between. */
+  termSnapshot(id: string, timeoutMs: number, done: (err: Error | null, data?: string) => void): void {
+    this.peer.request('termSnapshot', [id], done, timeoutMs)
+  }
+
+  termInput(id: string, data: string): void {
+    this.peer.emit({ type: 'term_input', id, data } satisfies HubEvent)
+  }
+
+  termResize(id: string, cols: number, rows: number): void {
+    this.peer.emit({ type: 'term_resize', id, cols, rows } satisfies HubEvent)
+  }
+
+  /** Cuts it off now: nothing more it sends is taken. */
+  close(): void {
+    this.peer.close(true)
+  }
 }
 
 interface MachineRow {
@@ -43,45 +89,42 @@ interface MachineRow {
 
 export interface MachineEvents {
   /**
-   * A runner said hello or went away, or a machine was added, renamed or turned away. `machine` is given only when its
-   * runner has just said hello. Anything a runner had live is gone with it when it goes.
+   * A machine was added, renamed or turned away, or its runner said hello
+   * (`connected`, even replacing a connection the hub hadn't seen drop) or
+   * went away (`disconnected`). Anything a runner had live is gone with it.
    */
-  onChange: (machine: Connection | undefined, id: string) => void
+  onChange: (id: string, runner?: 'connected' | 'disconnected') => void
   onEvent: (machine: Connection, event: RunnerEvent) => void
 }
 
 /**
  * The machines chats run on and the runners connected for them. The hub's own
  * runner is always there; others connect with a token issued here, which is
- * kept only as a hash.
- *
- * Which machine each chat is on is decided here and nowhere else: a chat goes
- * where the browser started it, a child where its parent is. Runners only
- * ever act for chats already on their own machine.
+ * kept only as a hash. Which machine each chat is on is `placement`'s.
  */
 export class Machines {
   private connections = new Map<string, Connection>()
   /** Why each machine's runner was last turned away, until it connects. */
   private refusals = new Map<string, string>()
-  private machineOfQuery?: StatementSync
 
   constructor(
     private db: DatabaseSync,
+    private placement: ChatPlacement,
     private events: MachineEvents,
   ) {
     // Named after its host when its runner says hello, like any other.
-    db.prepare("INSERT INTO machines (id, name, created_at) VALUES (?, 'This hub', ?) ON CONFLICT (id) DO NOTHING").run(LOCAL, Date.now())
+    db.prepare("INSERT INTO machines (id, name, created_at) VALUES (?, 'This hub', ?) ON CONFLICT (id) DO NOTHING").run(LOCAL_MACHINE, Date.now())
   }
 
   list(): Machine[] {
-    const rows = this.db.prepare('SELECT * FROM machines WHERE removed_at IS NULL ORDER BY id != ?, created_at').all(LOCAL) as unknown as MachineRow[]
+    const rows = this.db.prepare('SELECT * FROM machines WHERE removed_at IS NULL ORDER BY id != ?, created_at').all(LOCAL_MACHINE) as unknown as MachineRow[]
     return rows.map((r) => {
       const live = this.connections.get(r.id)
       const info = live?.hello ?? (r.info ? (JSON.parse(r.info) as RunnerHello) : undefined)
       return {
         id: r.id,
         name: r.name,
-        local: r.id === LOCAL,
+        local: r.id === LOCAL_MACHINE,
         online: !!live,
         hostname: info?.hostname,
         platform: info?.platform,
@@ -115,6 +158,17 @@ export class Machines {
     return c
   }
 
+  /** The connected runner for a machine a request names, defaulting to the hub's own. */
+  fromRequest(value: unknown): Connection {
+    if (value !== undefined && value !== null && typeof value !== 'string') throw new BadRequest('machine must be a string')
+    return this.require(value || LOCAL_MACHINE)
+  }
+
+  /** Any connected runner, the hub's own first, for questions about the account rather than a chat. */
+  any(): Connection | undefined {
+    return this.connections.get(LOCAL_MACHINE) ?? this.online()[0]
+  }
+
   online(): Connection[] {
     return [...this.connections.values()]
   }
@@ -126,15 +180,12 @@ export class Machines {
    */
   create(): { machine: Machine; token: string } {
     // Removed machines' ids stay taken, so their chats never turn up on a new machine.
-    const taken = (id: string) =>
-      id === LOCAL ||
-      !!this.db.prepare('SELECT 1 FROM machines WHERE id = ?').get(id) ||
-      !!this.db.prepare('SELECT 1 FROM chat_machines WHERE machine = ?').get(id)
+    const taken = (id: string) => id === LOCAL_MACHINE || !!this.db.prepare('SELECT 1 FROM machines WHERE id = ?').get(id) || this.placement.used(id)
     let id = 'runner'
     for (let n = 2; taken(id); n++) id = `runner-${n}`
     const token = newToken()
     this.db.prepare("INSERT INTO machines (id, name, token_hash, created_at) VALUES (?, 'New runner', ?, ?)").run(id, hash(token), Date.now())
-    this.events.onChange(undefined, id)
+    this.events.onChange(id)
     return { machine: this.list().find((m) => m.id === id)!, token }
   }
 
@@ -148,7 +199,7 @@ export class Machines {
     }
     const live = this.connections.get(id)
     if (live) live.name = clean
-    this.events.onChange(undefined, id)
+    this.events.onChange(id)
     return this.list().find((m) => m.id === id)!
   }
 
@@ -158,13 +209,13 @@ export class Machines {
    * connected with it is disconnected.
    */
   resetToken(id: string): { machine: Machine; token: string } {
-    if (id === LOCAL) throw new BadRequest("The hub's own runner has no token")
+    if (id === LOCAL_MACHINE) throw new BadRequest("The hub's own runner has no token")
     const token = newToken()
     if (!this.db.prepare('UPDATE machines SET token_hash = ? WHERE id = ? AND removed_at IS NULL').run(hash(token), id).changes) {
       throw new BadRequest('No such runner')
     }
     this.refusals.delete(id)
-    if (!this.drop(id)) this.events.onChange(undefined, id)
+    if (!this.drop(id)) this.events.onChange(id)
     return { machine: this.list().find((m) => m.id === id)!, token }
   }
 
@@ -173,11 +224,11 @@ export class Machines {
    * its id is never used again, so no machine can pick them up.
    */
   remove(id: string): boolean {
-    if (id === LOCAL) throw new BadRequest("The hub's own runner can't be removed")
+    if (id === LOCAL_MACHINE) throw new BadRequest("The hub's own runner can't be removed")
     const removed =
       this.db.prepare('UPDATE machines SET removed_at = ?, token_hash = NULL WHERE id = ? AND removed_at IS NULL').run(Date.now(), id).changes > 0
     this.refusals.delete(id)
-    if (!this.drop(id) && removed) this.events.onChange(undefined, id)
+    if (!this.drop(id) && removed) this.events.onChange(id)
     return removed
   }
 
@@ -186,10 +237,40 @@ export class Machines {
     const c = this.connections.get(id)
     if (!c) return false
     this.connections.delete(id)
-    c.peer.close(true)
+    c.close()
     this.db.prepare('UPDATE machines SET last_seen = ? WHERE id = ?').run(Date.now(), id)
-    this.events.onChange(undefined, id)
+    this.events.onChange(id, 'disconnected')
     return true
+  }
+
+  /** A machine's folders added by hand and folders taken off the list, by path. */
+  folders(machine: string): { added: Map<string, number>; hidden: Set<string> } {
+    const rows = this.db.prepare('SELECT path, added_at, hidden_at FROM machine_folders WHERE machine = ?').all(machine) as {
+      path: string
+      added_at: number
+      hidden_at: number | null
+    }[]
+    return {
+      added: new Map(rows.filter((r) => r.hidden_at === null).map((r) => [r.path, r.added_at])),
+      hidden: new Set(rows.filter((r) => r.hidden_at !== null).map((r) => r.path)),
+    }
+  }
+
+  addFolder(machine: string, path: string): void {
+    this.db
+      .prepare(
+        'INSERT INTO machine_folders (machine, path, added_at) VALUES (?, ?, ?) ON CONFLICT(machine, path) DO UPDATE SET added_at = excluded.added_at, hidden_at = NULL',
+      )
+      .run(machine, path, Date.now())
+  }
+
+  hideFolder(machine: string, path: string): void {
+    const now = Date.now()
+    this.db
+      .prepare(
+        'INSERT INTO machine_folders (machine, path, added_at, hidden_at) VALUES (?, ?, ?, ?) ON CONFLICT(machine, path) DO UPDATE SET hidden_at = excluded.hidden_at',
+      )
+      .run(machine, path, now, now)
   }
 
   /** Which machine a runner's token is for, if any. */
@@ -202,7 +283,7 @@ export class Machines {
   refused(id: string, why: string): void {
     if (this.refusals.get(id) === why) return
     this.refusals.set(id, why)
-    this.events.onChange(undefined, id)
+    this.events.onChange(id)
   }
 
   /**
@@ -228,20 +309,20 @@ export class Machines {
         this.refused(id, why)
         throw new BadRequest(why)
       }
-      const allowed = token === undefined ? id === LOCAL : this.byToken(token) === id
+      const allowed = token === undefined ? id === LOCAL_MACHINE : this.byToken(token) === id
       if (!allowed) {
         setImmediate(() => peer.close(true))
         throw new Error('This runner was removed or given a new token')
       }
-      this.connections.get(id)?.peer.close(true)
+      this.connections.get(id)?.close()
       this.refusals.delete(id)
       // Named after its host until someone names it.
       this.db.prepare('UPDATE machines SET name = ? WHERE id = ? AND named = 0').run(hello.hostname.split('.')[0] || hello.hostname, id)
-      connection = { id, name: this.name(id), peer, hello, live: new Map(), terminals: [], terminalsKnown: false }
+      connection = new Connection(id, this.name(id), hello, peer)
       this.connections.set(id, connection)
       this.db.prepare('UPDATE machines SET last_seen = ?, info = ? WHERE id = ?').run(Date.now(), JSON.stringify(hello), id)
-      this.events.onChange(connection, id)
-      return { id, name: connection.name, local: id === LOCAL, chats: this.chatsOn(id) }
+      this.events.onChange(id, 'connected')
+      return { id, name: connection.name, local: id === LOCAL_MACHINE, chats: this.placement.chatsOn(id) }
     }
     const methods = Object.fromEntries(
       Object.entries(api(id)).map(([name, fn]) => [
@@ -261,14 +342,10 @@ export class Machines {
         if (!connection || !current() || !parsed.success) return
         const event = parsed.data as RunnerEvent
         if (event.type === 'live') {
-          const live = new Map(event.sessions.filter((s) => this.owns(id, s.id)).map((s) => [s.id, s]))
+          const live = new Map(event.sessions.filter((s) => this.placement.owns(id, s.id)).map((s) => [s.id, s]))
           // Unchanged: nothing to tell anyone.
           if (JSON.stringify([...live]) === JSON.stringify([...connection.live])) return
           connection.live = live
-        }
-        if (event.type === 'terminals') {
-          connection.terminals = event.terminals.map((t) => this.ownTerminal(id, t))
-          connection.terminalsKnown = true
         }
         this.events.onEvent(connection, event)
       },
@@ -277,52 +354,16 @@ export class Machines {
         if (!current()) return
         this.connections.delete(id)
         this.db.prepare('UPDATE machines SET last_seen = ? WHERE id = ?').run(Date.now(), id)
-        this.events.onChange(undefined, id)
+        this.events.onChange(id, 'disconnected')
       },
       { replies: RUNNER_REPLIES, timeoutMs: CALL_TIMEOUT_MS },
     )
   }
 
-  // ── Which machine each chat is on ──
-
-  machineOf(sessionId: string): string | undefined {
-    // Asked on every event a runner sends, so prepared once.
-    this.machineOfQuery ??= this.db.prepare('SELECT machine FROM chat_machines WHERE session_id = ?')
-    const row = this.machineOfQuery.get(sessionId) as { machine: string } | undefined
-    return row?.machine
-  }
-
-  /** Whether a runner may act for this chat: it's a chat id, and the chat is on that runner's machine. */
-  owns(machine: string, sessionId: unknown): sessionId is string {
-    return isUuid(sessionId) && this.machineOf(sessionId) === machine
-  }
-
-  /**
-   * Puts a chat on a machine, unless it's already somewhere: chats stay on the
-   * machine they started on. Returns where it is. Only for chats the hub
-   * starts; a runner can't put chats anywhere.
-   */
-  assign(sessionId: string, machine: string): string {
-    this.db.prepare('INSERT INTO chat_machines (session_id, machine, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING').run(sessionId, machine, Date.now())
-    return this.machineOf(sessionId)!
-  }
-
-  /** Takes back a chat that never started where it was put, e.g. its folder wasn't there, so it can start somewhere else. */
-  unassign(sessionId: string, machine: string): void {
-    this.db.prepare('DELETE FROM chat_machines WHERE session_id = ? AND machine = ?').run(sessionId, machine)
-  }
-
-  /** Every chat on a machine. */
-  chatsOn(machine: string): string[] {
-    const rows = this.db.prepare('SELECT session_id FROM chat_machines WHERE machine = ?').all(machine) as { session_id: string }[]
-    return rows.map((r) => r.session_id)
-  }
-
-  machinesOf(sessionIds: string[]): Map<string, string> {
-    const rows = this.db
-      .prepare('SELECT session_id, machine FROM chat_machines WHERE session_id IN (SELECT value FROM json_each(?))')
-      .all(JSON.stringify(sessionIds)) as { session_id: string; machine: string }[]
-    return new Map(rows.map((r) => [r.session_id, r.machine]))
+  /** The connected runner a chat is on, if it's on one. */
+  runnerFor(sessionId: string): Connection | undefined {
+    const machine = this.placement.machineOf(sessionId)
+    return machine ? this.connections.get(machine) : undefined
   }
 
   // ── Across every connected runner ──
@@ -338,40 +379,6 @@ export class Machines {
 
   allLive(): LiveInfo[] {
     return [...this.connections.values()].flatMap((c) => [...c.live.values()])
-  }
-
-  /** Every terminal on every connected machine, with the ids the browser uses. */
-  terminals(): TerminalInfo[] {
-    return [...this.connections.values()].flatMap((c) => c.terminals.map((t) => ({ ...t, id: `${c.id}.${t.id}`, machine: c.id })))
-  }
-
-  /** False until every connected machine has said what terminals it has. */
-  terminalsKnown(): boolean {
-    return [...this.connections.values()].every((c) => c.terminalsKnown)
-  }
-
-  /** A terminal says which chat started it; only one of its own machine's. */
-  private ownTerminal(machine: string, t: TerminalInfo): TerminalInfo {
-    return t.sessionId && !this.owns(machine, t.sessionId) ? { ...t, sessionId: undefined } : t
-  }
-
-  /** A browser's terminal id, split into the machine's runner and its own id. */
-  terminal(globalId: string): { machine: Connection; id: string } | undefined {
-    const dot = globalId.lastIndexOf('.')
-    const machine = this.connections.get(globalId.slice(0, dot))
-    return dot > 0 && machine ? { machine, id: globalId.slice(dot + 1) } : undefined
-  }
-
-  /**
-   * Takes a terminal a runner just created or restarted into its list. The
-   * runner's own list broadcasts are throttled; this way the browser can open
-   * it straight away. Returns it with the browser's id.
-   */
-  upsertTerminal(machine: Connection, reply: TerminalInfo): TerminalInfo {
-    const info = this.ownTerminal(machine.id, reply)
-    const i = machine.terminals.findIndex((t) => t.id === info.id)
-    machine.terminals = i < 0 ? [...machine.terminals, info] : machine.terminals.with(i, info)
-    return { ...info, id: `${machine.id}.${info.id}`, machine: machine.id }
   }
 }
 

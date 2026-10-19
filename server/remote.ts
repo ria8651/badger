@@ -13,11 +13,11 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { WebSocket } from 'ws'
-import { BadRequest } from './db.ts'
+import { BadRequest } from './errors.ts'
 import { wsLink } from './peer.ts'
 import { Runner } from './runner.ts'
 import { PROTOCOL_HEADER, RUNNER_MAX_FRAME, RUNNER_PROTOCOL } from './runnerProtocol.ts'
-import { shellEnv } from './terminals.ts'
+import { shellEnv } from './env.ts'
 import { prepareScratch } from './workspace.ts'
 
 /** How often the hub is pinged; a connection that hasn't answered the last ping by the next is dropped and made again. */
@@ -61,18 +61,10 @@ function connect(): void {
     headers: { authorization: `Bearer ${token}`, [PROTOCOL_HEADER]: String(RUNNER_PROTOCOL) },
     maxPayload: RUNNER_MAX_FRAME,
   })
-  let alive = true
-  let ping: ReturnType<typeof setInterval> | undefined
   let retryIn: number | undefined
 
   ws.on('open', () => {
-    ws.on('pong', () => (alive = true))
-    ping = setInterval(() => {
-      if (!alive) return ws.terminate()
-      alive = false
-      ws.ping()
-    }, PING_MS)
-    runner.connect(wsLink(ws)).then(
+    runner.connect(wsLink(ws, { pingMs: PING_MS })).then(
       (me) => {
         retries = 0
         lastError = ''
@@ -110,7 +102,6 @@ function connect(): void {
   // Terminating a refused connection errors too; that's already been said.
   ws.on('error', (err) => !refused && report(`Can't reach ${hub}: ${err.message}`))
   ws.on('close', () => {
-    clearInterval(ping)
     const delay = retryIn ?? Math.min(MAX_RETRY_MS, 1000 * 2 ** retries++)
     setTimeout(connect, delay)
   })

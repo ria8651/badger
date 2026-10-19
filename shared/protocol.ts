@@ -3,7 +3,8 @@
  * SDK messages are forwarded mostly verbatim; the client renders them.
  */
 
-export type PermissionMode = 'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypassPermissions'
+export const PERMISSION_MODES = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'] as const
+export type PermissionMode = (typeof PERMISSION_MODES)[number]
 
 /** A model Claude Code offers, as its model picker lists it. */
 export interface ModelOption {
@@ -260,7 +261,6 @@ export interface TerminalInfo {
 
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const
 
-/** A pasted or dropped image, base64 encoded, sent to Claude as an image block. */
 /** File extensions for each image type, for picking images off disk. */
 export const IMAGE_EXTENSIONS: Record<(typeof IMAGE_TYPES)[number], string[]> = {
   'image/png': ['.png'],
@@ -269,7 +269,8 @@ export const IMAGE_EXTENSIONS: Record<(typeof IMAGE_TYPES)[number], string[]> = 
   'image/webp': ['.webp'],
 }
 
-export type ImageAttachment ={ mediaType: (typeof IMAGE_TYPES)[number]; data: string }
+/** A pasted or dropped image, base64 encoded, sent to Claude as an image block. */
+export type ImageAttachment = { mediaType: (typeof IMAGE_TYPES)[number]; data: string }
 
 /** Big pastes and images waiting in the composer to be sent. */
 export type DraftAttachments = { pastes: string[]; images: ImageAttachment[] }
@@ -284,6 +285,30 @@ export interface QueuedMessage {
 
 /** Anything the SDK emits, or a transcript entry read back from disk. */
 export type WireMessage = { type: string; uuid?: string; [key: string]: unknown }
+
+/** What a live chat's process is doing. cwd changes when the chat moves into a worktree. */
+export interface ChatStatus {
+  running: boolean
+  /** Claude Code is still making the worktree it was started in, so nothing's happening yet. */
+  makingWorktree: boolean
+  /** When Claude Code started compacting the conversation, if it's doing that now. */
+  compacting?: number
+  mode: PermissionMode
+  /** A ModelOption value, or a model id from the transcript. Absent until the chat has run. */
+  model?: string
+  cwd: string
+}
+
+/** A live chat's state that only its process has, besides its messages. */
+export interface LiveState extends ChatStatus {
+  permissions: PendingPermission[]
+  /** Output so far of Bash commands still running, by tool_use_id. */
+  bashOutput: Record<string, string>
+  /** Calls auto mode is still deciding whether to allow. */
+  checking: string[]
+  background: BackgroundTask[]
+  queued: QueuedMessage[]
+}
 
 export type ClientEvent =
   | { type: 'subscribe'; sessionId: string }
@@ -340,36 +365,23 @@ export type ClientEvent =
   | { type: 'preview_url'; url: string }
 
 export type ServerEvent =
-  | {
+  /** Everything about a chat, for a viewer starting on it. A chat with no live process has the live state of an idle one. */
+  | (Omit<LiveState, 'cwd'> & {
       type: 'snapshot'
       sessionId: string
       messages: WireMessage[]
-      running: boolean
-      /** Claude Code is still making the worktree it was started in, so nothing's happening yet. */
-      makingWorktree?: boolean
-      /** When Claude Code started compacting the conversation, if it's doing that now. */
-      compacting?: number
-      mode: PermissionMode
-      /** A ModelOption value, or a model id from the transcript. Absent until the chat has run. */
-      model?: string
+      /** Absent for a chat that hasn't started. */
       cwd?: string
       /** The machine it runs on; absent for a chat that hasn't started. While it's offline the chat is read-only. */
       machine?: string
       /** Its folder is gone or can't be opened, e.g. a worktree removed after merging, so it can't run. */
       gone?: boolean
-      permissions: PendingPermission[]
-      /** Output so far of Bash commands still running, by tool_use_id. */
-      bashOutput: Record<string, string>
-      /** Calls auto mode is still deciding whether to allow. */
-      checking: string[]
       /** Unsent composer text, in the same message as the transcript so they arrive together. */
       draft: string
       draftAttachments: DraftAttachments
       /** Chats this one started from a tool call and waited on, by that call's tool_use_id. */
       children: Record<string, string>
-      background: BackgroundTask[]
-      queued: QueuedMessage[]
-    }
+    })
   | { type: 'message'; sessionId: string; message: WireMessage }
   /** Another viewer changed the chat's unsent text or attachments. */
   | { type: 'draft'; sessionId: string; text?: string; attachments?: DraftAttachments }
@@ -377,8 +389,7 @@ export type ServerEvent =
   | { type: 'bash_output'; sessionId: string; toolUseId: string; chunk: string }
   /** The calls auto mode is still deciding whether to allow; replaces the previous set. */
   | { type: 'checking'; sessionId: string; toolUseIds: string[] }
-  /** cwd changes when the chat moves into a worktree. */
-  | { type: 'status'; sessionId: string; running: boolean; makingWorktree: boolean; compacting?: number; mode: PermissionMode; model?: string; cwd: string }
+  | (ChatStatus & { type: 'status'; sessionId: string })
   /** Messages Claude Code is holding for its next break; replaces the previous list. */
   | { type: 'queued'; sessionId: string; messages: QueuedMessage[] }
   /** The background tasks running now; replaces the previous set. */

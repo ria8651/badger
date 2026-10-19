@@ -1,6 +1,7 @@
 import { appendFile, mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
+import { message } from './errors.ts'
 import type { Remote } from './peer.ts'
 import { RUNNER_MAX_FRAME, isUuid, type HubApi, type TranscriptState } from './runnerProtocol.ts'
 
@@ -115,7 +116,7 @@ export class TranscriptSync {
       }
     } catch (err) {
       // Those not asked about yet are asked one by one as they're sent.
-      if (this.connected) console.error('Asking the hub about transcripts failed:', err instanceof Error ? err.message : err)
+      if (this.connected) console.error('Asking the hub about transcripts failed:', message(err))
     }
     for (const id of this.live()) this.dirty.add(id)
     // Subagents' files included: one left half-sent when the connection dropped may be done with, its chat not changing again.
@@ -143,7 +144,7 @@ export class TranscriptSync {
         // The hub may have taken lines whose answer never came back, so ask it again where it's up to before sending more.
         for (const k of this.known.keys()) if (k.startsWith(`${id}\0`)) this.known.delete(k)
         // Gone again with the connection; otherwise it's tried again next time the chat changes or a scan comes round.
-        if (this.connected) console.error(`Copying chat ${id} to the hub failed:`, err instanceof Error ? err.message : err)
+        if (this.connected) console.error(`Copying chat ${id} to the hub failed:`, message(err))
       }
     }
   }
