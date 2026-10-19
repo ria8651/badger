@@ -10,6 +10,7 @@ import type { ShownImage } from '../images.ts'
 import { collectTasks, type Task } from '../tasks.ts'
 import { ChildChats, useChecking, type Partial } from '../useChat.ts'
 import { STATUS_LABELS } from '../stores/cards.ts'
+import { Link } from '../router.tsx'
 import { Markdown } from './Markdown.tsx'
 import { Disclosure, Pre, ToolBody, ToolCard, resultText, splitSkill, toolLabel, toolSummary, type ToolContext, type ToolResult } from './ToolCard.tsx'
 import { Attachments, type ContextChip } from './Attachments.tsx'
@@ -927,18 +928,9 @@ function ChildRun(props: { sessionId: string; name: string; result?: ToolResult 
         )}
       </Show>
       <Show when={props.result?.isError && props.result}>{(r) => <Pre text={resultText(r().content)} class="text-danger" />}</Show>
-      <a
-        href={`/s/${props.sessionId}`}
-        onClick={(e) => {
-          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
-          e.preventDefault()
-          history.pushState(null, '', `/s/${props.sessionId}`)
-          dispatchEvent(new PopStateEvent('popstate'))
-        }}
-        class="inline-block text-xs text-fg-3 transition-colors hover:text-fg-2"
-      >
+      <Link to={{ kind: 'chat', id: props.sessionId }} class="inline-block text-xs text-fg-3 transition-colors hover:text-fg-2">
         Open as a chat
-      </a>
+      </Link>
     </Disclosure>
   )
 }
@@ -1174,24 +1166,14 @@ const badge = 'inline-flex max-w-[80%] items-center gap-2 rounded-full border bo
 /** A card as a pill linking to it. */
 function CardBadge(props: { card: { id: number; title: string; status: CardStatus } }) {
   return (
-    <a
-      href={`/c/${props.card.id}`}
-      onClick={(e) => {
-        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
-        e.preventDefault()
-        // App routes on popstate, so this navigates without a reload.
-        history.pushState(null, '', `/c/${props.card.id}`)
-        dispatchEvent(new PopStateEvent('popstate'))
-      }}
-      class={`${badge} text-fg-2 transition-colors hover:bg-surface hover:text-fg`}
-    >
+    <Link to={{ kind: 'card', id: props.card.id }} class={`${badge} text-fg-2 transition-colors hover:bg-surface hover:text-fg`}>
       <Columns3 class="size-3.5 shrink-0 text-fg-3" />
       <span class="min-w-0 truncate">
         <span class="text-fg-3">#{props.card.id}</span>{' '}
         {props.card.title}
       </span>
       <span class="shrink-0 text-xs text-fg-3">{STATUS_LABELS[props.card.status]}</span>
-    </a>
+    </Link>
   )
 }
 

@@ -5,6 +5,7 @@ import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Colu
 import { descendants, projectOf } from '../shared/cardTree.ts'
 import type { Card, SessionSummary } from '../shared/protocol.ts'
 import { api, socket } from './api.ts'
+import { navigate, replace, route } from './router.tsx'
 import { attention, looking, notifications, notify, onAttention, toggleNotifications } from './attention.ts'
 import { basename, folderLabel, isScratch, lastWorkedIn, scratchDir, setScratch } from './folders.ts'
 import { LOCAL, machineOf, machines, onMachine } from './machines.ts'
@@ -34,43 +35,6 @@ function uuid(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
 
-type Route =
-  | { kind: 'home' }
-  | { kind: 'chat'; id: string }
-  | { kind: 'board' }
-  | { kind: 'radar' }
-  | { kind: 'card'; id: number }
-  | { kind: 'terminal'; id: string }
-
-function routeFromPath(): Route {
-  const path = location.pathname
-  const chat = path.match(/^\/s\/([0-9a-f-]{36})/)
-  if (chat) return { kind: 'chat', id: chat[1] }
-  const card = path.match(/^\/c\/(\d+)/)
-  if (card) return { kind: 'card', id: Number(card[1]) }
-  // `<machine>.<hex id>`; bare hex from before there were other machines.
-  const terminal = path.match(/^\/t\/((?:[a-z0-9-]+\.)?[0-9a-f]+)/)
-  // Links from before there were other machines are to the hub's own.
-  if (terminal) return { kind: 'terminal', id: terminal[1].includes('.') ? terminal[1] : `local.${terminal[1]}` }
-  if (path === '/board') return { kind: 'board' }
-  if (path === '/radar') return { kind: 'radar' }
-  return { kind: 'home' }
-}
-
-const pathFor = (r: Route) =>
-  r.kind === 'chat'
-    ? `/s/${r.id}`
-    : r.kind === 'card'
-      ? `/c/${r.id}`
-      : r.kind === 'terminal'
-        ? `/t/${r.id}`
-        : r.kind === 'board'
-          ? '/board'
-          : r.kind === 'radar'
-            ? '/radar'
-            : '/'
-
-
 export function App() {
   const [config, setConfig] = createSignal<{ defaultCwd: string; scratchCwd: string } | null>(null)
   const [sessions, setSessions] = createSignal<SessionSummary[]>([])
@@ -78,7 +42,6 @@ export function App() {
   const [cardStore, setCardStore] = createStore<Card[]>([])
   const cards = () => cardStore
   const setCards = (next: Card[]) => setCardStore(reconcile(next, { key: 'id' }))
-  const [route, setRoute] = createSignal<Route>(routeFromPath())
   const [drafts, setDrafts] = createSignal<Record<string, string>>(loadRecord(DRAFTS_KEY))
   /** The runner each blank chat will run on, picked along with its folder. */
   const [machineDrafts, setMachineDrafts] = createSignal<Record<string, string>>(loadRecord(MACHINES_KEY))
@@ -140,23 +103,17 @@ export function App() {
         timer = setTimeout(refresh, 300)
       }
     })
-    const onPop = () => {
-      setRoute(routeFromPath())
-      setDrawer(false)
-    }
-    addEventListener('popstate', onPop)
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !modalOpen() && setDrawer(false)
     addEventListener('keydown', onKey)
     const offAttention = onAttention((id, state) => {
       const title = sessions().find((s) => s.id === id)?.title ?? 'New chat'
-      notify(id, title, state === 'waiting' ? 'Needs your input' : 'Finished', () => go({ kind: 'chat', id }))
+      notify(id, title, state === 'waiting' ? 'Needs your input' : 'Finished', () => navigate({ kind: 'chat', id }))
     })
     onCleanup(() => {
       clearTimeout(timer)
       off()
       offAttention()
       offConn()
-      removeEventListener('popstate', onPop)
       removeEventListener('keydown', onKey)
     })
   })
@@ -185,11 +142,8 @@ export function App() {
     addEventListener('pointermove', move)
     addEventListener('pointerup', up)
   }
-  const go = (r: Route) => {
-    history.pushState(null, '', pathFor(r))
-    setRoute(r)
-    setDrawer(false)
-  }
+  // Going anywhere closes the drawer, back and forward included.
+  createEffect(on(route, () => setDrawer(false), { defer: true }))
   const current = () => {
     const r = route()
     return r.kind === 'chat' ? r.id : r.kind === 'home' ? homeId() : null
@@ -292,7 +246,7 @@ export function App() {
     return (
       <div class="group relative mb-px">
         <button
-          onClick={() => go({ kind: 'chat', id: s().id })}
+          onClick={() => navigate({ kind: 'chat', id: s().id })}
           class={`block w-full rounded-lg px-2 py-1.5 text-left transition-colors pointer-coarse:py-2.5 ${
             s().id === current() ? 'bg-surface' : 'hover:bg-surface/60'
           }`}
@@ -383,7 +337,7 @@ export function App() {
   /** A card's new chat is its blank one if it has one, so a draft left there is still there. */
   const newChat = (from: { cwd: string; machine: string; worktree: boolean } | undefined, cardId?: number) => {
     const kept = cardId === undefined ? undefined : untrack(blanks)[cardId]
-    if (kept) return go({ kind: 'chat', id: kept })
+    if (kept) return navigate({ kind: 'chat', id: kept })
     const id = uuid()
     untrack(() => pickDraft(id, from?.cwd ?? defaultCwd(), from?.machine ?? defaultMachine()))
     if (from?.worktree) setWorktreeDrafts((w) => ({ ...w, [id]: true }))
@@ -391,7 +345,7 @@ export function App() {
       setBlanks((b) => ({ ...b, [cardId]: id }))
       api.linkSession(cardId, id)
     }
-    go({ kind: 'chat', id })
+    navigate({ kind: 'chat', id })
   }
   // Blank chats that have started, here or in another tab, make way for fresh ones.
   createEffect(() => {
@@ -404,7 +358,7 @@ export function App() {
   /** In a project, a new chat goes on the project's card and starts where its work last happened; otherwise it's the blank home chat. */
   const newHomeChat = () => {
     const f = focus()
-    if (!f) return go({ kind: 'home' })
+    if (!f) return navigate({ kind: 'home' })
     const ids = [f, ...descendants(cards(), f.id)].flatMap((c) => c.sessionIds)
     const from = lastWorkedIn(sessions().filter((s) => ids.includes(s.id)))
     newChat(from && { ...from, worktree: false }, f.id)
@@ -418,8 +372,7 @@ export function App() {
   /** The home chat's first message went out: give it its own URL and a fresh blank chat for next time. */
   const startHomeChat = (id: string, cwd: string | undefined, machine: string) => {
     pickDraft(id, cwd, machine)
-    history.replaceState(null, '', pathFor({ kind: 'chat', id }))
-    setRoute({ kind: 'chat', id })
+    replace({ kind: 'chat', id })
     setHomeId(uuid())
   }
 
@@ -457,10 +410,10 @@ export function App() {
         <Loading />
       </Match>
       <Match when={route().kind === 'radar'}>
-        <Radar cards={cards()} sessions={sessions()} onOpenCard={(id) => go({ kind: 'card', id })} onOpenChat={(id) => go({ kind: 'chat', id })} />
+        <Radar cards={cards()} sessions={sessions()} onOpenCard={(id) => navigate({ kind: 'card', id })} onOpenChat={(id) => navigate({ kind: 'chat', id })} />
       </Match>
       <Match when={route().kind === 'board'}>
-        <Board cards={cards()} sessions={sessions()} setCards={setCards} onOpen={(id) => go({ kind: 'card', id })} />
+        <Board cards={cards()} sessions={sessions()} setCards={setCards} onOpen={(id) => navigate({ kind: 'card', id })} />
       </Match>
       <Match when={route().kind === 'card'}>
         <Show when={currentCard()} fallback={<p class="flex flex-1 items-center justify-center text-[13px] text-fg-3">No such card</p>}>
@@ -470,8 +423,8 @@ export function App() {
               cards={cards()}
               setCards={setCards}
               sessions={sessions()}
-              onOpenCard={(id) => go(id === null ? { kind: 'board' } : { kind: 'card', id })}
-              onOpenChat={(id) => go({ kind: 'chat', id })}
+              onOpenCard={(id) => navigate(id === null ? { kind: 'board' } : { kind: 'card', id })}
+              onOpenChat={(id) => navigate({ kind: 'chat', id })}
               onNewChat={(from) => newChat(from, card().id)}
             />
           )}
@@ -558,7 +511,7 @@ export function App() {
               const c = switchable()[i]
               // There's no page for chats on no card; the sidebar is the list.
               if (c === 'none') return setFocusId('none')
-              go(c ? { kind: 'card', id: c.id } : { kind: 'board' })
+              navigate(c ? { kind: 'card', id: c.id } : { kind: 'board' })
             }}
             placement="bottom"
             class="w-60"
@@ -578,7 +531,7 @@ export function App() {
               </>
             )}
           />
-          <NavItem icon={RadarIcon} onClick={() => go({ kind: 'radar' })} active={route().kind === 'radar'} title="Everything on your radar, across projects" class="mb-px">
+          <NavItem icon={RadarIcon} onClick={() => navigate({ kind: 'radar' })} active={route().kind === 'radar'} title="Everything on your radar, across projects" class="mb-px">
             Radar
             <Show when={needsYou()}>
               <span class="ml-auto text-[11px] text-accent tabular-nums">{needsYou()}</span>
@@ -586,7 +539,7 @@ export function App() {
           </NavItem>
           <NavItem
             icon={Columns3}
-            onClick={() => go(focus() ? { kind: 'card', id: focus()!.id } : { kind: 'board' })}
+            onClick={() => navigate(focus() ? { kind: 'card', id: focus()!.id } : { kind: 'board' })}
             active={route().kind === 'board' || route().kind === 'card'}
             class="mb-px"
           >
@@ -603,7 +556,7 @@ export function App() {
               {(t) => (
                 <div class="group relative mb-px">
                   <button
-                    onClick={() => go({ kind: 'terminal', id: t.id })}
+                    onClick={() => navigate({ kind: 'terminal', id: t.id })}
                     title={`${terminalTooltip(t)}\n${t.cwd}`}
                     class={`flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left transition-colors pointer-coarse:h-9 ${
                       t.id === currentTerminal() ? 'bg-surface' : 'hover:bg-surface/60'
@@ -738,8 +691,6 @@ export function App() {
                     if (s) toggleArchived(s)
                   }}
                   onStart={() => home() && startHomeChat(id, drafts()[id] ?? defaultCwd(), draftMachine(id))}
-                  onOpenTerminal={(tid) => go({ kind: 'terminal', id: tid })}
-                  onOpenCard={(cid) => go({ kind: 'card', id: cid })}
                   bar={mobileBar()}
                 />
               )

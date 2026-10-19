@@ -3,6 +3,7 @@ import { ArrowUp, FolderX, GitBranch, MonitorOff, Paperclip, Pencil, ListChevron
 import { isLongPaste } from '../../shared/pastes.ts'
 import { IMAGE_EXTENSIONS, type Card, type DraftAttachments, type PermissionMode, type QueuedMessage, type SessionSummary } from '../../shared/protocol.ts'
 import { chatActions } from '../actions.ts'
+import { navigate } from '../router.tsx'
 import { api, connected, socket } from '../api.ts'
 import { readImage } from '../images.ts'
 import { lastModel, modelValue, models, setLastModel } from '../models.ts'
@@ -55,8 +56,6 @@ export function Chat(props: {
   cards: Card[]
   onRenamed: (title: string) => void
   onToggleArchived: () => void
-  onOpenTerminal: (id: string) => void
-  onOpenCard: (id: number) => void
   /** The top bar on narrow screens, to go above the chat's header. */
   bar: JSX.Element
 }) {
@@ -362,11 +361,7 @@ export function Chat(props: {
   const [more, setMore] = createSignal(false)
   /** The end of the turn being forked from, while picking where the fork goes. */
   const [forking, setForking] = createSignal<string>()
-  const openChat = (id: string) => {
-    // App routes on popstate, so this navigates without a reload.
-    history.pushState(null, '', `/s/${id}`)
-    dispatchEvent(new PopStateEvent('popstate'))
-  }
+  const openChat = (id: string) => navigate({ kind: 'chat', id })
   let moreButton!: HTMLButtonElement
   let morePanel: HTMLDivElement | undefined
   createDismiss(more, () => [morePanel, moreButton], () => setMore(false), { escape: true })
@@ -378,7 +373,7 @@ export function Chat(props: {
       sessionId={props.sessionId}
       panes={panes}
       onFocusChat={() => input.focus()}
-      onOpenPage={props.onOpenTerminal}
+      onOpenPage={(id) => navigate({ kind: 'terminal', id })}
     >
       <div class="flex h-full min-w-0 flex-1 flex-col">
         {/* One header on narrow screens: the page's bar above the chat's own row, divided only below. */}
@@ -389,7 +384,6 @@ export function Chat(props: {
             cards={props.cards}
             onRenamed={props.onRenamed}
             onToggleArchived={props.onToggleArchived}
-            onOpenCard={props.onOpenCard}
             cwd={cwd()}
             machine={machine()}
             ws={ws()}

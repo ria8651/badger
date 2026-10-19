@@ -11,6 +11,7 @@ import { TerminalButton } from './Terminals.tsx'
 import { GitSummary } from './GitSummary.tsx'
 import { showError } from './Popover.tsx'
 import { Menu, plural, type MenuItem } from './ui.tsx'
+import { Link } from '../router.tsx'
 
 /**
  * A checkout's git status, kept current: read as soon as it's shown and again
@@ -75,7 +76,6 @@ export function ChatHeader(props: {
   cards: Card[]
   onRenamed: (title: string) => void
   onToggleArchived: () => void
-  onOpenCard: (id: number) => void
   cwd?: string
   machine: string
   ws?: Ws
@@ -213,21 +213,11 @@ export function ChatHeader(props: {
             />
             <Show when={card()}>
               {(c) => (
-                <a
-                  href={`/c/${c().id}`}
-                  onClick={(e) => {
-                    // New tabs and windows go by the href.
-                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
-                    e.preventDefault()
-                    props.onOpenCard(c().id)
-                  }}
-                  title={`Open #${c().id} ${c().title}`}
-                  class={`${button} min-w-0 max-w-60 shrink text-fg-3`}
-                >
+                <Link to={{ kind: 'card', id: c().id }} title={`Open #${c().id} ${c().title}`} class={`${button} min-w-0 max-w-60 shrink text-fg-3`}>
                   <span class="shrink-0 tabular-nums">#{c().id}</span>
                   {/* Between the two the chat's title is enough. */}
                   <span class="truncate md:hidden lg:inline">{c().title}</span>
-                </a>
+                </Link>
               )}
             </Show>
             <FileChat
