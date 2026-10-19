@@ -95,7 +95,7 @@ export function FolderPicker(props: {
   }
 
   return (
-    <div class="mx-auto mt-5 w-full max-w-lg space-y-2 text-left">
+    <div class="mt-5 w-full space-y-2 text-left">
       {/* Also with just the hub's own, if the one picked has gone offline or been removed, so there's a way off it. */}
       <Show when={severalMachines() || (machines().length && !machineOf(props.machine)?.online)}>
         <div class="flex flex-wrap items-center gap-1.5 pb-1" role="group" aria-label="Runner">
