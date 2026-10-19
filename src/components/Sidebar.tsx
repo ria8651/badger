@@ -125,7 +125,7 @@ export function Sidebar(props: {
           class="w-60"
           title="Which project this tab is working in"
           triggerClass={(open) =>
-            `mb-1 flex h-8 w-full items-center gap-2 rounded-lg border pointer-coarse:h-10 border-line px-2 text-[13px] transition-colors hover:border-edge ${open ? 'border-edge' : ''}`
+            `mb-1 flex h-8 w-full items-center gap-2 rounded-lg border pointer-coarse:h-10 border-line px-2 text-ui transition-colors hover:border-edge ${open ? 'border-edge' : ''}`
           }
           trigger={(open) => (
             <>
@@ -133,7 +133,7 @@ export function Sidebar(props: {
                 {unfiled() ? 'No project' : (focus()?.title ?? 'All projects')}
               </span>
               <Show when={unfiled() && unfiledCount()}>
-                <span class="text-[11px] text-fg-3 tabular-nums">{unfiledCount()}</span>
+                <span class="text-meta text-fg-3 tabular-nums">{unfiledCount()}</span>
               </Show>
               <ChevronDown class={`size-3.5 text-fg-3 transition-transform ${open() ? 'rotate-180' : ''}`} />
             </>
@@ -142,7 +142,7 @@ export function Sidebar(props: {
         <NavItem icon={RadarIcon} onClick={() => navigate({ kind: 'radar' })} active={route().kind === 'radar'} title="Everything on your radar, across projects" class="mb-px">
           Radar
           <Show when={needsYou()}>
-            <span class="ml-auto text-[11px] text-accent tabular-nums">{needsYou()}</span>
+            <span class="ml-auto text-meta text-accent tabular-nums">{needsYou()}</span>
           </Show>
         </NavItem>
         <NavItem
@@ -159,7 +159,7 @@ export function Sidebar(props: {
       </div>
       <Show when={sortedTerminals().length}>
         <div class="px-2 pb-3">
-          <div class="px-2 pb-1 text-[11px] text-fg-3">Terminals</div>
+          <div class="px-2 pb-1 text-meta text-fg-3">Terminals</div>
           <For each={sortedTerminals()}>
             {(t) => (
               <div class="group relative mb-px">
@@ -172,7 +172,7 @@ export function Sidebar(props: {
                 >
                   <StatusDot terminal={t} />
                   <span
-                    class={`min-w-0 flex-1 truncate text-[13px] ${
+                    class={`min-w-0 flex-1 truncate text-ui ${
                       t.id === currentTerminal() ? 'text-fg' : 'text-fg-2 group-hover:text-fg'
                     }`}
                   >
@@ -181,8 +181,8 @@ export function Sidebar(props: {
                   <span
                     class={`flex shrink-0 items-center gap-2 group-hover:invisible ${t.id === currentTerminal() ? 'pointer-coarse:invisible' : ''}`}
                   >
-                    <span class="text-[11px] text-fg-3">{basename(t.root)}</span>
-                    <Show when={onMachine(t.machine)}>{(name) => <MachineName machine={t.machine} name={name()} class="text-[11px] text-fg-3" />}</Show>
+                    <span class="text-meta text-fg-3">{basename(t.root)}</span>
+                    <Show when={onMachine(t.machine)}>{(name) => <MachineName machine={t.machine} name={name()} class="text-meta text-fg-3" />}</Show>
                   </span>
                 </button>
                 {/* Touch has no hover, so there the open terminal's row shows it instead. */}
@@ -232,12 +232,12 @@ export function Sidebar(props: {
             <>
               <For each={active()}>{(s) => <SessionRow session={s} current={s.id === props.current} filing={filing() === s.id} onOpenChange={keepOpen(s.id)} />}</For>
               <Show when={unfiled() && sessionsLoaded() && cardsLoaded() && !active().length}>
-                <p class="px-2 py-1.5 text-[13px] text-fg-3">Every chat is in a project.</p>
+                <p class="px-2 py-1.5 text-ui text-fg-3">Every chat is in a project.</p>
               </Show>
               <Show when={archived().length}>
                 <button
                   onClick={() => setShowArchived((v) => !v)}
-                  class="mt-2 flex h-7 w-full items-center gap-1 rounded-lg px-2 text-[11px] text-fg-3 transition-colors hover:text-fg-2"
+                  class="mt-2 flex h-7 w-full items-center gap-1 rounded-lg px-2 text-meta text-fg-3 transition-colors hover:text-fg-2"
                 >
                   <ChevronRight class={`size-3 transition-transform ${showArchived() ? 'rotate-90' : ''}`} />
                   Archived ({archived().length})
@@ -253,7 +253,7 @@ export function Sidebar(props: {
             <>
               <For each={found()}>{(s) => <SessionRow session={s} current={s.id === props.current} filing={filing() === s.id} onOpenChange={keepOpen(s.id)} />}</For>
               <Show when={!found().length}>
-                <p class="px-2 py-1.5 text-[13px] text-fg-3">No chats match.</p>
+                <p class="px-2 py-1.5 text-ui text-fg-3">No chats match.</p>
               </Show>
             </>
           )}
@@ -333,7 +333,7 @@ function NavItem(props: { icon: Component<{ class?: string }>; onClick: () => vo
     <button
       onClick={props.onClick}
       title={props.title}
-      class={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-[13px] transition-colors hover:bg-surface hover:text-fg pointer-coarse:h-10 ${
+      class={`flex h-8 w-full items-center gap-2 rounded-lg px-2 text-ui transition-colors hover:bg-surface hover:text-fg pointer-coarse:h-10 ${
         props.active ? 'bg-surface text-fg' : 'text-fg-2'
       } ${props.class ?? ''}`}
     >

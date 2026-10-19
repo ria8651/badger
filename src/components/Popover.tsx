@@ -92,7 +92,7 @@ export function confirmBy(anchor: Anchor, ask: { message: string; notes?: string
       { width: 320, role: 'alertdialog', label: ask.message, modal: true },
       (close) => (
         <>
-          <p class="text-[13px] leading-snug text-fg">{ask.message}</p>
+          <p class="text-ui leading-snug text-fg">{ask.message}</p>
           <For each={ask.notes}>{(note) => <p class="mt-1.5 text-xs leading-snug text-fg-2">{note}</p>}</For>
           <div class="mt-3 flex justify-end gap-2">
             <Button onClick={close}>Cancel</Button>
@@ -169,7 +169,7 @@ export function showError(title: string, detail: string, anchor?: Anchor) {
   float(anchor, { width: 380, role: 'alert', label: title, modal: false }, (close) => (
     <>
       <div class="flex items-start gap-2">
-        <p class="min-w-0 flex-1 text-[13px] font-medium text-danger">{title}</p>
+        <p class="min-w-0 flex-1 text-ui font-medium text-danger">{title}</p>
         <button
           type="button"
           title="Dismiss"
@@ -182,7 +182,7 @@ export function showError(title: string, detail: string, anchor?: Anchor) {
       {/* Lines of output, like git's, keep their shape; a sentence reads as one. */}
       <Show when={detail.trim()}>
         <Show when={detail.trim().includes('\n')} fallback={<p class="mt-1 text-xs leading-snug text-fg-2 select-text">{detail.trim()}</p>}>
-          <pre class="mt-1.5 max-h-60 overflow-auto font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-fg-2 select-text">{detail.trim()}</pre>
+          <pre class="mt-1.5 max-h-60 overflow-auto font-mono text-meta leading-relaxed whitespace-pre-wrap text-fg-2 select-text">{detail.trim()}</pre>
         </Show>
       </Show>
     </>

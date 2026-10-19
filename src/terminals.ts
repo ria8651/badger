@@ -55,7 +55,9 @@ export const terminalWs = (t: TerminalInfo): Ws => ({ machine: t.machine || LOCA
 
 export const inWs = (t: TerminalInfo, ws: Ws) => t.root === ws.root && (t.machine || LOCAL) === ws.machine
 
-const roots = new Map<string, Accessor<string | undefined>>()
+/** Lookups by folder, the most recently asked for last. Past ROOTS_KEPT the oldest are let go, so the map doesn't grow for ever. */
+const roots = new Map<string, { root: Accessor<string | undefined>; stop: () => void }>()
+const ROOTS_KEPT = 200
 
 /** How long a workspace root that couldn't be looked up stands in as its folder before it's asked for again; doubling each time. */
 const RETRY_ROOT_MS = 30 * 1000
@@ -77,27 +79,39 @@ socket.onConnection((connected) => connected && retryRoots())
  */
 export function workspaceOf(machine: string, cwd: string): Accessor<string | undefined> {
   const key = wsKey({ machine, root: cwd })
-  let root = roots.get(key)
-  if (!root) {
-    const [get, set] = createSignal<string>()
-    let wait = RETRY_ROOT_MS
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const ask = () => {
-      clearTimeout(timer)
-      api.workspace(cwd, machine).then(
-        (r) => set(r.root),
-        () => {
-          set((last) => last ?? cwd)
-          retries.set(key, { machine, again: ask })
-          timer = setTimeout(() => retries.get(key)?.again === ask && (retries.delete(key), ask()), wait)
-          wait = Math.min(wait * 2, RETRY_ROOT_MAX_MS)
-        },
-      )
-    }
-    ask()
-    roots.set(key, (root = get))
+  const kept = roots.get(key)
+  if (kept) {
+    roots.delete(key)
+    roots.set(key, kept)
+    return kept.root
   }
-  return root
+  const [get, set] = createSignal<string>()
+  let wait = RETRY_ROOT_MS
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const ask = () => {
+    clearTimeout(timer)
+    api.workspace(cwd, machine).then(
+      (r) => set(r.root),
+      () => {
+        set((last) => last ?? cwd)
+        retries.set(key, { machine, again: ask })
+        timer = setTimeout(() => retries.get(key)?.again === ask && (retries.delete(key), ask()), wait)
+        wait = Math.min(wait * 2, RETRY_ROOT_MAX_MS)
+      },
+    )
+  }
+  ask()
+  const stop = () => {
+    clearTimeout(timer)
+    if (retries.get(key)?.again === ask) retries.delete(key)
+  }
+  roots.set(key, { root: get, stop })
+  if (roots.size > ROOTS_KEPT) {
+    const [oldest, entry] = roots.entries().next().value!
+    roots.delete(oldest)
+    entry.stop()
+  }
+  return get
 }
 
 /** What a terminal is called: its name, else the command it runs, else (from older hosts) whatever the shell last titled it. */

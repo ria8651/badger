@@ -201,7 +201,7 @@ export function Composer(props: {
         }}
         rows={Math.min(10, Math.max(2, text().split('\n').length))}
         placeholder={state.running ? 'Queue a message' : 'Message Claude'}
-        class="block max-h-[calc(10lh+0.875rem)] min-h-[calc(2lh+0.875rem)] w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed outline-none pointer-coarse:text-base [field-sizing:content] placeholder:text-fg-3"
+        class="block max-h-[calc(10lh+0.875rem)] min-h-[calc(2lh+0.875rem)] w-full resize-none bg-transparent px-4 pt-3.5 text-message leading-relaxed outline-none pointer-coarse:text-base [field-sizing:content] placeholder:text-fg-3"
       />
       {/* A narrow composer keeps attaching and sending in the bar and puts the rest in a panel; wide ones show it all.
           Measured on the composer, not the screen, so the sidebar squeezing it counts too. */}
@@ -333,7 +333,7 @@ function PanelChoices<T extends string>(props: { label: string; options: Option<
   const current = () => props.options.find((o) => o.value === props.value)
   return (
     <div class="px-2.5 pt-2.5 pb-2">
-      <div class="pb-2 text-[11px] text-fg-3">{props.label}</div>
+      <div class="pb-2 text-meta text-fg-3">{props.label}</div>
       <div class="flex flex-wrap gap-1.5">
         <For each={props.options}>
           {(o) => (
@@ -341,7 +341,7 @@ function PanelChoices<T extends string>(props: { label: string; options: Option<
               type="button"
               onClick={() => props.onPick(o.value)}
               aria-pressed={o.value === props.value}
-              class={`h-9 rounded-button-round border px-3 text-[13px] transition-colors ${
+              class={`h-9 rounded-button-round border px-3 text-ui transition-colors ${
                 o.value === props.value
                   ? o.tone === 'danger'
                     ? 'border-danger bg-danger/10 text-danger'
@@ -366,7 +366,7 @@ function PanelButton(props: { onClick: () => void; children: JSX.Element }) {
     <button
       type="button"
       onClick={props.onClick}
-      class="flex h-10 w-full items-center gap-3 rounded-lg px-2.5 text-left text-[13px] text-fg-2 transition-colors hover:bg-surface hover:text-fg"
+      class="flex h-10 w-full items-center gap-3 rounded-lg px-2.5 text-left text-ui text-fg-2 transition-colors hover:bg-surface hover:text-fg"
     >
       {props.children}
     </button>

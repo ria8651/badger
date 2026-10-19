@@ -62,7 +62,7 @@ export function CompactDivider(props: { item: Extract<Item, { kind: 'compact' }>
       </button>
       <Show when={open() && props.summary}>
         {(summary) => (
-          <div class="mt-3 max-h-[32rem] overflow-auto rounded-lg border border-edge px-4 py-3 text-[13px] text-fg-2">
+          <div class="mt-3 max-h-[32rem] overflow-auto rounded-lg border border-edge px-4 py-3 text-ui text-fg-2">
             <p class="mb-2 text-xs text-fg-3">What Claude carries on from, in place of the conversation above:</p>
             <Markdown text={summary()} />
           </div>
@@ -107,7 +107,7 @@ export function Notice(props: { icon: typeof Scissors; text: string; danger?: bo
 export function ApiError(props: { item: Extract<Item, { kind: 'api_error' }>; onLogin?: () => void }) {
   const login = () => props.item.error === 'authentication_failed'
   return (
-    <div class="my-4 flex items-start gap-2.5 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2.5 text-[13px]">
+    <div class="my-4 flex items-start gap-2.5 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2.5 text-ui">
       {login() ? <KeyRound class="mt-0.5 size-4 shrink-0 text-danger" /> : <CircleAlert class="mt-0.5 size-4 shrink-0 text-danger" />}
       <div class="min-w-0 flex-1">
         <div class="text-fg">{login() ? 'Claude Code’s login has expired' : props.item.text || 'Claude Code couldn’t reach Claude'}</div>
@@ -184,7 +184,7 @@ export function contextChip(chip: Chip): ContextChip {
 
 export function WorkingLine(props: { detail?: string }) {
   return (
-    <div class="mt-4 flex h-6 items-center gap-2 text-[13px] text-fg-3">
+    <div class="mt-4 flex h-6 items-center gap-2 text-ui text-fg-3">
       <LiveDot /> Working
       <Show when={props.detail}>
         <span class="min-w-0 truncate font-mono text-xs">{props.detail}</span>
@@ -193,7 +193,7 @@ export function WorkingLine(props: { detail?: string }) {
   )
 }
 
-const badge = 'inline-flex max-w-[80%] items-center gap-2 rounded-full border border-line px-3 py-1 text-[13px]'
+const badge = 'inline-flex max-w-[80%] items-center gap-2 rounded-full border border-line px-3 py-1 text-ui'
 
 /** A card as a pill linking to it. */
 export function CardBadge(props: { card: { id: number; title: string; status: CardStatus } }) {
@@ -244,7 +244,7 @@ export function UserMessage(props: {
   const clamped = () => overflows() && !expanded()
   return (
     <div class={`flex items-center justify-start gap-1 ${props.class ?? 'mt-8 mb-4 first:mt-0'}`}>
-      <div class="-ml-4 max-w-[80%] min-w-0 bg-surface rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed">
+      <div class="-ml-4 max-w-[80%] min-w-0 bg-surface rounded-2xl px-4 py-2.5 text-message leading-relaxed">
         <Show when={props.pastes?.length || props.images?.length || props.card || props.move || props.context?.length}>
           <Attachments
             pastes={props.pastes ?? []}
@@ -286,7 +286,7 @@ export function UserMessage(props: {
 export function Thinking(props: { text: string; live?: boolean }) {
   return (
     <Disclosure label={props.live ? 'Thinking' : 'Thought'} trailing={props.live && <LiveDot />} live={props.live}>
-      <div class="text-[13px] leading-relaxed whitespace-pre-wrap text-fg-2">{props.text}</div>
+      <div class="text-ui leading-relaxed whitespace-pre-wrap text-fg-2">{props.text}</div>
     </Disclosure>
   )
 }

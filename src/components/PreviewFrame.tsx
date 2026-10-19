@@ -25,7 +25,7 @@ export function PreviewFrame(props: {
     <Show
       when={url()}
       fallback={
-        <p class={`${props.class} flex items-center justify-center p-6 text-center text-[13px] text-fg-3`}>
+        <p class={`${props.class} flex items-center justify-center p-6 text-center text-ui text-fg-3`}>
           Previews need Badger on a host name, not an IP address: each port gets its own subdomain.
         </p>
       }
@@ -45,7 +45,7 @@ export function PreviewFrame(props: {
         return (
           <div class={`${props.class} flex flex-col`}>
             <Show when={props.machine !== LOCAL}>
-              <p class="shrink-0 truncate px-3 py-1 text-[11px] text-fg-3" title={src()}>
+              <p class="shrink-0 truncate px-3 py-1 text-meta text-fg-3" title={src()}>
                 Served on {machineName(props.machine)}: opens at localhost there
               </p>
             </Show>

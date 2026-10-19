@@ -189,7 +189,7 @@ export function FileBrowser(props: {
                 tabindex={inert() ? -1 : 0}
                 onClick={() => !inert() && open(entry)}
                 onKeyDown={(e) => e.key === 'Enter' && !inert() && open(entry)}
-                class={`group flex h-9 items-center gap-3 rounded-lg px-2.5 text-[13px] outline-none pointer-coarse:h-11 ${
+                class={`group flex h-9 items-center gap-3 rounded-lg px-2.5 text-ui outline-none pointer-coarse:h-11 ${
                   inert() ? 'text-fg-3' : `cursor-pointer text-fg-2 hover:bg-surface hover:text-fg focus-visible:bg-surface ${picked() ? 'bg-surface text-fg' : ''}`
                 }`}
               >
@@ -231,7 +231,7 @@ export function FileBrowser(props: {
           }}
         </For>
         <Show when={listing.latest && !entries().length && !naming()}>
-          <p class="px-2.5 py-6 text-center text-[13px] text-fg-3">{filter() ? 'Nothing matches' : 'Empty folder'}</p>
+          <p class="px-2.5 py-6 text-center text-ui text-fg-3">{filter() ? 'Nothing matches' : 'Empty folder'}</p>
         </Show>
         <Show when={listing.latest?.truncated}>
           <p class="px-2.5 py-2 text-xs text-fg-3">Only the first {listing.latest!.entries.length} are shown. Filter to narrow it down.</p>
@@ -247,7 +247,7 @@ export function FileBrowser(props: {
           when={props.mode === 'files'}
           fallback={
             <>
-              <span class="min-w-0 flex-1 truncate text-left font-mono text-[11px] text-fg-3 [direction:rtl]">{ltr(current())}</span>
+              <span class="min-w-0 flex-1 truncate text-left font-mono text-meta text-fg-3 [direction:rtl]">{ltr(current())}</span>
               <Button primary disabled={busy() || !listing.latest} onClick={() => pickFolder(current())}>
                 Add this folder
               </Button>

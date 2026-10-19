@@ -2,6 +2,7 @@ import { Show, createSignal, onCleanup, untrack } from 'solid-js'
 import { PanelRight } from '../icons'
 import type { PendingPermission, PermissionMode } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
+import { chatCommands } from '../useChat.ts'
 import { Markdown } from './Markdown.tsx'
 import { MarkdownEditor } from './MarkdownEditor.tsx'
 import { resultText } from './ToolCard.tsx'
@@ -85,7 +86,7 @@ export function PlanActions(props: { sessionId: string; permission: PendingPermi
   }
   const approve = (mode: PermissionMode) => {
     respond('allow', { updatedInput: edited(p()) ? { ...p().input, plan: planText(p()) } : undefined })
-    socket.send({ type: 'set_mode', sessionId: props.sessionId, mode })
+    chatCommands(props.sessionId).setMode(mode)
   }
   // A plan sent back isn't the tool's input any more, so edits go in the message for Claude to start from.
   const keepPlanning = () => {
@@ -175,7 +176,7 @@ export function PlanPane(props: {
         tabIndex={-1}
         class="min-h-0 flex-1 overflow-y-auto outline-none"
       >
-        <div class="mx-auto max-w-[46rem] px-6 pt-3 pb-8 text-[13px]">
+        <div class="mx-auto max-w-[46rem] px-6 pt-3 pb-8 text-ui">
           <Show
             when={props.permission}
             keyed
@@ -207,7 +208,7 @@ export function PlanPane(props: {
       {/* Keyed, so one request's editor and buttons are never handed the next one, or read after theirs is answered. */}
       <Show when={props.permission} keyed>
         {(p) => (
-          <div class="shrink-0 space-y-3 border-t border-line px-6 py-4 text-[13px]">
+          <div class="shrink-0 space-y-3 border-t border-line px-6 py-4 text-ui">
             <PlanActions sessionId={props.sessionId} permission={p} />
           </div>
         )}

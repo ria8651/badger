@@ -280,7 +280,7 @@ function Shell(props: {
     })
 
   return (
-    <div class="flex min-h-0 flex-col overflow-y-auto border border-edge text-[13px] rounded-2xl shadow-(--shadow-card)">
+    <div class="flex min-h-0 flex-col overflow-y-auto border border-edge text-ui rounded-2xl shadow-(--shadow-card)">
       <button onClick={toggle} title={open() ? 'Fold away' : 'Unfold'} class="flex shrink-0 items-center gap-2.5 p-4 text-left">
         <span class="size-1.5 shrink-0 rounded-full bg-accent" />
         <Show when={props.from}>

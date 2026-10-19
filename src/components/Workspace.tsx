@@ -23,7 +23,6 @@ import {
   removeView,
   sessionOf,
   setActive,
-  setFocusRequest,
   setSizes,
   togglePanels,
   updateLayout,
@@ -47,6 +46,7 @@ import { inWs, terminalLabel, terminalTooltip, terminals, terminalsListed, type 
 import { PreviewFrame } from './PreviewFrame.tsx'
 import { PortButtons, RenameTerminal, RestartButton, StatusDot } from './Terminals.tsx'
 import { TerminalView } from './TerminalView.tsx'
+import { showError } from './Popover.tsx'
 import { LiveDot, ghostClass, modalOpen } from './ui.tsx'
 
 /** Height of a group's tab bar, which its views sit under. */
@@ -217,7 +217,8 @@ export function Workspace(props: {
     props.onFocusChat()
   }
 
-  const newTerminal = (where?: Parameters<typeof openTerminal>[2]) => props.ws && props.cwd && void openTerminal(props.ws, props.cwd, where)
+  const newTerminal = (where?: Parameters<typeof openTerminal>[2]) =>
+    props.ws && props.cwd && void openTerminal(props.ws, props.cwd, where).catch((e: Error) => showError("Couldn't open a terminal", e.message))
 
   // ── Resizing ──
 
@@ -683,8 +684,8 @@ export function Workspace(props: {
       </Show>
 
       <Show when={leader()}>
-        <div class="pointer-events-none absolute bottom-4 left-1/2 z-50 w-64 -translate-x-1/2 animate-[pop-in_120ms_ease-out] rounded-xl border border-edge bg-bg p-2 text-[13px] pop shadow-(--shadow-pop)">
-          <div class="px-1.5 pb-1 text-[11px] text-fg-3">{LEADER}, then</div>
+        <div class="pointer-events-none absolute bottom-4 left-1/2 z-50 w-64 -translate-x-1/2 animate-[pop-in_120ms_ease-out] rounded-xl border border-edge bg-bg p-2 text-ui pop shadow-(--shadow-pop)">
+          <div class="px-1.5 pb-1 text-meta text-fg-3">{LEADER}, then</div>
           <For each={BINDINGS}>
             {([key, what]) => (
               <div class="flex items-center gap-3 px-1.5 py-0.5">

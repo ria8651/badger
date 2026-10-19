@@ -104,7 +104,7 @@ export function RenameChat(props: {
                   typed = true
                 }
               }}
-              class="h-10 shrink-0 border-b border-line bg-transparent px-3.5 text-[13px] text-fg outline-none pointer-coarse:h-12 pointer-coarse:text-base"
+              class="h-10 shrink-0 border-b border-line bg-transparent px-3.5 text-ui text-fg outline-none pointer-coarse:h-12 pointer-coarse:text-base"
             />
             <div class="flex items-center gap-1 p-1">
               <Show
@@ -120,7 +120,7 @@ export function RenameChat(props: {
                   type="button"
                   onClick={() => close(suggestion())}
                   title="Use this title (Tab to edit it first)"
-                  class="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-fg-2 transition-colors hover:bg-surface hover:text-fg pointer-coarse:py-2.5"
+                  class="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-ui text-fg-2 transition-colors hover:bg-surface hover:text-fg pointer-coarse:py-2.5"
                 >
                   <Sparkles class="size-3.5 shrink-0 text-fg-3" />
                   <span class="truncate">{suggestion()}</span>

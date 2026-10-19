@@ -301,7 +301,7 @@ export function Chat(props: {
                         onLogin={() => {
                           const w = ws()
                           const dir = cwd()
-                          if (w && dir) void openTerminal(w, dir, undefined, 'claude auth login')
+                          if (w && dir) void openTerminal(w, dir, undefined, 'claude auth login').catch((e: Error) => showError("Couldn't open a terminal", e.message))
                         }}
                         onRetry={(retry) =>
                           void api.fork(props.sessionId, { at: retry.at, draft: retry.text }).then(
@@ -328,7 +328,7 @@ export function Chat(props: {
                     )}
                   </Show>
                   <Show when={state.makingWorktree}>
-                    <div class="mt-4 flex h-6 items-center gap-2 text-[13px] text-fg-3">
+                    <div class="mt-4 flex h-6 items-center gap-2 text-ui text-fg-3">
                       <GitBranch class="size-3.5 shrink-0 animate-pulse" /> Making worktree
                       <Show when={worktreeName()}>{(name) => <span class="min-w-0 truncate font-mono text-xs">{name()}</span>}</Show>
                     </div>

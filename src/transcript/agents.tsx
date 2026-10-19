@@ -211,7 +211,7 @@ export function TaskPane(props: {
       >
         <div
           ref={(el) => sticky.follow(el)}
-          class="space-y-2 px-5 pt-2 pb-6 text-[13px]"
+          class="space-y-2 px-5 pt-2 pb-6 text-ui"
         >
           <Show when={use()} fallback={<p class="text-xs text-fg-3">This task isn’t in the chat any more.</p>}>
             {(u) => (

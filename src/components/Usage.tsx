@@ -31,7 +31,7 @@ export function ContextMeter(props: { usage: ContextUsage }) {
       </button>
       <Show when={open()}>
         <div class="absolute right-0 bottom-full z-10 mb-1.5 w-72 origin-bottom animate-[pop-in_120ms_ease-out] rounded-xl border border-edge bg-bg p-3 pop shadow-(--shadow-pop)">
-          <div class="flex items-baseline justify-between text-[13px]">
+          <div class="flex items-baseline justify-between text-ui">
             <span class="text-fg">Context</span>
             <span class="text-xs text-fg-3 tabular-nums">
               {tokens(props.usage.tokens)} / {tokens(props.usage.max)}
@@ -64,7 +64,7 @@ export function AccountLimits(props: { usage: AccountUsage }) {
             const high = () => l.severity !== 'normal' || l.percent >= 90
             return (
               <div title={l.resetsAt ? `Resets ${new Date(l.resetsAt).toLocaleString()}` : undefined}>
-                <div class="flex items-baseline gap-2 text-[11px] tabular-nums">
+                <div class="flex items-baseline gap-2 text-meta tabular-nums">
                   <span class="text-fg-2">{l.label}</span>
                   <Show when={l.resetsAt}>{(at) => <span class="min-w-0 flex-1 truncate text-fg-3">resets {resets(at())}</span>}</Show>
                   <span class={`ml-auto ${high() ? 'text-danger' : 'text-fg-3'}`}>{Math.round(l.percent)}%</span>

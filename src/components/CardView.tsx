@@ -157,7 +157,7 @@ export function CardView(props: {
       </Show>
 
       <div class="mt-8 flex items-center gap-1 border-b border-line pb-2">
-        <h2 class="mr-auto text-[13px] font-medium text-fg-2">Chats</h2>
+        <h2 class="mr-auto text-ui font-medium text-fg-2">Chats</h2>
         <SearchMenu
           items={linkable}
           placeholder="Find a chat by title or folder"
@@ -177,7 +177,7 @@ export function CardView(props: {
       <Show
         when={chats().length}
         fallback={
-          <p class="py-3 text-[13px] text-fg-3">
+          <p class="py-3 text-ui text-fg-3">
             {isProject() ? 'No chats on the project itself. Chats about one piece of work go on its card.' : 'No chats yet. Chats can be in any repo.'}
           </p>
         }
@@ -186,10 +186,10 @@ export function CardView(props: {
           {(s) => (
             <div class="group -mx-2 flex items-center gap-2 rounded-lg px-2 transition-colors hover:bg-surface/60">
               <button onClick={() => props.onOpenChat(s.id)} class="flex min-w-0 flex-1 items-center gap-2 py-2.5 text-left">
-                <span class="min-w-0 flex-1 truncate text-[13px] text-fg-2 group-hover:text-fg">{s.title}</span>
+                <span class="min-w-0 flex-1 truncate text-ui text-fg-2 group-hover:text-fg">{s.title}</span>
                 <ChatDot running={s.running} attention={attention()[s.id]} />
-                <span class="max-w-[40%] shrink-0 truncate text-[11px] text-fg-3">{s.cwd && folderLabel(s.cwd)}</span>
-                <Show when={onMachine(s.machine)}>{(name) => <MachineName machine={s.machine} name={name()} class="text-[11px] text-fg-3" />}</Show>
+                <span class="max-w-[40%] shrink-0 truncate text-meta text-fg-3">{s.cwd && folderLabel(s.cwd)}</span>
+                <Show when={onMachine(s.machine)}>{(name) => <MachineName machine={s.machine} name={name()} class="text-meta text-fg-3" />}</Show>
               </button>
               <RenameChat
                 session={s}
@@ -214,7 +214,7 @@ export function CardView(props: {
       </Show>
 
       <Show when={worktrees().length}>
-        <h2 class="mt-8 border-b border-line pb-2 text-[13px] font-medium text-fg-2">Worktrees</h2>
+        <h2 class="mt-8 border-b border-line pb-2 text-ui font-medium text-fg-2">Worktrees</h2>
         <For each={worktrees()}>
           {(key) => {
             const [machine, path] = JSON.parse(key) as [string, string]
@@ -234,7 +234,7 @@ export function CardView(props: {
       when={isProject()}
       fallback={
         <div class="flex h-full min-w-0 flex-1 flex-col overflow-y-auto">
-          <div class="bar flex h-12 shrink-0 items-center gap-1 px-5 text-[13px]">
+          <div class="bar flex h-12 shrink-0 items-center gap-1 px-5 text-ui">
             <button onClick={() => props.onOpenCard(null)} class="text-fg-3 transition-colors hover:text-fg">
               Projects
             </button>
@@ -260,7 +260,7 @@ export function CardView(props: {
       }
     >
       <div class="flex h-full min-w-0 flex-1 flex-col">
-        <div class="bar flex h-12 shrink-0 items-center gap-1 px-5 text-[13px]">
+        <div class="bar flex h-12 shrink-0 items-center gap-1 px-5 text-ui">
           <button onClick={() => props.onOpenCard(null)} class="text-fg-3 transition-colors hover:text-fg">
             Projects
           </button>
@@ -320,13 +320,13 @@ function WorktreeRow(props: { path: string; machine: string }) {
   }
   return (
     <div class="group -mx-2 rounded-lg px-2 py-2.5 transition-colors hover:bg-surface/60">
-      <div class="flex items-center gap-2 text-[13px]">
+      <div class="flex items-center gap-2 text-ui">
         <GitBranch class="size-3.5 shrink-0 text-fg-3" />
         <span class="min-w-0 truncate font-mono text-xs text-fg-2" title={props.path}>
           {status()?.branch || folderLabel(props.path)}
         </span>
-        <Show when={onMachine(props.machine)}>{(name) => <MachineName machine={props.machine} name={name()} class="text-[11px] text-fg-3" />}</Show>
-        <span class="ml-auto shrink-0 text-[11px] text-fg-3">{summary()}</span>
+        <Show when={onMachine(props.machine)}>{(name) => <MachineName machine={props.machine} name={name()} class="text-meta text-fg-3" />}</Show>
+        <span class="ml-auto shrink-0 text-meta text-fg-3">{summary()}</span>
         <button
           onClick={remove}
           title="Remove worktree (its branch goes too, if merged)"

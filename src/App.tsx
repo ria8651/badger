@@ -126,7 +126,7 @@ export function App() {
         <Board onOpen={(id) => navigate({ kind: 'card', id })} />
       </Match>
       <Match when={route().kind === 'card'}>
-        <Show when={currentCard()} fallback={<p class="flex flex-1 items-center justify-center text-[13px] text-fg-3">No such card</p>}>
+        <Show when={currentCard()} fallback={<p class="flex flex-1 items-center justify-center text-ui text-fg-3">No such card</p>}>
           {(card) => (
             <CardView
               card={card()}
@@ -153,7 +153,7 @@ export function App() {
           <span class="absolute top-2 right-2 size-2 rounded-full bg-accent ring-2 ring-bg" />
         </Show>
       </button>
-      <span class="min-w-0 flex-1 truncate text-[13px] font-medium">{pageTitle()}</span>
+      <span class="min-w-0 flex-1 truncate text-ui font-medium">{pageTitle()}</span>
       <button
         onClick={newHomeChat}
         title={focus() ? `New chat on ${focus()!.title}` : 'New chat'}

@@ -83,7 +83,7 @@ export function Columns(props: BoardProps & { parentId: number | null; class?: s
               }}
             >
               <header class="flex h-10 shrink-0 items-center gap-2 px-3">
-                <span class="text-[13px] font-medium text-fg-2">{STATUS_LABELS[status]}</span>
+                <span class="text-ui font-medium text-fg-2">{STATUS_LABELS[status]}</span>
                 <span class="text-xs text-fg-3 tabular-nums">{column(status).length}</span>
                 <button
                   onClick={() => setAdding(status)}
@@ -141,8 +141,8 @@ export function Columns(props: BoardProps & { parentId: number | null; class?: s
                               dragging() === card.id ? 'opacity-40' : ''
                             }`}
                           >
-                            <div class="text-[13px] leading-snug text-fg">{card.title}</div>
-                            <div class="mt-1.5 flex items-center gap-2 text-[11px] text-fg-3 tabular-nums pointer-coarse:mr-9">
+                            <div class="text-ui leading-snug text-fg">{card.title}</div>
+                            <div class="mt-1.5 flex items-center gap-2 text-meta text-fg-3 tabular-nums pointer-coarse:mr-9">
                               <span>#{card.id}</span>
                               <Show when={chats().length}>
                                 <span class="flex items-center gap-1">

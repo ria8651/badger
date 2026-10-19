@@ -198,7 +198,7 @@ export function TaskTray(props: { sessionId: string; items: Accessor<TrayItem[]>
   }
 
   return (
-    <div class="rounded-xl border border-line px-3 py-1 text-[13px]">
+    <div class="rounded-xl border border-line px-3 py-1 text-ui">
       <For each={running()}>{(id) => <Row id={id} />}</For>
       <Show when={finished()}>
         <button onClick={() => setShowDone(!showDone())} class="group flex h-7 w-full items-center gap-2 text-left text-xs text-fg-3">

@@ -114,11 +114,11 @@ export function Radar(props: {
 function Section(props: { title: string; count: number; empty: string; children: JSX.Element }) {
   return (
     <section class="mt-6">
-      <h2 class="flex items-baseline gap-2 border-b border-line pb-2 text-[13px] font-medium text-fg-2">
+      <h2 class="flex items-baseline gap-2 border-b border-line pb-2 text-ui font-medium text-fg-2">
         {props.title}
         <span class="text-xs font-normal text-fg-3 tabular-nums">{props.count}</span>
       </h2>
-      <Show when={props.count} fallback={<p class="py-3 text-[13px] text-fg-3">{props.empty}</p>}>
+      <Show when={props.count} fallback={<p class="py-3 text-ui text-fg-3">{props.empty}</p>}>
         {props.children}
       </Show>
     </section>
@@ -128,12 +128,12 @@ function Section(props: { title: string; count: number; empty: string; children:
 function Row(props: { onClick: () => void; title: string; project?: string; dot: JSX.Element; note: JSX.Element }) {
   return (
     <button onClick={props.onClick} class="group -mx-2 flex w-[calc(100%+1rem)] items-center gap-3 rounded-lg px-2 py-2.5 text-left transition-colors hover:bg-surface/60">
-      <span class="min-w-0 flex-1 truncate text-[13px] text-fg-2 group-hover:text-fg">{props.title}</span>
+      <span class="min-w-0 flex-1 truncate text-ui text-fg-2 group-hover:text-fg">{props.title}</span>
       <Show when={props.project}>
-        <span class="max-w-40 shrink-0 truncate text-[11px] text-fg-3">{props.project}</span>
+        <span class="max-w-40 shrink-0 truncate text-meta text-fg-3">{props.project}</span>
       </Show>
       {props.dot}
-      <span class="w-36 shrink-0 text-right text-[11px] text-fg-3 tabular-nums">{props.note}</span>
+      <span class="w-36 shrink-0 text-right text-meta text-fg-3 tabular-nums">{props.note}</span>
     </button>
   )
 }

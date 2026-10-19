@@ -76,6 +76,13 @@
 
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* The UI's own sizes, besides Tailwind's: text-ui for most controls and lists, text-meta for small print like
+     counts and section labels, text-message for what's written to and from Claude. Only the size: line height is
+     inherited unless a leading-* says otherwise. */
+  --text-ui: 13px;
+  --text-meta: 11px;
+  --text-message: 15px;
 }
 
 @utility rounded-button-* {

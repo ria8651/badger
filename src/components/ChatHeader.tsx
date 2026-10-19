@@ -196,7 +196,7 @@ export function ChatHeader(props: {
   const button = 'flex h-7 items-center gap-1 rounded-button-md px-2 text-xs transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9'
 
   return (
-    <div class="bar relative z-10 flex h-10 shrink-0 items-center gap-2 border-b border-line shadow-(--shadow-bar) px-3 text-[13px] md:h-12 md:px-4">
+    <div class="bar relative z-10 flex h-10 shrink-0 items-center gap-2 border-b border-line shadow-(--shadow-bar) px-3 text-ui md:h-12 md:px-4">
       <Show when={props.session}>
         {(s) => (
           <>

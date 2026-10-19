@@ -147,11 +147,11 @@ export function Attachments(props: {
         )}
       </Show>
       <Show when={openContext()}>
-        {(c) => <div class="mt-2 max-h-80 overflow-auto rounded-lg border border-edge px-3 py-2.5 text-[13px] text-fg-2">{c().body()}</div>}
+        {(c) => <div class="mt-2 max-h-80 overflow-auto rounded-lg border border-edge px-3 py-2.5 text-ui text-fg-2">{c().body()}</div>}
       </Show>
       <Show when={open() === 'card' && props.card?.card}>
         {(card) => (
-          <div class="mt-2 max-h-80 overflow-auto rounded-lg border border-edge px-3 py-2.5 text-[13px] text-fg-2">
+          <div class="mt-2 max-h-80 overflow-auto rounded-lg border border-edge px-3 py-2.5 text-ui text-fg-2">
             <Link to={{ kind: 'card', id: card().id }} class="mb-1.5 block font-medium text-fg hover:underline">
               #{card().id} {card().title}
             </Link>
@@ -163,7 +163,7 @@ export function Attachments(props: {
       </Show>
       <Show when={open() === 'move' && props.move}>
         {(move) => (
-          <div class="mt-2 rounded-lg border border-edge px-3 py-2.5 text-[13px] text-fg-2">
+          <div class="mt-2 rounded-lg border border-edge px-3 py-2.5 text-ui text-fg-2">
             Forked from a chat in <span class="font-mono text-xs">{place(move().from)}</span>, and now in{' '}
             <span class="font-mono text-xs">{place(move().to)}</span>. Claude was told that paths from before may not be here.
           </div>

@@ -143,7 +143,7 @@ export function GhostButton(props: JSX.ButtonHTMLAttributes<HTMLButtonElement> &
 /** A strip above the composer saying why things are as they are: offline, gone, an error. */
 export function Notice(props: { icon?: Component<{ class?: string }>; tone?: 'danger'; children: JSX.Element }) {
   return (
-    <div class={`flex items-start gap-3 rounded-lg px-3 py-2 text-[13px] ${props.tone === 'danger' ? 'bg-danger/10 text-danger' : 'bg-surface text-fg-2'}`}>
+    <div class={`flex items-start gap-3 rounded-lg px-3 py-2 text-ui ${props.tone === 'danger' ? 'bg-danger/10 text-danger' : 'bg-surface text-fg-2'}`}>
       <Show when={props.icon}>{(icon) => <Dynamic component={icon()} class="size-4 shrink-0 mt-0.5" />}</Show>
       {props.children}
     </div>
@@ -156,7 +156,7 @@ export function Button(props: JSX.ButtonHTMLAttributes<HTMLButtonElement> & { pr
   return (
     <button
       {...rest}
-      class={`h-8 px-3 text-[13px] font-medium transition-colors rounded-button-lg disabled:pointer-events-none disabled:opacity-40 ${
+      class={`h-8 px-3 text-ui font-medium transition-colors rounded-button-lg disabled:pointer-events-none disabled:opacity-40 ${
         local.primary
           ? 'bg-primary text-on-primary shadow-(--shadow-control) hover:bg-primary/85'
           : local.danger
@@ -182,7 +182,7 @@ export function IconButton(props: JSX.ButtonHTMLAttributes<HTMLButtonElement> & 
 export const touch = matchMedia('(pointer: coarse)')
 
 export const inputClass =
-  'h-8 w-full border border-edge bg-transparent px-3 text-[13px] outline-none transition-colors rounded-lg placeholder:text-fg-3 focus:border-fg-3 pointer-coarse:text-base'
+  'h-8 w-full border border-edge bg-transparent px-3 text-ui outline-none transition-colors rounded-lg placeholder:text-fg-3 focus:border-fg-3 pointer-coarse:text-base'
 
 /**
  * Stands in for a page or chat until its data arrives. Says so when the server can't be reached, since then it
@@ -190,7 +190,7 @@ export const inputClass =
  */
 export function Loading(props: { class?: string }) {
   return (
-    <div class={`flex flex-1 animate-[fade-in_200ms_ease-out_300ms_both] items-center justify-center gap-2 text-[13px] text-fg-3 ${props.class ?? ''}`}>
+    <div class={`flex flex-1 animate-[fade-in_200ms_ease-out_300ms_both] items-center justify-center gap-2 text-ui text-fg-3 ${props.class ?? ''}`}>
       <Show when={connected()} fallback="Can’t reach the server. Retrying…">
         <LiveDot /> Loading…
       </Show>
@@ -364,9 +364,9 @@ export function Menu(props: {
                 class={`flex cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2 pointer-coarse:py-3 ${active() === i() ? 'bg-surface' : ''}`}
               >
                 <div class="min-w-0 flex-1">
-                  <div class={`truncate text-[13px] ${o.tone === 'danger' ? 'text-danger' : 'text-fg'}`}>{o.label}</div>
+                  <div class={`truncate text-ui ${o.tone === 'danger' ? 'text-danger' : 'text-fg'}`}>{o.label}</div>
                   <Show when={o.description}>
-                    <div class={`mt-0.5 leading-snug text-fg-3 ${o.mono ? 'truncate font-mono text-[11px] text-left [direction:rtl]' : 'text-xs'}`}>
+                    <div class={`mt-0.5 leading-snug text-fg-3 ${o.mono ? 'truncate font-mono text-meta text-left [direction:rtl]' : 'text-xs'}`}>
                       {o.mono ? ltr(o.description!) : o.description}
                     </div>
                   </Show>
@@ -542,10 +542,10 @@ export function SearchMenu(props: {
               aria-expanded="true"
               aria-controls={id}
               aria-activedescendant={items().length ? `${id}-${active()}` : undefined}
-              class="h-10 shrink-0 border-b border-line bg-transparent px-3.5 text-[13px] outline-none placeholder:text-fg-3 pointer-coarse:h-12 pointer-coarse:text-base"
+              class="h-10 shrink-0 border-b border-line bg-transparent px-3.5 text-ui outline-none placeholder:text-fg-3 pointer-coarse:h-12 pointer-coarse:text-base"
             />
             <div id={id} role="listbox" class="min-h-0 overflow-y-auto p-1">
-              <For each={items()} fallback={<p class="px-2.5 py-2 text-[13px] text-fg-3">{props.empty ?? 'No matches'}</p>}>
+              <For each={items()} fallback={<p class="px-2.5 py-2 text-ui text-fg-3">{props.empty ?? 'No matches'}</p>}>
                 {(o, i) => (
                   <div
                     id={`${id}-${i()}`}
@@ -561,16 +561,16 @@ export function SearchMenu(props: {
                   >
                     <div class="min-w-0 flex-1">
                       <Show when={!o.render} fallback={o.render!()}>
-                        <div class={`truncate text-[13px] ${o.tone === 'danger' ? 'text-danger' : o.indent ? 'text-fg-2' : 'text-fg'}`}>{o.label}</div>
+                        <div class={`truncate text-ui ${o.tone === 'danger' ? 'text-danger' : o.indent ? 'text-fg-2' : 'text-fg'}`}>{o.label}</div>
                         <Show when={o.description}>
-                          <div class={`mt-0.5 truncate leading-snug text-fg-3 ${o.mono ? 'font-mono text-[11px] text-left [direction:rtl]' : 'text-xs'}`}>
+                          <div class={`mt-0.5 truncate leading-snug text-fg-3 ${o.mono ? 'font-mono text-meta text-left [direction:rtl]' : 'text-xs'}`}>
                             {o.mono ? ltr(o.description!) : o.description}
                           </div>
                         </Show>
                       </Show>
                     </div>
                     <Show when={o.hint}>
-                      <span class="shrink-0 text-[11px] text-fg-3 tabular-nums">{o.hint}</span>
+                      <span class="shrink-0 text-meta text-fg-3 tabular-nums">{o.hint}</span>
                     </Show>
                     {/* Only lists with something picked already need the column. */}
                     <Show when={checkable()}>
