@@ -32,6 +32,7 @@ export function sdkOptions(o: {
   /** Start in this new worktree (Claude Code's --worktree); empty lets Claude name it. */
   worktree?: string
   mcpServers: Record<string, McpServerConfig>
+  /** Tools that skip the permission prompt, allowed from PreToolUse. */
   allowedTools: string[]
   env?: Record<string, string>
   canUseTool: CanUseTool
@@ -57,7 +58,6 @@ export function sdkOptions(o: {
     settingSources: ['user', 'project', 'local'],
     canUseTool: o.canUseTool,
     mcpServers: o.mcpServers,
-    allowedTools: o.allowedTools,
     // Newer models omit thinking text by default; ask for summaries so it can stream.
     thinking: { type: 'adaptive', display: 'summarized' },
     env: { ...streamEnv(), ...o.env },
@@ -78,7 +78,12 @@ export function sdkOptions(o: {
         {
           hooks: [
             async (input) => {
-              if (input.hook_event_name === 'PreToolUse') hooks.toolStarting(input.tool_use_id, input.tool_name)
+              if (input.hook_event_name !== 'PreToolUse') return { continue: true }
+              hooks.toolStarting(input.tool_use_id, input.tool_name)
+              // Allowed here, not with allowedTools: that would skip canUseTool too, and the SDK warns about it every start.
+              if (o.allowedTools.includes(input.tool_name)) {
+                return { continue: true, hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } }
+              }
               return { continue: true }
             },
           ],

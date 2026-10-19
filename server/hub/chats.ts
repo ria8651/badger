@@ -17,7 +17,7 @@ import { titleOf, transcriptModel, type Transcripts } from '../transcripts.ts'
 import { CHAT_ID, type Route } from './http.ts'
 import { debounced, type Viewers } from './viewers.ts'
 
-/** How long the chat list waits on a machine to say which folders are gone. */
+/** How long the chat list waits on a machine to say which folders are gone, or which git roots they're in. */
 const GONE_TIMEOUT_MS = 3000
 /** How long a machine's answer about a folder being gone is used for, rather than asking again on every list. */
 const GONE_TTL_MS = 30 * 1000
@@ -71,6 +71,13 @@ export class Chats {
   private goneAnswers = new WeakMap<Connection, Map<string, { gone: boolean; at: number }>>()
   /** Per live chat, how many of its turns had ended when the hub last heard. */
   private turnsSeen = new Map<string, number>()
+  /**
+   * By machine, the git root of each folder it was asked about: what it said, kept while it's offline so
+   * its chats' panels still have a home; or the question, while it's out, so a folder is asked once.
+   */
+  private rootAnswers = new Map<string, Map<string, string | Promise<string | undefined>>>()
+  /** By machine, folders it didn't answer for lately, and when: not waited on again for GONE_TTL_MS. */
+  private rootMisses = new Map<string, Map<string, number>>()
   /** Chats whose history grew with no live process, whose viewers get it again. */
   private stale = new Set<string>()
   private readonly soonListChanged: () => void
@@ -118,7 +125,33 @@ export class Chats {
         summaries.unshift({ id: live.id, title: 'New chat', cwd: live.cwd, machine: runner.id, lastModified: Date.now(), running: live.running, archived: false })
       }
     }
-    return summaries
+    // Sent with the list so a chat's panels are known before it's opened, not looked up after.
+    // A chat with no machine on record is the hub's, as the browser takes it to be.
+    const roots = await Promise.all(summaries.map((s) => s.cwd && this.workspaceRoot(s.machine ?? LOCAL_MACHINE, s.cwd)))
+    return summaries.map((s, i) => ({ ...s, root: roots[i] || undefined }))
+  }
+
+  /** The workspace (git root) of a folder on a machine, if it has said. */
+  private async workspaceRoot(machine: string, cwd: string): Promise<string | undefined> {
+    let answers = this.rootAnswers.get(machine)
+    if (!answers) this.rootAnswers.set(machine, (answers = new Map()))
+    let misses = this.rootMisses.get(machine)
+    if (!misses) this.rootMisses.set(machine, (misses = new Map()))
+    const known = answers.get(cwd)
+    if (known !== undefined) return known
+    const runner = this.d.machines.get(machine)
+    if (!runner || Date.now() - (misses.get(cwd) ?? 0) < GONE_TTL_MS) return undefined
+    const asking = runner
+      .within(GONE_TIMEOUT_MS)
+      .workspaceRoot(cwd)
+      .catch(() => undefined)
+      .then((root) => {
+        if (root) answers.set(cwd, root)
+        else (answers.delete(cwd), misses.set(cwd, Date.now()))
+        return root
+      })
+    answers.set(cwd, asking)
+    return asking
   }
 
   /** What the board says about these chats, wherever they run. */

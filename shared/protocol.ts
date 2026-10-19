@@ -84,6 +84,8 @@ export interface SessionSummary {
   id: string
   title: string
   cwd?: string
+  /** The git root its folder is in (the folder itself outside a repo), which its panels are kept by; absent until its machine has said. */
+  root?: string
   /** The machine it runs on. */
   machine?: string
   lastModified: number

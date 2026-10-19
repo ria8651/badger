@@ -22,13 +22,13 @@ export const ghost = (active = false) =>
   `grid size-7 shrink-0 place-items-center rounded-md transition-colors hover:bg-surface hover:text-fg ${active ? 'text-fg' : 'text-fg-3'}`
 
 /** For the composer: shows or hides the panels and says how many terminals are running here. */
-export function TerminalButton(props: { ws: Ws; cwd: string }) {
+export function TerminalButton(props: { ws: Ws; session: string; cwd: string }) {
   const running = () => inWorkspace(props.ws).filter((t) => t.running).length
-  const open = () => panelsShown(props.ws)
+  const open = () => panelsShown(props.ws, props.session)
   return (
     <button
       type="button"
-      onClick={() => togglePanels(props.ws, props.cwd)}
+      onClick={() => togglePanels(props.ws, props.session, props.cwd)}
       title={`${open() ? 'Hide' : 'Show'} terminals (${LEADER} P)`}
       class={`flex h-7 items-center gap-1 rounded-button-md px-2 text-xs tabular-nums transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 ${
         open() ? 'bg-surface text-fg-2' : 'text-fg-3'

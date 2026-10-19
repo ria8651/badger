@@ -12,7 +12,7 @@ import { FolderPicker } from './FolderPicker.tsx'
 import { ForkDialog } from './ForkDialog.tsx'
 import { openTerminal, openView, planView, viewKey, viewShown, wide } from '../layout.ts'
 import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
-import { workspaceOf, type Ws } from '../terminals.ts'
+import { knownRoot, workspaceOf, type Ws } from '../terminals.ts'
 import { Checking, ChildChats, createChat } from '../useChat.ts'
 import { Attachments } from './Attachments.tsx'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
@@ -20,7 +20,7 @@ import { PlanPane, latestPlan } from './Plan.tsx'
 import { ChatHeader, createGitStatus } from './ChatHeader.tsx'
 import { TaskTray, trayItems, waitingOnTask } from './TaskTray.tsx'
 import { reveal, revealed, toolLabel } from './ToolCard.tsx'
-import { TaskPane, Transcript, UserMessage, createIndex, detail, runInBackground, setDetail } from './Transcript.tsx'
+import { AttachmentPane, TaskPane, Transcript, UserMessage, attachmentOf, createIndex, detail, runInBackground, setDetail } from './Transcript.tsx'
 import { ContextMeter } from './Usage.tsx'
 import { Workspace, type ChatPanes } from './Workspace.tsx'
 import { showError } from './Popover.tsx'
@@ -116,14 +116,14 @@ export function Chat(props: {
   const [inWorktree, setInWorktree] = createSignal(!!props.worktree)
   const worktreeName = () => props.card && cardWorktreeName(props.card)
   // Offered before the first message, for a repo checkout that isn't already a worktree.
-  const canWorktree = () => !started() && !state.cwd && !!cwd() && !isScratch(cwd()) && !worktreeOf(cwd())
+  const canWorktree = () => !started() && !state.cwd && !props.session && !!cwd() && !isScratch(cwd()) && !worktreeOf(cwd())
   let scroller!: HTMLDivElement
   let content!: HTMLDivElement
   let composer!: HTMLDivElement
   let input!: HTMLTextAreaElement
   let pinned = true
   let lastTop = 0
-  const cwd = () => state.cwd ?? props.draftCwd
+  const cwd = () => state.cwd ?? props.session?.cwd ?? props.draftCwd
   /**
    * A chat stays on the machine it started on; one that hasn't started goes where it was picked. Until the
    * server says which, a chat started elsewhere is taken to be on the hub's, but not one just sent from here.
@@ -134,15 +134,15 @@ export function Chat(props: {
   const offline = createMemo(() => !isOnline(machine()))
   /** Offline as far as the hub knows. While the hub itself can't be reached, what's typed still queues up for it. */
   const stranded = () => offline() && connected()
-  /** Not started yet, so where it runs is still being picked. */
-  const picking = () => !!props.onPickCwd && !state.cwd && !started()
+  /** Not started yet, so where it runs is still being picked. One in the list has started, even before its transcript is here. */
+  const picking = () => !!props.onPickCwd && !state.cwd && !props.session && !started()
   // Holds the last one while a new folder's is looked up, so moving into a worktree doesn't drop the terminals button for a moment.
   const ws = createMemo<Ws | undefined>(
     (last) => {
       const dir = cwd()
       const m = machine()
-      // Not asked while the machine's offline, and asked again once it's back.
-      const root = dir && !offline() && workspaceOf(m, dir)()
+      // Not asked while the machine's offline, and asked again once it's back; one the hub knows still does.
+      const root = dir && (offline() ? knownRoot(m, dir) : workspaceOf(m, dir)())
       return root ? { machine: m, root } : dir && last?.machine === m ? last : undefined
     },
     undefined,
@@ -178,7 +178,12 @@ export function Chat(props: {
     const w = ws()
     if (w) openView(w, planView(props.sessionId))
   }
-  const planShown = () => !!ws() && viewShown(ws()!, viewKey(planView(props.sessionId)))
+  /** Open a paste or context sent with a prompt in a panel beside the chat. */
+  const openAttachment = (prompt: string, part: string) => {
+    const w = ws()
+    if (w) openView(w, { kind: 'attachment', session: props.sessionId, prompt, part })
+  }
+  const planShown = () => !!ws() && viewShown(ws()!, props.sessionId, viewKey(planView(props.sessionId)))
   // A plan arriving while the chat is open gets room beside it, on screens wide enough. Ones
   // already waiting when the chat opened don't, so closing the panel and coming back keeps it closed.
   let known: Set<string> | undefined
@@ -211,6 +216,8 @@ export function Chat(props: {
     renderPlan: (onReady) => (
       <PlanPane sessionId={props.sessionId} permission={planPrompt()} past={latestPlan(index())} onReady={onReady} />
     ),
+    attachment: (v) => attachmentOf(index(), v.prompt, v.part),
+    renderAttachment: (v, onReady) => <AttachmentPane index={index} prompt={v.prompt} part={v.part} onReady={onReady} />,
   }
 
   createEffect(on(() => state.mode, setMode))
@@ -238,7 +245,10 @@ export function Chat(props: {
   }
 
   // Read again each time a turn ends too, since that's when commits happen.
-  const git = createGitStatus(() => (state.loaded && !offline() && cwd() && !isScratch(cwd()) ? { dir: cwd()!, machine: machine() } : undefined))
+  const git = createGitStatus(
+    () => (cwd() && !isScratch(cwd()) ? { dir: cwd()!, machine: machine() } : undefined),
+    () => !state.loaded || offline(),
+  )
   createEffect(on(() => state.running, (running) => !running && void git.refresh(), { defer: true }))
   const actions = () => chatActions(git.status(), cwd())
 
@@ -395,6 +405,7 @@ export function Chat(props: {
         <div class={`md:contents ${cwd() ? '' : 'border-b border-line'}`}>{props.bar}</div>
         <Show when={cwd()}>
           <ChatHeader
+            sessionId={props.sessionId}
             session={props.session}
             cards={props.cards}
             onRenamed={props.onRenamed}
@@ -468,11 +479,12 @@ export function Chat(props: {
                         cwd={cwd()}
                         children={state.children}
                         onFork={setForking}
+                        onOpenAttachment={ws() ? openAttachment : undefined}
                         compacting={state.compacting}
                         onLogin={() => {
                           const w = ws()
                           const dir = cwd()
-                          if (w && dir) void openTerminal(w, dir, undefined, 'claude auth login')
+                          if (w && dir) void openTerminal(w, props.sessionId, dir, undefined, 'claude auth login')
                         }}
                         onRetry={(retry) =>
                           void api.fork(props.sessionId, { at: retry.at, draft: retry.text }).then(

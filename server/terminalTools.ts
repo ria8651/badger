@@ -24,8 +24,17 @@ const lines = z.number().int().min(1).max(1000).optional().describe(`Lines of ou
 const waitFor = z
   .string()
   .optional()
-  .describe('Regex to wait for in output that arrives after this call, e.g. "ready in|listening on". Matched without colours.')
-const timeout = z.number().min(1).max(600).optional().describe('Seconds to wait for wait_for (default 30)')
+  .describe(
+    'Regex to wait for in output that arrives after this call, e.g. "ready in|listening on|error". Matched without colours. Include failure patterns too, so a failure ends the wait instead of waiting out max_wait.',
+  )
+const maxWait = z
+  .number()
+  .min(1)
+  .max(600)
+  .optional()
+  .describe(
+    'Seconds to wait for wait_for (default 30). Running out only stops waiting: the process keeps running. Set about as long as it should take, then read_terminal to check on it and wait again if it is still going.',
+  )
 
 const TERMINAL = 'Terminal = { id, title, name?, cwd, root, command?, sessionId?, running, pid?, ports?, exitCode?, signal?, createdAt }'
 const ACTED = `{ outcome, terminal?: Terminal, output }. ${TERMINAL}`
@@ -49,7 +58,7 @@ export function terminalOps(terminals: Terminals): Op[] {
   async function act(
     ctx: OpContext,
     target: string | (() => Promise<TerminalInfo>),
-    opts: { lines?: number; wait_for?: string; timeout?: number },
+    opts: { lines?: number; wait_for?: string; max_wait?: number },
     action: () => Promise<unknown> = async () => {},
     settle = SETTLE_MS,
     /** Only output after this line counts towards wait_for, e.g. the host's note that a restart happened. */
@@ -111,8 +120,8 @@ export function terminalOps(terminals: Terminals): Op[] {
             // The clock starts once the action is done: a stop can take seconds, and reporting
             // mid-restart would show the old process's state and invite a second restart.
             timer = setTimeout(
-              () => finish(re ? `Timed out after ${opts.timeout ?? 30}s waiting for /${opts.wait_for}/.` : ''),
-              re ? (opts.timeout ?? 30) * 1000 : settle,
+              () => finish(re ? `Gave up after ${opts.max_wait ?? 30}s waiting for /${opts.wait_for}/.` : ''),
+              re ? (opts.max_wait ?? 30) * 1000 : settle,
             )
           },
           (err) => finish(`Failed: ${message(err)}`),
@@ -160,7 +169,7 @@ export function terminalOps(terminals: Terminals): Op[] {
       tool: 'read_terminal',
       script: 'terminals.read',
       description: "Read a terminal's recent output as plain text. With wait_for, first waits for new output matching it.",
-      input: { id, lines, wait_for: waitFor, timeout },
+      input: { id, lines, wait_for: waitFor, max_wait: maxWait },
       returns: ACTED,
       autoAllow: true,
       annotations: { readOnlyHint: true },
@@ -182,7 +191,7 @@ export function terminalOps(terminals: Terminals): Op[] {
         cwd: z.string().optional().describe("Directory to run in, absolute or relative to this chat's directory. Defaults to this chat's directory."),
         lines,
         wait_for: waitFor,
-        timeout,
+        max_wait: maxWait,
       },
       returns: ACTED,
       async run(args, ctx) {
@@ -203,7 +212,7 @@ export function terminalOps(terminals: Terminals): Op[] {
         interrupt: z.boolean().optional().describe('Press Ctrl-C first'),
         lines,
         wait_for: waitFor,
-        timeout,
+        max_wait: maxWait,
       },
       returns: ACTED,
       async run(args, ctx) {
@@ -220,7 +229,7 @@ export function terminalOps(terminals: Terminals): Op[] {
       tool: 'restart_terminal',
       script: 'terminals.restart',
       description: 'Stop the process in a terminal (and everything it started) and run it again: the same command, or a fresh shell.',
-      input: { id, lines, wait_for: waitFor, timeout },
+      input: { id, lines, wait_for: waitFor, max_wait: maxWait },
       returns: ACTED,
       annotations: { idempotentHint: true },
       run: (args, ctx) => (need(args.id), act(ctx, args.id, args, () => terminals.restart(args.id), SETTLE_MS, '[restarted]')),
