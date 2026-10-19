@@ -5,9 +5,10 @@ import { homedir } from 'node:os'
 import { extname, isAbsolute, join, resolve } from 'node:path'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { renderMoveNote, splitMoveNote } from '../shared/forkNote.ts'
-import { IMAGE_TYPES, LOCAL_MACHINE, type AnswerDraft, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
+import { IMAGE_TYPES, LOCAL_MACHINE, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
 import { Attention } from './attention.ts'
 import { BRIDGE_PATH, Bridges } from './bridge.ts'
+import { parseClientEvent } from './clientProtocol.ts'
 import { boardOps, cardContext, contextSeen, type ChatInfo } from './boardTools.ts'
 import { type Actor, type Draft, Store } from './db.ts'
 import { BadRequest, absolutePath, badRequest, message } from './errors.ts'
@@ -23,6 +24,7 @@ import {
   PROTOCOL_HEADER,
   RUNNER_MAX_FRAME,
   RUNNER_PROTOCOL,
+  IDLE,
   SESSION_EVENTS,
   isUuid,
   type HubApi,
@@ -457,20 +459,7 @@ async function sendSnapshot(ws: WebSocket, sessionId: string): Promise<void> {
   const done = (live: LiveSnapshot | null, gone: boolean) => {
     if (asked.get(sessionId) !== n) return
     if (!live) {
-      return send(ws, {
-        ...base,
-        messages: externalizeImages(sessionId, history),
-        running: false,
-        mode: 'auto',
-        model: transcriptModel(history),
-        cwd: info?.cwd,
-        gone,
-        permissions: [],
-        bashOutput: {},
-        checking: [],
-        background: [],
-        queued: [],
-      })
+      return send(ws, { ...IDLE, ...base, messages: externalizeImages(sessionId, history), model: transcriptModel(history), cwd: info?.cwd, gone })
     }
     // History holds earlier processes' turns; the live list holds this process's, in order.
     const seen = new Set(live.messages.map((m) => m.uuid))
@@ -502,27 +491,7 @@ function saveDraft(from: WebSocket, sessionId: string, change: Partial<Draft>): 
 
 const hasAttachments = (a: DraftAttachments) => a.pastes.length > 0 || a.images.length > 0
 
-/** Checks attachments from a client, throwing on anything malformed. */
-function checkAttachments(a: Partial<DraftAttachments>): DraftAttachments {
-  const { pastes = [], images = [] } = a
-  if (!Array.isArray(pastes) || pastes.some((p) => typeof p !== 'string')) throw new BadRequest('pastes must be strings')
-  if (!Array.isArray(images) || images.some((i) => !IMAGE_TYPES.includes(i?.mediaType) || typeof i.data !== 'string')) {
-    throw new BadRequest(`images must be ${IMAGE_TYPES.join(', ')}`)
-  }
-  return { pastes, images }
-}
-
-/** Checks question answers from a client, throwing on anything malformed. */
-function checkAnswers(a: Partial<AnswerDraft> | undefined): AnswerDraft {
-  const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
-  const { picked = {}, other = {} } = a ?? {}
-  if (!isRecord(picked) || Object.values(picked).some((l) => !Array.isArray(l) || l.some((s) => typeof s !== 'string'))) {
-    throw new BadRequest('picked must map questions to lists of labels')
-  }
-  if (!isRecord(other) || Object.values(other).some((s) => typeof s !== 'string')) throw new BadRequest('other must map questions to text')
-  return { picked, other } as AnswerDraft
-}
-
+/** A browser's event, already checked to be well formed. */
 async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
   switch (event.type) {
     case 'subscribe': {
@@ -538,10 +507,7 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       viewers.get(event.sessionId)?.delete(ws)
       return
     case 'send': {
-      const { pastes, images } = checkAttachments(event)
-      if (event.model !== undefined && typeof event.model !== 'string') throw new BadRequest('model must be a string')
-      if (event.machine !== undefined && typeof event.machine !== 'string') throw new BadRequest('machine must be a string')
-      if (!isUuid(event.sessionId)) throw new BadRequest('sessionId must be a UUID')
+      const { pastes = [], images = [] } = event
       // A chat stays where it started; a new one goes where it was asked to.
       const placed = machines.machineOf(event.sessionId)
       const machine = placed ?? (event.machine || LOCAL_MACHINE)
@@ -572,11 +538,9 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       return
     }
     case 'draft':
-      if (event.text !== undefined && typeof event.text !== 'string') throw new BadRequest('text must be a string')
-      saveDraft(ws, event.sessionId, { text: event.text, attachments: event.attachments && checkAttachments(event.attachments) })
+      saveDraft(ws, event.sessionId, { text: event.text, attachments: event.attachments })
       return
     case 'unqueue': {
-      if (typeof event.id !== 'string') throw new BadRequest('id must be a string')
       const message = await runnerFor(event.sessionId)?.peer.remote.unqueue(event.sessionId, event.id)
       if (!message || !event.edit) return
       // Back into the composer, ahead of anything typed since, in every tab.
@@ -601,14 +565,12 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       await runnerFor(event.sessionId)?.peer.remote.stopTask(event.sessionId, event.taskId)
       return
     case 'background_task':
-      if (event.toolUseId !== undefined && typeof event.toolUseId !== 'string') throw new BadRequest('toolUseId must be a string')
       await runnerFor(event.sessionId)?.peer.remote.backgroundTask(event.sessionId, event.toolUseId)
       return
     case 'set_mode':
       await runnerFor(event.sessionId)?.peer.remote.setMode(event.sessionId, event.mode)
       return
     case 'set_model':
-      if (typeof event.model !== 'string') throw new BadRequest('model must be a string')
       // A chat that isn't running takes the model with its next message.
       await runnerFor(event.sessionId)?.peer.remote.setModel(event.sessionId, event.model)
       return
@@ -616,7 +578,7 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       await runnerFor(event.sessionId)?.peer.remote.resolvePermission(event.sessionId, event.requestId, event.decision, event.message, event.updatedInput)
       return
     case 'answer_draft': {
-      const answers = checkAnswers(event.answers)
+      const { answers } = event
       // Shown to the chat's other viewers; the one answering already has it.
       if (!(await runnerFor(event.sessionId)?.peer.remote.draftAnswers(event.sessionId, event.requestId, answers))) return
       const update: ServerEvent = { type: 'answer_draft', sessionId: event.sessionId, requestId: event.requestId, answers }
@@ -624,14 +586,13 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       return
     }
     case 'plan_draft': {
-      if (typeof event.plan !== 'string') throw new BadRequest('plan must be a string')
       if (!(await runnerFor(event.sessionId)?.peer.remote.draftPlan(event.sessionId, event.requestId, event.plan))) return
       const update: ServerEvent = { type: 'plan_draft', sessionId: event.sessionId, requestId: event.requestId, plan: event.plan }
       for (const other of viewers.get(event.sessionId) ?? []) if (other !== ws) send(other, update)
       return
     }
     case 'client_error': {
-      const text = (v: unknown) => (typeof v === 'string' ? v.slice(0, 4000) : '')
+      const text = (v: string) => v.slice(0, 4000)
       console.error(`[browser] ${text(event.message)} at ${text(event.url)}${event.stack ? `\n${text(event.stack)}` : ''}`)
       return
     }
@@ -1122,23 +1083,23 @@ wss.on('connection', (ws: WebSocket) => {
   // Each chat's events are handled in order, so a snapshot can't overtake a later status. Chats don't wait on
   // each other: one whose machine has stopped answering doesn't hold up the rest of the tab.
   const chains = new Map<string, Promise<void>>()
-  ws.on('message', (raw) => {
-    let event: ClientEvent
+  ws.on('message', (data) => {
+    let raw: { sessionId?: unknown } | null
     try {
-      event = JSON.parse(String(raw))
+      raw = JSON.parse(String(data))
     } catch {
       return
     }
-    const key = 'sessionId' in event && typeof event.sessionId === 'string' ? event.sessionId : ''
-    const next = (chains.get(key) ?? Promise.resolve()).then(() =>
-      handleClient(ws, event).catch((err) =>
-        send(ws, {
-          type: 'error',
-          sessionId: 'sessionId' in event ? event.sessionId : undefined,
-          error: message(err),
-        }),
-      ),
-    )
+    const sessionId = typeof raw?.sessionId === 'string' ? raw.sessionId : undefined
+    const key = sessionId ?? ''
+    const next = (chains.get(key) ?? Promise.resolve()).then(async () => {
+      try {
+        const event = parseClientEvent(raw)
+        if (event) await handleClient(ws, event)
+      } catch (err) {
+        send(ws, { type: 'error', sessionId, error: message(err) })
+      }
+    })
     chains.set(key, next)
     void next.then(() => chains.get(key) === next && chains.delete(key))
   })

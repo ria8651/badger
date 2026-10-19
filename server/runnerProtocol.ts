@@ -2,15 +2,15 @@ import { z, type ZodType } from 'zod'
 import type {
   AccountUsage,
   AnswerDraft,
-  BackgroundTask,
   Card,
+  ChatStatus,
   GitStatus,
   ContextUsage,
   Folder,
   ImageAttachment,
   Listing,
+  LiveState,
   ModelOption,
-  PendingPermission,
   PermissionMode,
   QueuedMessage,
   ServerEvent,
@@ -18,7 +18,7 @@ import type {
   WireMessage,
   WorktreeStatus,
 } from '../shared/protocol.ts'
-import { IMAGE_TYPES } from '../shared/protocol.ts'
+import { IMAGE_TYPES, PERMISSION_MODES } from '../shared/protocol.ts'
 import type { OpResult } from './ops.ts'
 import type { Later } from './peer.ts'
 import type { CreateSpec } from './ptyProtocol.ts'
@@ -70,19 +70,20 @@ export interface LiveInfo {
 }
 
 /** A live chat's state that only its process has: its messages since it started, prompts, running Bash output. */
-export interface LiveSnapshot {
+export interface LiveSnapshot extends LiveState {
   messages: WireMessage[]
-  running: boolean
-  makingWorktree: boolean
-  compacting?: number
-  mode: PermissionMode
-  model?: string
-  cwd: string
-  permissions: PendingPermission[]
-  bashOutput: Record<string, string>
-  checking: string[]
-  background: BackgroundTask[]
-  queued: QueuedMessage[]
+}
+
+/** The live state of a chat with no process: nothing running, waiting or queued. Its mode is the one new chats start in. */
+export const IDLE: Omit<LiveState, 'cwd' | 'model'> = {
+  running: false,
+  makingWorktree: false,
+  mode: 'auto',
+  permissions: [],
+  bashOutput: {},
+  checking: [],
+  background: [],
+  queued: [],
 }
 
 /** Part of a transcript file the hub sends a runner: the chat's own (`subpath` '') or a subagent's. */
@@ -368,12 +369,11 @@ const terminalInfo = z.object({
   createdAt: z.number(),
 }) satisfies ZodType<TerminalInfo>
 
+const liveInfo = z.object({ id: chatId, cwd: text(4096), running: z.boolean(), waiting: z.boolean(), turns: count }) satisfies ZodType<LiveInfo>
+
 /** Every event a runner may send. Anything else is dropped. */
 export const RUNNER_EVENT = z.discriminatedUnion('type', [
-  z.object({
-    type: z.literal('live'),
-    sessions: z.array(z.object({ id: chatId, cwd: text(4096), running: z.boolean(), waiting: z.boolean(), turns: count })).max(10_000),
-  }),
+  z.object({ type: z.literal('live'), sessions: z.array(liveInfo).max(10_000) }),
   // The rest of the event is the chat's own content (messages, prompts), passed on to its viewers as it is.
   z.object({ type: z.literal('session'), event: z.looseObject({ type: z.enum(SESSION_EVENTS), sessionId: chatId }) }),
   z.object({ type: z.literal('turn_end'), sessionId: chatId, queued: z.boolean(), turns: count }),
@@ -381,7 +381,18 @@ export const RUNNER_EVENT = z.discriminatedUnion('type', [
   z.object({ type: z.literal('term_output'), id: z.string().max(32), data: z.string() }),
 ])
 
-const imageAttachment = z.object({ mediaType: z.enum(IMAGE_TYPES), data: z.string() })
+export const imageAttachment = z.object({ mediaType: z.enum(IMAGE_TYPES), data: z.string() }) satisfies ZodType<ImageAttachment>
+
+const queuedMessage = z.object({ id: z.string(), text: z.string(), pastes: z.array(z.string()), images: z.array(imageAttachment) }) satisfies ZodType<QueuedMessage>
+
+const chatStatus = z.object({
+  running: z.boolean(),
+  makingWorktree: z.boolean(),
+  compacting: z.number().optional(),
+  mode: z.enum(PERMISSION_MODES),
+  model: z.string().optional(),
+  cwd: z.string(),
+}) satisfies ZodType<ChatStatus>
 
 /**
  * What the hub takes back from a runner's methods, where it does more than
@@ -389,24 +400,19 @@ const imageAttachment = z.object({ mediaType: z.enum(IMAGE_TYPES), data: z.strin
  * call, as if the runner had thrown.
  */
 export const RUNNER_REPLIES = {
-  liveSnapshot: z
-    .looseObject({
+  liveSnapshot: chatStatus
+    .extend({
       // The chat's own content, passed on to its viewers as it is.
       messages: z.array(z.looseObject({ type: z.string() })),
-      running: z.boolean(),
-      makingWorktree: z.boolean(),
-      compacting: z.number().optional(),
-      mode: z.enum(['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions']),
-      model: z.string().optional(),
-      cwd: z.string(),
       permissions: z.array(z.looseObject({ requestId: z.string() })),
       bashOutput: z.record(z.string(), z.string()),
       checking: z.array(z.string()),
       background: z.array(z.looseObject({})),
-      queued: z.array(z.looseObject({ id: z.string(), text: z.string(), pastes: z.array(z.string()), images: z.array(imageAttachment) })),
+      queued: z.array(queuedMessage.loose()),
     })
+    .loose()
     .nullable(),
-  unqueue: z.object({ id: z.string(), text: z.string(), pastes: z.array(z.string()), images: z.array(imageAttachment) }).optional(),
+  unqueue: queuedMessage.optional(),
   draftAnswers: z.boolean(),
   draftPlan: z.boolean(),
   inaccessible: z.array(z.string()),

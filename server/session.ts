@@ -11,7 +11,7 @@ import {
   type Query,
   type SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk'
-import type { AnswerDraft, BackgroundTask, ImageAttachment, ModelOption, PendingPermission, PermissionMode, QueuedMessage, ServerEvent, WireMessage } from '../shared/protocol.ts'
+import type { AnswerDraft, BackgroundTask, ChatStatus, ImageAttachment, ModelOption, PendingPermission, PermissionMode, QueuedMessage, ServerEvent, WireMessage } from '../shared/protocol.ts'
 import { wrapPaste } from '../shared/pastes.ts'
 import { BashStreams, streamEnv } from './bashStream.ts'
 import { message } from './errors.ts'
@@ -230,13 +230,8 @@ export class LiveSession {
   /** This process's turns in order, and the state only it has. The hub adds the history from earlier processes. */
   snapshot(): LiveSnapshot {
     return {
+      ...this.status(),
       messages: [...this.live],
-      running: this.running,
-      makingWorktree: this.makingWorktree,
-      compacting: this.compacting,
-      mode: this.mode,
-      model: this.model,
-      cwd: this.cwd,
       permissions: [...this.pending.values()].map(publicPermission),
       bashOutput: this.bash.outputs(),
       checking: [...this.checking.keys()],
@@ -601,8 +596,12 @@ export class LiveSession {
     this.emit({ type: 'checking', sessionId: this.id, toolUseIds: [...this.checking.keys()] })
   }
 
+  private status(): ChatStatus {
+    return { running: this.running, makingWorktree: this.makingWorktree, compacting: this.compacting, mode: this.mode, model: this.model, cwd: this.cwd }
+  }
+
   private emitStatus(): void {
-    this.emit({ type: 'status', sessionId: this.id, running: this.running, makingWorktree: this.makingWorktree, compacting: this.compacting, mode: this.mode, model: this.model, cwd: this.cwd })
+    this.emit({ type: 'status', sessionId: this.id, ...this.status() })
   }
 
   /** The card context for the next turn. It comes from the hub, which may not answer, and then there's none. */
