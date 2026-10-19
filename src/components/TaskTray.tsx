@@ -1,10 +1,10 @@
 import { For, Show, createMemo, createSignal, type Accessor } from 'solid-js'
 import { Check, ChevronRight } from '../icons'
 import type { BackgroundTask, WireMessage } from '../../shared/protocol.ts'
-import { socket } from '../api.ts'
+import { chatCommands } from '../useChat.ts'
 import { taskLabel, type Task } from '../tasks.ts'
 import { toolLabel, toolSummary } from './ToolCard.tsx'
-import { agentLabel, runInBackground, type Index } from './Transcript.tsx'
+import { agentLabel, type Index } from './Transcript.tsx'
 import { LiveDot, compact, plural } from './ui.tsx'
 
 /** A subagent, shell or other task the chat started, as the tray lists it. */
@@ -182,12 +182,12 @@ export function TaskTray(props: { sessionId: string; items: Accessor<TrayItem[]>
         </span>
         <Show when={live() && t().taskId}>
           <Show when={!t().background && t().toolUseId}>
-            <button onClick={() => runInBackground(props.sessionId, t().toolUseId)} class="shrink-0 text-xs text-fg-3 transition-colors hover:text-fg-2">
+            <button onClick={() => chatCommands(props.sessionId).background(t().toolUseId)} class="shrink-0 text-xs text-fg-3 transition-colors hover:text-fg-2">
               Background
             </button>
           </Show>
           <button
-            onClick={() => socket.send({ type: 'stop_task', sessionId: props.sessionId, taskId: t().taskId! })}
+            onClick={() => chatCommands(props.sessionId).stopTask(t().taskId!)}
             class="shrink-0 text-xs text-fg-3 transition-colors hover:text-fg-2"
           >
             Stop

@@ -5,12 +5,13 @@ import { parseCardContext, type CardContext } from '../../shared/cardContext.ts'
 import { splitMoveNote, type Move } from '../../shared/forkNote.ts'
 import { unwrapPaste } from '../../shared/pastes.ts'
 import type { CardStatus, ImageAttachment, WireMessage } from '../../shared/protocol.ts'
-import { socket } from '../api.ts'
 import type { ShownImage } from '../images.ts'
 import { collectTasks, type Task } from '../tasks.ts'
-import { ChildChats, useChecking, type Partial } from '../useChat.ts'
+import { ChildChats, chatCommands, useChecking, type Partial } from '../useChat.ts'
 import { STATUS_LABELS } from '../stores/cards.ts'
 import { Link } from '../router.tsx'
+import { detail } from '../prefs.ts'
+import { createStickyScroll } from '../stickyScroll.ts'
 import { Markdown } from './Markdown.tsx'
 import { Disclosure, Pre, ToolBody, ToolCard, resultText, splitSkill, toolLabel, toolSummary, type ToolContext, type ToolResult } from './ToolCard.tsx'
 import { Attachments, type ContextChip } from './Attachments.tsx'
@@ -50,18 +51,6 @@ type Chip =
 /** A stretch of Claude's work folded into one row, in result-only mode. */
 type Work = { kind: 'work' }
 type Row = Item | Work
-
-export type Detail = 'full' | 'result'
-
-const DETAIL_KEY = 'badger.chatDetail'
-const [detail, setDetailSignal] = createSignal<Detail>(localStorage.getItem(DETAIL_KEY) === 'result' ? 'result' : 'full')
-export { detail }
-
-/** How much of Claude's work chats show. One setting for every chat. */
-export function setDetail(next: Detail): void {
-  setDetailSignal(next)
-  localStorage.setItem(DETAIL_KEY, next)
-}
 
 /**
  * Items per message, cached by message identity so <For> keeps existing rows
@@ -573,7 +562,7 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
             cwd={props.cwd}
             task={index().tasks.get(item.id)}
             context={index().context.get(item.id)}
-            onBackground={!props.nested && item.name === 'Bash' && index().sessionId ? () => runInBackground(index().sessionId!, item.id) : undefined}
+            onBackground={!props.nested && item.name === 'Bash' && index().sessionId ? () => chatCommands(index().sessionId!).background(item.id) : undefined}
           />
         )
       }
@@ -965,7 +954,7 @@ function agentState(props: { id: string; input: Record<string, unknown>; running
   const stop = () => {
     const sessionId = index().sessionId
     const t = task()
-    if (sessionId && t) socket.send({ type: 'stop_task', sessionId, taskId: t.id })
+    if (sessionId && t) chatCommands(sessionId).stopTask(t.id)
   }
 
   return { index, messages, items, task, background, running, status, steps, prompt, report, stop }
@@ -994,7 +983,7 @@ function AgentBody(props: { id: string; agent: Agent; bashOutput: Record<string,
       <Show when={a.running() && a.task() && a.index().sessionId}>
         <div class="flex gap-4">
           <Show when={!a.background()}>
-            <button onClick={() => runInBackground(a.index().sessionId!, props.id)} class="text-xs text-fg-3 transition-colors hover:text-fg-2">
+            <button onClick={() => chatCommands(a.index().sessionId!).background(props.id)} class="text-xs text-fg-3 transition-colors hover:text-fg-2">
               Run in background
             </button>
           </Show>
@@ -1065,27 +1054,23 @@ export function TaskPane(props: {
   onShowInChat: () => void
   onReady: (focus: () => void) => void
 }) {
-  let scroller!: HTMLDivElement
-  let pinned = true
+  const sticky = createStickyScroll()
   const use = () => props.index().uses.get(props.id)
   const isAgent = () => use()?.name === 'Agent' || use()?.name === 'Task'
   return (
     <TranscriptIndex.Provider value={props.index}>
       <div
         ref={(el) => {
-          scroller = el
+          sticky.ref(el)
           props.onReady(() => el.focus({ preventScroll: true }))
         }}
         tabIndex={-1}
-        onScroll={() => (pinned = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 8)}
+        onScroll={sticky.onScroll}
+        onWheel={sticky.onWheel}
         class="size-full overflow-y-auto outline-none [overflow-anchor:none]"
       >
         <div
-          ref={(el) => {
-            const observer = new ResizeObserver(() => pinned && (scroller.scrollTop = scroller.scrollHeight))
-            observer.observe(el)
-            onCleanup(() => observer.disconnect())
-          }}
+          ref={(el) => sticky.follow(el)}
           class="space-y-2 px-5 pt-2 pb-6 text-[13px]"
         >
           <Show when={use()} fallback={<p class="text-xs text-fg-3">This task isn’t in the chat any more.</p>}>
@@ -1135,10 +1120,6 @@ export function agentLabel(input: Record<string, unknown>): string {
   return type && type !== 'general-purpose' ? type : 'Agent'
 }
 
-/** Stop waiting on a running subagent or command, leaving it to finish in the background; without an id, every one. */
-export function runInBackground(sessionId: string, toolUseId?: string): void {
-  socket.send({ type: 'background_task', sessionId, toolUseId })
-}
 
 /** A foreground agent's report as Claude received it, without the framing around it. */
 function handBack(text: string): string {

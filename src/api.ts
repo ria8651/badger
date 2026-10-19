@@ -52,6 +52,12 @@ export const api = {
     get<Listing>(`/api/fs?${on(machine, { ...(path ? { path } : {}), ...(hidden ? { hidden: '1' } : {}) })}`),
   makeFolder: (path: string, machine?: string) => request<{ path: string }>('POST', '/api/fs/folder', { path, machine }),
   fileUrl: (path: string, machine?: string) => `/api/fs/file?${on(machine, { path })}`,
+  /** A file's contents, e.g. an image picked on the server to attach. */
+  fileBlob: async (path: string, machine?: string) => {
+    const res = await fetch(api.fileUrl(path, machine))
+    if (!res.ok) throw new Error(res.statusText)
+    return res.blob()
+  },
   workspace: (cwd: string, machine?: string) => get<{ root: string }>(`/api/workspace?${on(machine, { cwd })}`),
   createTerminal: (spec: { cwd: string; machine?: string; command?: string; cols?: number; rows?: number }) =>
     request<TerminalInfo>('POST', '/api/terminals', spec),

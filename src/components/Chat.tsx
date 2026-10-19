@@ -1,43 +1,30 @@
-import { For, Show, createEffect, createMemo, createSignal, mapArray, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
-import { ArrowUp, FolderX, GitBranch, MonitorOff, Paperclip, Pencil, ListChevronsDownUp, ListChevronsUpDown, SlidersHorizontal, Square, WifiOff, X } from '../icons'
-import { isLongPaste } from '../../shared/pastes.ts'
-import { IMAGE_EXTENSIONS, type DraftAttachments, type PermissionMode, type QueuedMessage } from '../../shared/protocol.ts'
+import { For, Show, createEffect, createMemo, createSignal, on, onMount, untrack, type JSX } from 'solid-js'
+import { FolderX, GitBranch, MonitorOff, Pencil, WifiOff, X } from '../icons'
+import type { DraftAttachments, PermissionMode, QueuedMessage } from '../../shared/protocol.ts'
 import { chatActions } from '../actions.ts'
-import { navigate } from '../router.tsx'
-import { cardOf } from '../stores/cards.ts'
-import { sessionById } from '../stores/sessions.ts'
-import { api, connected, socket } from '../api.ts'
-import { readImage } from '../images.ts'
-import { lastModel, modelValue, models, setLastModel } from '../models.ts'
+import { api, connected } from '../api.ts'
 import { cardWorktreeName, isScratch, worktreeOf } from '../folders.ts'
-import { FileBrowser } from './FileBrowser.tsx'
-import { FolderPicker } from './FolderPicker.tsx'
-import { ForkDialog } from './ForkDialog.tsx'
 import { openTerminal, openView, planView, viewKey, viewShown, wide } from '../layout.ts'
 import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
+import { lastModel, modelValue, models, setLastModel } from '../models.ts'
+import { navigate } from '../router.tsx'
+import { createStickyScroll } from '../stickyScroll.ts'
+import { cardOf } from '../stores/cards.ts'
+import { sessionById } from '../stores/sessions.ts'
 import { workspaceOf, type Ws } from '../terminals.ts'
-import { Checking, ChildChats, createChat } from '../useChat.ts'
-import { Attachments } from './Attachments.tsx'
+import { Checking, ChildChats, NO_ATTACHMENTS, createChat, createChildChats } from '../useChat.ts'
+import { ChatHeader, createGitStatus } from './ChatHeader.tsx'
+import { Composer, type ComposerControls } from './Composer.tsx'
+import { FolderPicker } from './FolderPicker.tsx'
+import { ForkDialog } from './ForkDialog.tsx'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
 import { PlanPane, latestPlan } from './Plan.tsx'
-import { ChatHeader, createGitStatus } from './ChatHeader.tsx'
+import { showError } from './Popover.tsx'
 import { TaskTray, trayItems, waitingOnTask } from './TaskTray.tsx'
 import { reveal, revealed, toolLabel } from './ToolCard.tsx'
-import { TaskPane, Transcript, UserMessage, createIndex, detail, runInBackground, setDetail } from './Transcript.tsx'
-import { ContextMeter } from './Usage.tsx'
+import { TaskPane, Transcript, UserMessage, createIndex } from './Transcript.tsx'
 import { Workspace, type ChatPanes } from './Workspace.tsx'
-import { showError } from './Popover.tsx'
-import { IconButton, Loading, Notice, Select, createDismiss, touch, type Option } from './ui.tsx'
-
-const MODES: Option<PermissionMode>[] = [
-  { value: 'default', label: 'Ask before edits', description: 'Claude asks before changing files or running commands.' },
-  { value: 'acceptEdits', label: 'Accept edits', description: 'File edits go through; commands still ask.' },
-  { value: 'auto', label: 'Auto', description: 'A classifier approves safe actions and asks about the rest.' },
-  { value: 'plan', label: 'Plan', description: 'Read and propose only. Nothing changes until you approve.' },
-  { value: 'bypassPermissions', label: 'Bypass permissions', description: 'Never asks. Anything can run.', tone: 'danger' },
-]
-
-const NO_ATTACHMENTS: DraftAttachments = { pastes: [], images: [] }
+import { Loading, Notice, touch, type Option } from './ui.tsx'
 
 export function Chat(props: {
   sessionId: string
@@ -54,71 +41,37 @@ export function Chat(props: {
   /** The top bar on narrow screens, to go above the chat's header. */
   bar: JSX.Element
 }) {
-  const { state, clearError } = createChat(props.sessionId)
-  const [text, setText] = createSignal('')
-  const [attached, setAttached] = createSignal(NO_ATTACHMENTS)
-  const pastes = () => attached().pastes
-  const images = () => attached().images
-  // Saved as soon as they change, unlike typing: they change rarely and can be big.
-  const attach = (change: (a: DraftAttachments) => DraftAttachments) => {
-    const next = change(attached())
-    setAttached(next)
-    socket.send({ type: 'draft', sessionId: props.sessionId, attachments: next })
-  }
-  const hasInput = () => !!text().trim() || pastes().length > 0 || images().length > 0
-  /** Adds the images among these files, and says whether there were any. */
-  const addImages = (files: Iterable<File>) => {
-    const found = [...files].filter((f) => f.type.startsWith('image/'))
-    for (const f of found) void readImage(f).then((image) => image && attach((a) => ({ ...a, images: [...a.images, image] })))
-    return found.length > 0
-  }
-  const [dragging, setDragging] = createSignal(false)
-  const [browsing, setBrowsing] = createSignal(false)
-  /**
-   * Files picked on the server: images go in as images, so Claude sees them straight away; the rest
-   * go in the message as @-mentions, relative to the chat's folder, for Claude to read.
-   */
-  const attachFiles = (paths: string[]) => {
-    const isImage = (path: string) => Object.values(IMAGE_EXTENSIONS).flat().some((ext) => path.toLowerCase().endsWith(ext))
-    for (const path of paths.filter(isImage)) {
-      void fetch(api.fileUrl(path, machine()))
-        .then((res) => (res.ok ? res.blob() : Promise.reject(new Error(res.statusText))))
-        .then((blob) => addImages([new File([blob], path.split('/').pop()!, { type: blob.type })]))
-        .catch((e: Error) => showError(`Couldn't attach ${path.split('/').pop()}`, e.message, input))
-    }
-    const dir = cwd() && !isScratch(cwd()) ? `${cwd()}/` : undefined
-    const mentions = paths
-      .filter((path) => !isImage(path))
-      .map((path) => (dir && path.startsWith(dir) ? path.slice(dir.length) : path))
-      .map((path) => `@${/\s/.test(path) ? `"${path}"` : path}`)
-    if (!mentions.length) return
-    const at = input.selectionStart ?? text().length
-    const before = text().slice(0, at)
-    const after = text().slice(at)
-    edit(`${before}${before && !/\s$/.test(before) ? ' ' : ''}${mentions.join(' ')} ${after.replace(/^ /, '')}`)
-  }
-  let picker!: HTMLInputElement
+  const chat = createChat(props.sessionId)
+  const state = chat.state
+  let composer: ComposerControls | undefined
+
   const [started, setStarted] = createSignal(false)
   const [mode, setMode] = createSignal<PermissionMode>('auto')
   const [model, setModel] = createSignal(lastModel())
+  createEffect(on(() => state.mode, setMode))
+  createEffect(on(() => state.model, (m) => m && setModel(m)))
   const modelOptions = createMemo((): Option<string>[] => {
     const options = (models() ?? []).map((m) => ({ value: m.value, label: m.displayName.replace(/ \(.*\)$/, ''), description: m.description }))
     // One Claude Code no longer offers, e.g. an older model a transcript was written with.
     const current = modelValue(model(), models() ?? [])
     return options.some((o) => o.value === current) ? options : [...options, { value: current, label: current }]
   })
+  const changeMode = (next: PermissionMode) => {
+    setMode(next)
+    chat.setMode(next)
+  }
+  const changeModel = (next: string) => {
+    setModel(next)
+    setLastModel(next)
+    chat.setModel(next)
+  }
+
   const [inWorktree, setInWorktree] = createSignal(!!props.worktree)
   /** The card this chat is on. A worktree it starts in is named after the card; otherwise Claude names it. */
   const card = () => cardOf(props.sessionId)
   const worktreeName = () => card() && cardWorktreeName(card()!)
   // Offered before the first message, for a repo checkout that isn't already a worktree.
   const canWorktree = () => !started() && !state.cwd && !!cwd() && !isScratch(cwd()) && !worktreeOf(cwd())
-  let scroller!: HTMLDivElement
-  let content!: HTMLDivElement
-  let composer!: HTMLDivElement
-  let input!: HTMLTextAreaElement
-  let pinned = true
-  let lastTop = 0
   const cwd = () => state.cwd ?? props.draftCwd
   /**
    * A chat stays on the machine it started on; one that hasn't started goes where it was picked. Until the
@@ -151,11 +104,22 @@ export function Chat(props: {
   // Shared by the transcript and the task tray, so both read the chat's messages once.
   const index = createIndex(() => state.messages, () => props.sessionId)
   const tasks = createMemo(() => trayItems(index(), state.running, state.background, cwd()))
+  const children = createChildChats(state)
+
+  const sticky = createStickyScroll()
+  let content!: HTMLDivElement
+  let bottom!: HTMLDivElement
+  let scroller!: HTMLDivElement
+  onMount(() => {
+    // On a phone, focusing would put the keyboard over the chat you came to read.
+    if (!touch.matches) composer?.focus()
+    sticky.follow(content, bottom, scroller)
+  })
 
   /** Scroll to a tool call, opening it and whatever it's folded into. */
   const jump = (toolUseId: string) => {
     reveal(toolUseId)
-    pinned = false
+    sticky.unpin()
     requestAnimationFrame(() => {
       content.querySelector(`[data-id="${CSS.escape(toolUseId)}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
       revealed()
@@ -209,159 +173,41 @@ export function Chat(props: {
     ),
   }
 
-  createEffect(on(() => state.mode, setMode))
-  createEffect(on(() => state.model, (m) => m && setModel(m)))
-
-  // Chats this one started and waits on, subscribed once here for their tool calls and their prompts.
-  // Mapped over tool_use_ids, which are strings, so adding a child never resubscribes the others.
-  const childChats = mapArray(
-    createMemo(() => Object.keys(state.children)),
-    (toolUseId) => {
-      const id = state.children[toolUseId]
-      return { id, toolUseId, state: createChat(id).state }
-    },
-  )
-  const childState = (id: string) => childChats().find((c) => c.id === id)?.state
-  const childPrompts = () => childChats().flatMap((c) => c.state.permissions.map((p) => ({ child: c, permission: p })))
-  /** The tool that started a child, to say whose prompt it is. */
-  const toolName = (toolUseId: string) => {
-    for (const m of state.messages) {
-      const content = (m.message as { content?: { type: string; id?: string; name?: string }[] } | undefined)?.content
-      const use = Array.isArray(content) && content.find((b) => b.type === 'tool_use' && b.id === toolUseId)
-      if (use) return use.name ?? ''
-    }
-    return ''
-  }
-
   // Read again each time a turn ends too, since that's when commits happen.
   const git = createGitStatus(() => (state.loaded && !offline() && cwd() && !isScratch(cwd()) ? { dir: cwd()!, machine: machine() } : undefined))
   createEffect(on(() => state.running, (running) => !running && void git.refresh(), { defer: true }))
   const actions = () => chatActions(git.status(), cwd())
 
-  // Unsent text and attachments are saved on the server, so they survive leaving
-  // the chat or reloading, and every tab on this chat shows the same draft.
-  let saveTimer: ReturnType<typeof setTimeout> | undefined
-  let unsaved = false
-  const saveDraft = () => {
-    clearTimeout(saveTimer)
-    if (!unsaved) return
-    unsaved = false
-    socket.send({ type: 'draft', sessionId: props.sessionId, text: text() })
-  }
-  const edit = (value: string) => {
-    setText(value)
-    unsaved = true
-    clearTimeout(saveTimer)
-    saveTimer = setTimeout(saveDraft, 300)
-  }
-  // Someone else's edit never overwrites what's typed here and not yet saved.
-  const offDraft = socket.on((e) => {
-    if (!('sessionId' in e) || e.sessionId !== props.sessionId) return
-    if (e.type === 'snapshot') {
-      setAttached(e.draftAttachments)
-      if (!unsaved) setText(e.draft)
-    }
-    if (e.type === 'draft') {
-      if (e.attachments) setAttached(e.attachments)
-      if (e.text !== undefined && !unsaved) setText(e.text)
-    }
-  })
-  addEventListener('pagehide', saveDraft)
-  onCleanup(() => {
-    saveDraft()
-    offDraft()
-    removeEventListener('pagehide', saveDraft)
-  })
-
-  const fromBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
-  const toBottom = () => {
-    scroller.scrollTop = scroller.scrollHeight
-    lastTop = scroller.scrollTop
-  }
-
-  // Any upward move unsticks; reaching the bottom again resticks. Content
-  // shrinking clamps scrollTop down too, but leaves us at the bottom.
-  const onScroll = () => {
-    const top = scroller.scrollTop
-    if (top < lastTop - 0.5) {
-      if (fromBottom() > 1) pinned = false
-    } else if (fromBottom() < 24) pinned = true
-    lastTop = top
-  }
-
-  onMount(() => {
-    // On a phone, focusing would put the keyboard over the chat you came to read.
-    if (!touch.matches) input.focus()
-    // Follow anything that changes size while stuck: messages, streaming, blocks opening, the composer.
-    const observer = new ResizeObserver(() => pinned && toBottom())
-    observer.observe(content)
-    observer.observe(composer)
-    observer.observe(scroller)
-    onCleanup(() => observer.disconnect())
-  })
-
-
-  const send = (value: string, attachments: DraftAttachments = NO_ATTACHMENTS) => {
+  const send = (text: string, attachments: DraftAttachments = NO_ATTACHMENTS) => {
     if (state.gone || stranded()) return
-    const worktree = inWorktree() && canWorktree() ? (worktreeName() ?? '') : undefined
-    socket.send({
-      type: 'send',
-      sessionId: props.sessionId,
-      text: value,
+    chat.send({
+      text,
       ...attachments,
       cwd: cwd(),
       machine: machine(),
       mode: mode(),
       model: model(),
-      worktree,
+      worktree: inWorktree() && canWorktree() ? (worktreeName() ?? '') : undefined,
     })
     if (!started()) {
       setStarted(true)
       props.onStart?.()
     }
-    pinned = true
-    toBottom()
-  }
-
-  const submit = () => {
-    if (!hasInput()) return
-    send(text().trim(), attached())
-    // The server clears the saved draft when the message arrives.
-    clearTimeout(saveTimer)
-    unsaved = false
-    setText('')
-    setAttached(NO_ATTACHMENTS)
-  }
-
-  const changeMode = (next: PermissionMode) => {
-    setMode(next)
-    socket.send({ type: 'set_mode', sessionId: props.sessionId, mode: next })
-  }
-
-  const changeModel = (next: string) => {
-    setModel(next)
-    setLastModel(next)
-    socket.send({ type: 'set_model', sessionId: props.sessionId, model: next })
+    sticky.pin()
   }
 
   // A card's new chat sends the card with its first message, so it's shown as attached until then.
   const pendingCard = () => (card() && state.loaded && state.messages.length === 0 ? { card: card()! } : undefined)
-  const interrupt = () => socket.send({ type: 'interrupt', sessionId: props.sessionId })
   const unqueue = (id: string, edit = false) => {
     // Saved first so the server puts the message ahead of what's typed, and the composer takes the result.
-    if (edit) saveDraft()
-    socket.send({ type: 'unqueue', sessionId: props.sessionId, id, edit })
-    if (edit) input.focus()
+    if (edit) composer?.flush()
+    chat.unqueue(id, edit)
+    if (edit) composer?.focus()
   }
 
-  /** The panel a narrow composer keeps its mode, model and the rest in. */
-  const [more, setMore] = createSignal(false)
   /** The end of the turn being forked from, while picking where the fork goes. */
   const [forking, setForking] = createSignal<string>()
   const openChat = (id: string) => navigate({ kind: 'chat', id })
-  let moreButton!: HTMLButtonElement
-  let morePanel: HTMLDivElement | undefined
-  createDismiss(more, () => [morePanel, moreButton], () => setMore(false), { escape: true })
 
   return (
     <Workspace
@@ -369,7 +215,7 @@ export function Chat(props: {
       cwd={cwd()}
       sessionId={props.sessionId}
       panes={panes}
-      onFocusChat={() => input.focus()}
+      onFocusChat={() => composer?.focus()}
       onOpenPage={(id) => navigate({ kind: 'terminal', id })}
     >
       <div class="flex h-full min-w-0 flex-1 flex-col">
@@ -389,10 +235,12 @@ export function Chat(props: {
           />
         </Show>
         <div
-          ref={scroller}
-          onScroll={onScroll}
-          // Unstick on the gesture itself, before streamed content can push the bottom away.
-          onWheel={(e) => e.deltaY < 0 && scroller.scrollHeight > scroller.clientHeight && (pinned = false)}
+          ref={(el) => {
+            scroller = el
+            sticky.ref(el)
+          }}
+          onScroll={sticky.onScroll}
+          onWheel={sticky.onWheel}
           // A size container, so prompts above the composer can fit this pane rather than the window.
           class="min-h-0 flex-1 overflow-y-auto [container-type:size] [overflow-anchor:none]"
         >
@@ -433,7 +281,7 @@ export function Chat(props: {
                     </Show>
                   }
                 >
-                  <ChildChats.Provider value={childState}>
+                  <ChildChats.Provider value={children.state}>
                     <Checking.Provider value={(id) => state.checking.includes(id)}>
                       <Transcript
                         sessionId={props.sessionId}
@@ -442,7 +290,7 @@ export function Chat(props: {
                         partial={state.partial}
                         bashOutput={state.bashOutput}
                         running={working()}
-                        working={working() && state.permissions.length === 0 && childPrompts().length === 0}
+                        working={working() && state.permissions.length === 0 && children.prompts().length === 0}
                         cwd={cwd()}
                         children={state.children}
                         onFork={setForking}
@@ -489,7 +337,7 @@ export function Chat(props: {
             {/* Stuck to the bottom of the column and as wide as it, padding included, so the transcript fades out as it
                 scrolls under even where the composer hangs into the padding. It leaves room for that fade even when full, and prompts give way first. */}
             <div
-              ref={composer}
+              ref={bottom}
               class="sticky bottom-0 flex max-h-[calc(100cqh-2rem)] flex-col -mx-6 bg-bg px-6 pb-5 md:-mx-9 md:px-9 before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-bg"
             >
               {/* Laid out like the transcript's own messages, since that's where they're headed. */}
@@ -510,14 +358,9 @@ export function Chat(props: {
                     />
                   )}
                 </For>
-                <For each={childPrompts()}>
-                  {({ child, permission }) => (
-                    <PermissionPrompt
-                      sessionId={child.id}
-                      permission={permission}
-                      cwd={child.state.cwd}
-                      from={toolLabel(toolName(child.toolUseId)) || 'Another chat'}
-                    />
+                <For each={children.prompts()}>
+                  {({ child, tool, permission }) => (
+                    <PermissionPrompt sessionId={child.id} permission={permission} cwd={child.state.cwd} from={toolLabel(tool) || 'Another chat'} />
                   )}
                 </For>
                 <Show when={tasks().length}>
@@ -526,7 +369,7 @@ export function Chat(props: {
                 <Show when={state.error}>
                   <Notice tone="danger">
                     <span class="flex-1">{state.error}</span>
-                    <button onClick={clearError} class="opacity-70 hover:opacity-100">Dismiss</button>
+                    <button onClick={chat.clearError} class="opacity-70 hover:opacity-100">Dismiss</button>
                   </Notice>
                 </Show>
                 <Show when={state.loaded && !connected()}>
@@ -559,160 +402,22 @@ export function Chat(props: {
                     </span>
                   </Notice>
                 </Show>
-                <div
-                  inert={state.gone || stranded()}
-                  class={`@container relative border shadow-(--shadow-card) transition-colors rounded-2xl focus-within:border-fg-3 ${dragging() ? 'border-fg-3' : 'border-edge'} ${state.gone || stranded() ? 'opacity-50' : ''}`}
-                  onDragOver={(e) => {
-                    if (!e.dataTransfer?.types.includes('Files')) return
-                    e.preventDefault()
-                    setDragging(true)
-                  }}
-                  onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && setDragging(false)}
-                  onDrop={(e) => {
-                    setDragging(false)
-                    if (!e.dataTransfer?.files.length) return
-                    e.preventDefault()
-                    addImages(e.dataTransfer.files)
-                    input.focus()
-                  }}
-                >
-                  <Show when={more()}>
-                    <ComposerPanel
-                      ref={(el) => (morePanel = el)}
-                      mode={mode()}
-                      onMode={changeMode}
-                      model={models()?.length ? modelValue(model(), models()!) : undefined}
-                      models={modelOptions()}
-                      onModel={changeModel}
-                      onClose={() => setMore(false)}
-                    />
-                  </Show>
-                  <Show when={pastes().length || images().length || pendingCard()}>
-                    <Attachments
-                      pastes={pastes()}
-                      images={images()}
-                      card={pendingCard()}
-                      onRemovePaste={(i) => attach((a) => ({ ...a, pastes: a.pastes.filter((_, j) => j !== i) }))}
-                      onRemoveImage={(i) => attach((a) => ({ ...a, images: a.images.filter((_, j) => j !== i) }))}
-                      class="px-3 pt-3"
-                    />
-                  </Show>
-                  <textarea
-                    ref={input}
-                    value={text()}
-                    onInput={(e) => edit(e.currentTarget.value)}
-                    onPaste={(e) => {
-                      // Images and big pastes become attachments, so the composer stays editable.
-                      // Office apps copy text with a picture of it too; the text is what's wanted then.
-                      const pasted = e.clipboardData?.getData('text/plain')
-                      if (!pasted && e.clipboardData && addImages(e.clipboardData.files)) return e.preventDefault()
-                      if (!pasted || !isLongPaste(pasted)) return
-                      e.preventDefault()
-                      attach((a) => ({ ...a, pastes: [...a.pastes, pasted] }))
-                    }}
-                    onKeyDown={(e) => {
-                      // Phone keyboards have no Shift+Enter, so there Enter is a newline and the button sends.
-                      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !touch.matches) {
-                        e.preventDefault()
-                        submit()
-                      }
-                      if (e.key === 'Escape' && working()) interrupt()
-                      // Each subagent and command has its own button; this sends every one at once.
-                      if (e.key === 'b' && e.ctrlKey && !e.metaKey && state.running && waitingOnTask(index())) {
-                        e.preventDefault()
-                        runInBackground(props.sessionId)
-                      }
-                    }}
-                    rows={Math.min(10, Math.max(2, text().split('\n').length))}
-                    placeholder={state.running ? 'Queue a message' : 'Message Claude'}
-                    class="block max-h-[calc(10lh+0.875rem)] min-h-[calc(2lh+0.875rem)] w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed outline-none pointer-coarse:text-base [field-sizing:content] placeholder:text-fg-3"
-                  />
-                  {/* A narrow composer keeps attaching and sending in the bar and puts the rest in a panel; wide ones show it all.
-                      Measured on the composer, not the screen, so the sidebar squeezing it counts too. */}
-                  <div class="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 pb-2">
-                    <div class="hidden items-center gap-2 @md:flex">
-                      <Select value={mode()} options={MODES} onChange={changeMode} title="Permission mode" />
-                      <Show when={models()?.length}>
-                        <Select value={modelValue(model(), models()!)} options={modelOptions()} onChange={changeModel} title="Model" />
-                      </Show>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setBrowsing(true)}
-                      title="Attach files"
-                      class="flex h-7 items-center rounded-button-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9"
-                    >
-                      <Paperclip class="size-3.5" />
-                    </button>
-                    <Show when={browsing()}>
-                      <FileBrowser
-                        mode="files"
-                        title="Attach files"
-                        machine={machine()}
-                        start={cwd() && !isScratch(cwd()) ? cwd() : undefined}
-                        onClose={() => {
-                          setBrowsing(false)
-                          input.focus()
-                        }}
-                        onUpload={() => picker.click()}
-                        onPickFiles={attachFiles}
-                      />
-                    </Show>
-                    <input
-                      ref={picker}
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      class="hidden"
-                      onChange={(e) => {
-                        addImages(e.currentTarget.files ?? [])
-                        e.currentTarget.value = ''
-                        input.focus()
-                      }}
-                    />
-                    <div class="hidden items-center gap-2 @md:flex">
-                      <button
-                        type="button"
-                        onClick={() => setDetail(detail() === 'full' ? 'result' : 'full')}
-                        title={detail() === 'full' ? 'Show results only' : 'Show all work'}
-                        class="flex h-7 items-center rounded-button-md px-2 text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9"
-                      >
-                        {/* Shows what a click does, like play/pause: fold the work away or expand it. */}
-                        <Show when={detail() === 'full'} fallback={<ListChevronsUpDown class="size-3.5" />}>
-                          <ListChevronsDownUp class="size-3.5" />
-                        </Show>
-                      </button>
-                    </div>
-                    <button
-                      ref={moreButton}
-                      type="button"
-                      onClick={() => setMore((o) => !o)}
-                      title="Mode, model and more"
-                      aria-expanded={more()}
-                      class={`flex h-7 items-center rounded-button-md px-2 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 @md:hidden ${
-                        mode() === 'bypassPermissions' ? 'text-danger' : more() ? 'bg-surface text-fg-2' : 'text-fg-3'
-                      }`}
-                    >
-                      <SlidersHorizontal class="size-3.5" />
-                    </button>
-                    <div class="ml-auto flex items-center gap-2">
-                      <Show when={state.context}>{(u) => <ContextMeter usage={u()} />}</Show>
-                      {/* One slot: stop while running with nothing typed, otherwise send. */}
-                      <Show
-                        when={working() && !hasInput()}
-                        fallback={
-                          <IconButton onClick={submit} disabled={!hasInput()} title="Send (Enter)">
-                            <ArrowUp class="size-4" />
-                          </IconButton>
-                        }
-                      >
-                        <IconButton onClick={interrupt} title="Stop (Esc)">
-                          <Square class="size-3 fill-current" />
-                        </IconButton>
-                      </Show>
-                    </div>
-                  </div>
-                </div>
+                <Composer
+                  ref={(c) => (composer = c)}
+                  chat={chat}
+                  machine={machine()}
+                  cwd={cwd()}
+                  disabled={state.gone || stranded()}
+                  working={working()}
+                  mode={mode()}
+                  onMode={changeMode}
+                  model={models()?.length ? modelValue(model(), models()!) : undefined}
+                  models={modelOptions()}
+                  onModel={changeModel}
+                  pendingCard={pendingCard()}
+                  canBackground={() => state.running && waitingOnTask(index())}
+                  onSubmit={send}
+                />
               </div>
             </div>
           </div>
@@ -735,88 +440,5 @@ function Queued(props: { message: QueuedMessage; onEdit: () => void; onRemove: (
         <X class="size-3.5" />
       </button>
     </UserMessage>
-  )
-}
-
-/**
- * What a narrow composer's toolbar has no room for, in a panel above it as wide as the composer:
- * mode, model and how much work to show. Terminals and the chat's actions are in the header.
- */
-function ComposerPanel(props: {
-  ref: (el: HTMLDivElement) => void
-  mode: PermissionMode
-  onMode: (mode: PermissionMode) => void
-  /** Unset until Claude Code has listed its models. */
-  model?: string
-  models: Option<string>[]
-  onModel: (model: string) => void
-  onClose: () => void
-}) {
-  const pick = (f: () => void) => () => {
-    f()
-    props.onClose()
-  }
-  return (
-    <div
-      ref={props.ref}
-      class="absolute inset-x-0 bottom-full z-10 mb-2 max-h-[70vh] origin-bottom animate-[pop-in_120ms_ease-out] overflow-y-auto rounded-2xl border border-edge bg-bg p-1 pop shadow-(--shadow-pop)"
-    >
-      <PanelChoices label="Permission mode" options={MODES} value={props.mode} onPick={props.onMode} />
-      <Show when={props.model}>
-        {(model) => <PanelChoices label="Model" options={props.models} value={model()} onPick={props.onModel} />}
-      </Show>
-      <div class="mx-2.5 my-1 border-t border-line" />
-      <PanelButton onClick={pick(() => setDetail(detail() === 'full' ? 'result' : 'full'))}>
-        <Show when={detail() === 'full'} fallback={<ListChevronsUpDown class="size-4" />}>
-          <ListChevronsDownUp class="size-4" />
-        </Show>
-        {detail() === 'full' ? 'Show results only' : 'Show all work'}
-      </PanelButton>
-    </div>
-  )
-}
-
-/** One setting's options as chips, with what the current one means underneath. Picking one leaves the panel open. */
-function PanelChoices<T extends string>(props: { label: string; options: Option<T>[]; value: T; onPick: (value: T) => void }) {
-  const current = () => props.options.find((o) => o.value === props.value)
-  return (
-    <div class="px-2.5 pt-2.5 pb-2">
-      <div class="pb-2 text-[11px] text-fg-3">{props.label}</div>
-      <div class="flex flex-wrap gap-1.5">
-        <For each={props.options}>
-          {(o) => (
-            <button
-              type="button"
-              onClick={() => props.onPick(o.value)}
-              aria-pressed={o.value === props.value}
-              class={`h-9 rounded-button-round border px-3 text-[13px] transition-colors ${
-                o.value === props.value
-                  ? o.tone === 'danger'
-                    ? 'border-danger bg-danger/10 text-danger'
-                    : 'border-fg-3 bg-surface text-fg'
-                  : `border-edge hover:bg-surface ${o.tone === 'danger' ? 'text-danger' : 'text-fg-2 hover:text-fg'}`
-              }`}
-            >
-              {o.label}
-            </button>
-          )}
-        </For>
-      </div>
-      <Show when={current()?.description}>
-        <p class="mt-2 text-xs leading-snug text-fg-3">{current()!.description}</p>
-      </Show>
-    </div>
-  )
-}
-
-function PanelButton(props: { onClick: () => void; children: JSX.Element }) {
-  return (
-    <button
-      type="button"
-      onClick={props.onClick}
-      class="flex h-10 w-full items-center gap-3 rounded-lg px-2.5 text-left text-[13px] text-fg-2 transition-colors hover:bg-surface hover:text-fg"
-    >
-      {props.children}
-    </button>
   )
 }
