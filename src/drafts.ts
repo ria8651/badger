@@ -4,7 +4,7 @@ import { isScratch, scratchDir } from './folders.ts'
 import { LOCAL, machineOf, machines } from './machines.ts'
 import { linkSession } from './stores/cards.ts'
 import { config } from './stores/config.ts'
-import { sessions, sessionsLoaded } from './stores/sessions.ts'
+import { sessionById, sessions, sessionsLoaded } from './stores/sessions.ts'
 
 /**
  * Blank chats: ones with an id but no first message yet, so the server doesn't know them. Home is one; each card
@@ -112,7 +112,8 @@ const { defaultMachine, defaultCwd } = createRoot(() => {
 
 /** Where a blank chat will run, as picked so far. A folder picked without a runner was picked before there were any but the hub's. */
 export const draftFor = (id: string) => ({
-  cwd: cwds()[id] ?? defaultCwd(),
+  // A chat that has started is wherever the list says, so it opens beside its own panels, not a guess at them.
+  cwd: cwds()[id] ?? (sessionsLoaded() && !sessionById(id) ? defaultCwd() : undefined),
   machine: runners()[id] ?? (cwds()[id] ? LOCAL : defaultMachine()),
   worktree: worktrees()[id],
 })

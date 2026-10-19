@@ -211,9 +211,12 @@ export function buildView(messages: WireMessage[], nested: boolean) {
   /** The prompt of the turn each message is in, by uuid. */
   const promptOf = new Map<string, Item>()
   let turnPrompt: Item | undefined
+  /** Each prompt's message, by which it's referred to from outside, e.g. by a panel showing one of its attachments. */
+  const promptIds = new Map<Item, string>()
   for (const m of messages) {
     const user = itemsFor(m).find((i) => i.kind === 'user')
     if (user) turnPrompt = user
+    if (user && m.uuid) promptIds.set(user, m.uuid)
     if (m.uuid && turnPrompt) promptOf.set(m.uuid, turnPrompt)
   }
   let lastUser: Item | undefined
@@ -273,7 +276,7 @@ export function buildView(messages: WireMessage[], nested: boolean) {
   items = tidyCompactions(items)
   // A subagent's prompt is shown with the call that started it; only messages sent to it later stay.
   const prompt = nested ? items.find((i) => i.kind === 'user') : undefined
-  return { items: prompt ? items.filter((i) => i !== prompt) : items, idleUntil, extras, forkAt, interrupted, shownError, answeredBy, summaries }
+  return { items: prompt ? items.filter((i) => i !== prompt) : items, idleUntil, extras, promptIds, forkAt, interrupted, shownError, answeredBy, summaries }
 }
 
 /** What went in with a prompt besides what the user typed. */

@@ -233,6 +233,8 @@ export function UserMessage(props: {
   move?: Move
   /** Other context Claude was given with it. */
   context?: ContextChip[]
+  /** Given, an open paste or context offers to open in a panel. */
+  onOpenAttachment?: (part: string) => void
   /** Replaces the spacing it has in the transcript. */
   class?: string
   /** How tall it gets before it's clamped. */
@@ -252,6 +254,7 @@ export function UserMessage(props: {
             card={props.card}
             move={props.move}
             context={props.context}
+            onOpen={props.onOpenAttachment}
             class={props.text ? 'mb-2' : ''}
           />
         </Show>

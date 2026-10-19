@@ -95,7 +95,7 @@ export function FolderPicker(props: {
   }
 
   return (
-    <div class="mx-auto mt-5 w-full max-w-lg space-y-2 text-left">
+    <div class="mt-5 w-full space-y-2 text-left">
       {/* Also with just the hub's own, if the one picked has gone offline or been removed, so there's a way off it. */}
       <Show when={severalMachines() || (machines().length && !machineOf(props.machine)?.online)}>
         <div class="flex flex-wrap items-center gap-1.5 pb-1" role="group" aria-label="Runner">
@@ -132,6 +132,22 @@ export function FolderPicker(props: {
             </Row>
           </div>
         )}
+      </Show>
+
+      {/* Placeholders until the list comes, so it doesn't look like there are no folders. */}
+      <Show when={!current()}>
+        <For each={[0, 1, 2]}>
+          {(i) => (
+            <div class="flex min-h-14 items-center gap-2.5 rounded-xl border border-line px-3 shadow-(--shadow-card)" aria-hidden="true">
+              <FolderIcon class="size-4 shrink-0 text-fg-3/40" />
+              <div class="flex-1 animate-pulse space-y-1.5" style={{ 'animation-delay': `${i * 150}ms` }}>
+                <div class="h-2.5 w-28 rounded-full bg-surface" />
+                <div class="h-2 w-48 rounded-full bg-surface" />
+              </div>
+            </div>
+          )}
+        </For>
+        <span class="sr-only">Loading folders…</span>
       </Show>
 
       <For each={shown()}>
@@ -308,7 +324,9 @@ function Size(props: { path: string; machine: string }) {
   const [size] = createResource(() => props.path, (path) => api.folderSize(path, props.machine).then((s) => s.bytes))
   return (
     <span class="w-14 shrink-0 text-right text-meta text-fg-3 tabular-nums" title="Space on disk">
-      {size.latest !== undefined ? formatBytes(size.latest) : ''}
+      <Show when={size.latest !== undefined} fallback={<span class="ml-auto block h-2 w-8 animate-pulse rounded-full bg-fg-3/15" />}>
+        {formatBytes(size.latest!)}
+      </Show>
     </span>
   )
 }

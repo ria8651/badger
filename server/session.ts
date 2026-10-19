@@ -152,7 +152,6 @@ export class LiveSession {
         settingSources: ['user', 'project', 'local'],
         canUseTool: this.canUseTool,
         mcpServers: opts.tools.mcpServers,
-        allowedTools: opts.tools.allowedTools,
         // Newer models omit thinking text by default; ask for summaries so it can stream.
         thinking: { type: 'adaptive', display: 'summarized' },
         env: { ...streamEnv(), ...opts.tools.env },
@@ -177,7 +176,12 @@ export class LiveSession {
             {
               hooks: [
                 async (input) => {
-                  if (input.hook_event_name === 'PreToolUse') this.toolUses.set(input.tool_use_id, input.tool_name)
+                  if (input.hook_event_name !== 'PreToolUse') return { continue: true }
+                  this.toolUses.set(input.tool_use_id, input.tool_name)
+                  // Allowed here, not with allowedTools: that would skip canUseTool too, and the SDK warns about it every start.
+                  if (opts.tools.allowedTools.includes(input.tool_name)) {
+                    return { continue: true, hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } }
+                  }
                   return { continue: true }
                 },
               ],

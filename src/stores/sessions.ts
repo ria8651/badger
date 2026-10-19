@@ -2,6 +2,8 @@ import { createSignal } from 'solid-js'
 import { createStore, produce, reconcile } from 'solid-js/store'
 import type { SessionSummary } from '../../shared/protocol.ts'
 import { api, socket } from '../api.ts'
+import { LOCAL } from '../machines.ts'
+import { knowRoots } from '../terminals.ts'
 import { configReady } from './config.ts'
 
 /**
@@ -19,6 +21,8 @@ export const sessionById = (id: string) => list.find((s) => s.id === id)
 
 const refresh = () =>
   api.sessions().then((next) => {
+    // Their workspaces too, so a chat opens beside its panels on the first frame.
+    knowRoots(next.flatMap((s) => (s.cwd && s.root ? [{ machine: s.machine ?? LOCAL, cwd: s.cwd, root: s.root }] : [])))
     setList(reconcile(next, { key: 'id' }))
     setLoaded(true)
   })

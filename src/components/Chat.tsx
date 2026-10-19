@@ -11,7 +11,7 @@ import { navigate } from '../router.tsx'
 import { createStickyScroll } from '../stickyScroll.ts'
 import { cardOf } from '../stores/cards.ts'
 import { sessionById } from '../stores/sessions.ts'
-import { workspaceOf, type Ws } from '../terminals.ts'
+import { knownRoot, workspaceOf, type Ws } from '../terminals.ts'
 import { Checking, ChildChats, NO_ATTACHMENTS, createChat, createChildChats } from '../useChat.ts'
 import { ChatHeader, createGitStatus } from './ChatHeader.tsx'
 import { Composer, type ComposerControls } from './Composer.tsx'
@@ -24,6 +24,7 @@ import { TaskTray, trayItems, waitingOnTask } from './TaskTray.tsx'
 import { reveal, revealed, toolLabel } from './ToolCard.tsx'
 import { Transcript } from './Transcript.tsx'
 import { TaskPane } from '../transcript/agents.tsx'
+import { AttachmentPane, attachmentOf } from '../transcript/attachments.tsx'
 import { createIndex } from '../transcript/context.ts'
 import { UserMessage } from '../transcript/items.tsx'
 import { Workspace, type ChatPanes } from './Workspace.tsx'
@@ -46,6 +47,8 @@ export function Chat(props: {
 }) {
   const chat = createChat(props.sessionId)
   const state = chat.state
+  /** The chat as the sidebar lists it, for the header's title, move, rename and archive. Absent until it's listed. */
+  const session = () => sessionById(props.sessionId)
   let composer: ComposerControls | undefined
 
   const [started, setStarted] = createSignal(false)
@@ -74,8 +77,8 @@ export function Chat(props: {
   const card = () => cardOf(props.sessionId)
   const worktreeName = () => card() && cardWorktreeName(card()!)
   // Offered before the first message, for a repo checkout that isn't already a worktree.
-  const canWorktree = () => !started() && !state.cwd && !!cwd() && !isScratch(cwd()) && !worktreeOf(cwd())
-  const cwd = () => state.cwd ?? props.draftCwd
+  const canWorktree = () => !started() && !state.cwd && !session() && !!cwd() && !isScratch(cwd()) && !worktreeOf(cwd())
+  const cwd = () => state.cwd ?? session()?.cwd ?? props.draftCwd
   /**
    * A chat stays on the machine it started on; one that hasn't started goes where it was picked. Until the
    * server says which, a chat started elsewhere is taken to be on the hub's, but not one just sent from here.
@@ -86,15 +89,15 @@ export function Chat(props: {
   const offline = createMemo(() => !isOnline(machine()))
   /** Offline as far as the hub knows. While the hub itself can't be reached, what's typed still queues up for it. */
   const stranded = () => offline() && connected()
-  /** Not started yet, so where it runs is still being picked. */
-  const picking = () => !!props.onPickCwd && !state.cwd && !started()
+  /** Not started yet, so where it runs is still being picked. One in the list has started, even before its transcript is here. */
+  const picking = () => !!props.onPickCwd && !state.cwd && !session() && !started()
   // Holds the last one while a new folder's is looked up, so moving into a worktree doesn't drop the terminals button for a moment.
   const ws = createMemo<Ws | undefined>(
     (last) => {
       const dir = cwd()
       const m = machine()
-      // Not asked while the machine's offline, and asked again once it's back.
-      const root = dir && !offline() && workspaceOf(m, dir)()
+      // Not asked while the machine's offline, and asked again once it's back; one the hub knows still does.
+      const root = dir && (offline() ? knownRoot(m, dir) : workspaceOf(m, dir)())
       return root ? { machine: m, root } : dir && last?.machine === m ? last : undefined
     },
     undefined,
@@ -141,7 +144,12 @@ export function Chat(props: {
     const w = ws()
     if (w) openView(w, planView(props.sessionId))
   }
-  const planShown = () => !!ws() && viewShown(ws()!, viewKey(planView(props.sessionId)))
+  /** Open a paste or context sent with a prompt in a panel beside the chat. */
+  const openAttachment = (prompt: string, part: string) => {
+    const w = ws()
+    if (w) openView(w, { kind: 'attachment', session: props.sessionId, prompt, part })
+  }
+  const planShown = () => !!ws() && viewShown(ws()!, props.sessionId, viewKey(planView(props.sessionId)))
   // A plan arriving while the chat is open gets room beside it, on screens wide enough. Ones
   // already waiting when the chat opened don't, so closing the panel and coming back keeps it closed.
   let known: Set<string> | undefined
@@ -174,10 +182,15 @@ export function Chat(props: {
     renderPlan: (onReady) => (
       <PlanPane sessionId={props.sessionId} permission={planPrompt()} past={latestPlan(index())} onReady={onReady} />
     ),
+    attachment: (v) => attachmentOf(index(), v.prompt, v.part),
+    renderAttachment: (v, onReady) => <AttachmentPane index={index} prompt={v.prompt} part={v.part} onReady={onReady} />,
   }
 
   // Read again each time a turn ends too, since that's when commits happen.
-  const git = createGitStatus(() => (state.loaded && !offline() && cwd() && !isScratch(cwd()) ? { dir: cwd()!, machine: machine() } : undefined))
+  const git = createGitStatus(
+    () => (cwd() && !isScratch(cwd()) ? { dir: cwd()!, machine: machine() } : undefined),
+    () => !state.loaded || offline(),
+  )
   createEffect(on(() => state.running, (running) => !running && void git.refresh(), { defer: true }))
   const actions = () => chatActions(git.status(), cwd())
 
@@ -226,7 +239,8 @@ export function Chat(props: {
         <div class={`md:contents ${cwd() ? '' : 'border-b border-line'}`}>{props.bar}</div>
         <Show when={cwd()}>
           <ChatHeader
-            session={sessionById(props.sessionId)}
+            sessionId={props.sessionId}
+            session={session()}
             cwd={cwd()}
             machine={machine()}
             ws={ws()}
@@ -297,11 +311,12 @@ export function Chat(props: {
                         cwd={cwd()}
                         children={state.children}
                         onFork={setForking}
+                        onOpenAttachment={ws() ? openAttachment : undefined}
                         compacting={state.compacting}
                         onLogin={() => {
                           const w = ws()
                           const dir = cwd()
-                          if (w && dir) void openTerminal(w, dir, undefined, 'claude auth login').catch((e: Error) => showError("Couldn't open a terminal", e.message))
+                          if (w && dir) void openTerminal(w, props.sessionId, dir, undefined, 'claude auth login').catch((e: Error) => showError("Couldn't open a terminal", e.message))
                         }}
                         onRetry={(retry) =>
                           void api.fork(props.sessionId, { at: retry.at, draft: retry.text }).then(

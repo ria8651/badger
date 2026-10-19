@@ -42,7 +42,7 @@ loadDotEnv()
 
 /** How often plan usage is read again while a tab is open, besides after each turn. */
 const ACCOUNT_POLL_MS = 5 * 60 * 1000
-/** How long the chat list waits on a machine to say which folders are gone. */
+/** How long the chat list waits on a machine to say which folders are gone, or which git roots they're in. */
 const GONE_TIMEOUT_MS = 3000
 /** How long a machine's answer about a folder being gone is used for, rather than asking again on every list. */
 const GONE_TTL_MS = 30 * 1000
@@ -693,7 +693,41 @@ async function sessionList(): Promise<SessionSummary[]> {
       summaries.unshift({ id: live.id, title: 'New chat', cwd: live.cwd, machine: runner.id, lastModified: Date.now(), running: live.running, archived: false })
     }
   }
-  return summaries
+  // Sent with the list so a chat's panels are known before it's opened, not looked up after.
+  // A chat with no machine on record is the hub's, as the browser takes it to be.
+  const roots = await Promise.all(summaries.map((s) => s.cwd && workspaceRoot(s.machine ?? LOCAL, s.cwd)))
+  return summaries.map((s, i) => ({ ...s, root: roots[i] || undefined }))
+}
+
+/**
+ * By machine, the git root of each folder it was asked about: what it said, kept while it's offline so
+ * its chats' panels still have a home; or the question, while it's out, so a folder is asked once.
+ */
+const rootAnswers = new Map<string, Map<string, string | Promise<string | undefined>>>()
+/** By machine, folders it didn't answer for lately, and when: not waited on again for GONE_TTL_MS. */
+const rootMisses = new Map<string, Map<string, number>>()
+
+/** The workspace (git root) of a folder on a machine, if it has said. */
+async function workspaceRoot(machine: string, cwd: string): Promise<string | undefined> {
+  let answers = rootAnswers.get(machine)
+  if (!answers) rootAnswers.set(machine, (answers = new Map()))
+  let misses = rootMisses.get(machine)
+  if (!misses) rootMisses.set(machine, (misses = new Map()))
+  const known = answers.get(cwd)
+  if (known !== undefined) return known
+  const runner = machines.get(machine)
+  if (!runner || Date.now() - (misses.get(cwd) ?? 0) < GONE_TTL_MS) return undefined
+  const asking = runner.peer
+    .within(GONE_TIMEOUT_MS)
+    .workspaceRoot(cwd)
+    .catch(() => undefined)
+    .then((root) => {
+      if (root) answers.set(cwd, root)
+      else (answers.delete(cwd), misses.set(cwd, Date.now()))
+      return root
+    })
+  answers.set(cwd, asking)
+  return asking
 }
 
 /** Per runner connection, which folders it said were gone, and when. */

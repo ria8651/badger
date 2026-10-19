@@ -1,29 +1,30 @@
 import { For, Index, Match, Show, Switch, children, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
 import { Globe, Minimize2, NotebookPen, Plus, RotateCw, SquareArrowOutUpRight, X } from '../icons'
 import { api } from '../api.ts'
+import type { ContextChip } from './Attachments.tsx'
 import {
   CHAT,
   LEADER,
   activeOf,
-  dropOtherChats,
   focusRequest,
   groupOf,
   groupsOf,
   isLeader,
   layoutOf,
   measure,
-  moveView,
-  narrowTree,
+  moveShown,
   openPreview,
   openTerminal,
+  openedIn,
   panelsShown,
   placeTerminals,
   movePreview,
   reloadPreview,
   removeView,
-  sessionOf,
+  resizeShown,
+  screenTree,
+  shownTree,
   setActive,
-  setSizes,
   togglePanels,
   updateLayout,
   viewKey,
@@ -36,6 +37,7 @@ import {
   type Edge,
   type Group,
   type Len,
+  type AttachmentView,
   type PreviewView,
   type View,
 } from '../layout.ts'
@@ -69,6 +71,7 @@ const placeIn = (b: Box): JSX.CSSProperties => ({
 })
 
 const taskOf = (v?: View) => (v?.kind === 'task' ? v.id : undefined)
+const attachmentViewOf = (v?: View) => (v?.kind === 'attachment' ? v : undefined)
 const terminalOf = (v?: View) => (v?.kind === 'terminal' ? terminals().find((t) => t.id === v.id) : undefined)
 
 /** What the chat says about its own tasks and plan, for the panels showing them. */
@@ -79,6 +82,9 @@ export interface ChatPanes {
   /** A plan is waiting on the user. */
   planWaiting: () => boolean
   renderPlan: (onReady: (focus: () => void) => void) => JSX.Element
+  /** Something sent with a prompt, if it's still there. */
+  attachment: (v: AttachmentView) => ContextChip | undefined
+  renderAttachment: (v: AttachmentView, onReady: (focus: () => void) => void) => JSX.Element
 }
 
 const BINDINGS: [string, string][] = [
@@ -111,20 +117,14 @@ export function Workspace(props: {
   const chat = children(() => props.children)
   let container!: HTMLDivElement
 
-  const tree = createMemo(() => {
-    const ws = props.ws
-    if (!ws || !panelsShown(ws)) return CHAT
-    return wide() ? layoutOf(ws).tree : narrowTree(layoutOf(ws))
-  })
+  const tree = createMemo(() => (props.ws ? screenTree(props.ws, props.sessionId) : CHAT))
   const measured = createMemo(() => measure(tree()))
   const rect = (id: string) => measured().rects.get(id)
   const boxOf = (id: string) => measured().boxes.get(id)
   const groupIds = createMemo(() => groupsOf(tree()).map((g) => g.id))
   const groupById = (id: string) => groupsOf(tree()).find((g) => g.id === id)
   // Every view in the workspace, shown or not, so hiding or moving one never unmounts it.
-  const keys = createMemo(() =>
-    props.ws ? viewsOf(layoutOf(props.ws).tree).filter((v) => (sessionOf(v) ?? props.sessionId) === props.sessionId).map(viewKey) : [],
-  )
+  const keys = createMemo(() => (props.ws ? viewsOf(shownTree(layoutOf(props.ws).tree, props.sessionId)).map(viewKey) : []))
 
   const update = (change: Parameters<typeof updateLayout>[1]) => props.ws && updateLayout(props.ws, change)
   const viewOf = (key: string) => (props.ws ? viewsOf(layoutOf(props.ws).tree).find((v) => viewKey(v) === key) : undefined)
@@ -141,8 +141,7 @@ export function Workspace(props: {
     untrack(() => placeTerminals(ws, ids))
   })
 
-  // Another chat's tasks and plan don't belong beside this one.
-  createEffect(() => props.ws && untrack(() => dropOtherChats(props.ws!, props.sessionId)))
+  createEffect(() => props.ws && untrack(() => openedIn(props.ws!, props.sessionId)))
 
   // ── Focus ──
 
@@ -217,8 +216,9 @@ export function Workspace(props: {
     props.onFocusChat()
   }
 
-  const newTerminal = (where?: Parameters<typeof openTerminal>[2]) =>
-    props.ws && props.cwd && void openTerminal(props.ws, props.cwd, where).catch((e: Error) => showError("Couldn't open a terminal", e.message))
+  const terminalFailed = (e: Error) => showError("Couldn't open a terminal", e.message)
+  const newTerminal = (where?: Parameters<typeof openTerminal>[3]) =>
+    props.ws && props.cwd && void openTerminal(props.ws, props.sessionId, props.cwd, where).catch(terminalFailed)
 
   // ── Resizing ──
 
@@ -253,7 +253,7 @@ export function Workspace(props: {
           const sizes = [...d.sizes]
           sizes[i - 1] = before
           sizes[i] = pair - before
-          return wide() ? { ...l, tree: setSizes(l.tree, d.path, sizes) } : { ...l, narrow: sizes[1] }
+          return wide() ? { ...l, tree: resizeShown(l.tree, props.sessionId, d.path, sizes) } : { ...l, narrow: sizes[1] }
         }, l),
       )
     }
@@ -349,7 +349,7 @@ export function Workspace(props: {
       setDragging()
       if (!d?.drop) return
       update((l) => {
-        const moved = moveView(l.tree, key, d.drop!)
+        const moved = moveShown(l.tree, props.sessionId, key, d.drop!)
         return { ...l, tree: moved.tree, focus: moved.group ?? l.focus }
       })
       focusView(key)
@@ -399,8 +399,8 @@ export function Workspace(props: {
       case '0':
         return props.onFocusChat()
       case 'p':
-        if (panelsShown(props.ws!)) return hide()
-        return props.cwd && togglePanels(props.ws!, props.cwd)
+        if (panelsShown(props.ws!, props.sessionId)) return hide()
+        return props.cwd && void togglePanels(props.ws!, props.sessionId, props.cwd).catch(terminalFailed)
     }
   }
   const cancelLeader = () => setLeader(false)
@@ -420,6 +420,7 @@ export function Workspace(props: {
   const tabLabel = (v?: View) => {
     if (v?.kind === 'task') return props.panes.label(v.id)
     if (v?.kind === 'plan') return 'Plan'
+    if (v?.kind === 'attachment') return props.panes.attachment(v)?.label ?? 'Attachment'
     if (v?.kind === 'preview') return v.name ?? `:${v.id}`
     const t = terminalOf(v)
     return t ? terminalLabel(t) : 'Starting…'
@@ -427,7 +428,7 @@ export function Workspace(props: {
   const tabTitle = (v?: View) =>
     v?.kind === 'preview'
       ? `${tabLabel(v)}\n${previewUrl(v.id, v.path, machine()) ?? `Port ${v.id}`}`
-      : v?.kind === 'task' || v?.kind === 'plan'
+      : v?.kind === 'task' || v?.kind === 'plan' || v?.kind === 'attachment'
         ? tabLabel(v)
         : [
             terminalOf(v) ? terminalTooltip(terminalOf(v)!) : tabLabel(v),
@@ -510,6 +511,12 @@ export function Workspace(props: {
                             <Show when={props.panes.planWaiting()}>
                               <span class="size-1.5 shrink-0 rounded-full bg-accent" />
                             </Show>
+                          </Show>
+                          <Show when={attachmentViewOf(v()) && props.panes.attachment(attachmentViewOf(v())!)}>
+                            {(a) => {
+                              const Icon = a().icon
+                              return <Icon class="size-3 shrink-0" />
+                            }}
                           </Show>
                           <span class="truncate">{tabLabel(v())}</span>
                         </button>
@@ -618,6 +625,7 @@ export function Workspace(props: {
                     </Match>
                     <Match when={taskOf(v())}>{(id) => props.panes.render(id(), (focus) => ready(key, focus))}</Match>
                     <Match when={v().kind === 'plan'}>{props.panes.renderPlan((focus) => ready(key, focus))}</Match>
+                    <Match when={attachmentViewOf(v())}>{(a) => props.panes.renderAttachment(a(), (focus) => ready(key, focus))}</Match>
                   </Switch>
                 )}
               </Show>

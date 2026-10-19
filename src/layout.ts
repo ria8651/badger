@@ -11,10 +11,11 @@ import { wsKey, type Ws } from './terminals.ts'
 
 /**
  * Something a panel shows: a terminal, a port's preview, a subagent or
- * background task of a chat, by the tool call that started it, or a chat's
- * plan. Tasks and plans are their chat's own, so they only show beside it.
+ * background task of a chat, by the tool call that started it, a chat's
+ * plan, or something sent with one of its prompts. Tasks, plans and
+ * attachments are their chat's own, so they only show beside it.
  */
-export type View = { kind: 'terminal'; id: string } | PreviewView | { kind: 'task'; session: string; id: string } | PlanView
+export type View = { kind: 'terminal'; id: string } | PreviewView | { kind: 'task'; session: string; id: string } | PlanView | AttachmentView
 /**
  * What a port serves, in a frame; id is the port. Path is where the page is:
  * where it was opened, then wherever it's gone since. Opening it again
@@ -24,10 +25,21 @@ export type PreviewView = { kind: 'preview'; id: string; name?: string; path?: s
 /** The plan a chat is proposing, or last proposed. One per chat, so a revised plan takes the old one's place. */
 export type PlanView = { kind: 'plan'; session: string }
 export const planView = (session: string): PlanView => ({ kind: 'plan', session })
+/**
+ * Something that went in with a prompt, e.g. a paste or a memory file. By reference: the prompt's message
+ * and which `part` of it (`paste:<n>` or `context:<n>`), so layouts don't keep copies of what can be big.
+ */
+export type AttachmentView = { kind: 'attachment'; session: string; prompt: string; part: string }
 export const viewKey = (v: View) =>
-  v.kind === 'task' ? `task:${v.session}:${v.id}` : v.kind === 'plan' ? `plan:${v.session}` : `${v.kind}:${v.id}`
+  v.kind === 'task'
+    ? `task:${v.session}:${v.id}`
+    : v.kind === 'plan'
+      ? `plan:${v.session}`
+      : v.kind === 'attachment'
+        ? `attachment:${v.session}:${v.prompt}:${v.part}`
+        : `${v.kind}:${v.id}`
 /** The chat a view belongs to, if it only shows beside one. */
-export const sessionOf = (v: View) => (v.kind === 'task' || v.kind === 'plan' ? v.session : undefined)
+export const sessionOf = (v: View) => (v.kind === 'task' || v.kind === 'plan' || v.kind === 'attachment' ? v.session : undefined)
 
 export type Group = { type: 'group'; id: string; views: View[]; active?: string }
 export type Leaf = { type: 'chat' } | Group
@@ -42,7 +54,12 @@ export interface Layout {
   focus?: string
   /** On narrow screens every panel shares one group under the chat: its share of the height. */
   narrow?: number
+  /** The chats last opened here, latest first. Only theirs keep their tasks, plans and attachments. */
+  recent?: string[]
 }
+
+/** How many chats in a workspace keep their own panels while they're away. */
+const RECENT_CHATS = 20
 
 const wideQuery = matchMedia('(min-width: 768px)')
 const [wide, setWide] = createSignal(wideQuery.matches)
@@ -280,13 +297,76 @@ export function measure(tree: Node): { rects: Map<string, Rect>; boxes: Map<stri
 }
 
 /** On narrow screens: the chat, and under it one group holding every view, showing the focused group's tab. */
-export function narrowTree(l: Layout): Node {
-  const groups = groupsOf(l.tree)
+export function narrowTree(tree: Node, l: Layout): Node {
+  const groups = groupsOf(tree)
   const main = groups.find((g) => g.id === l.focus) ?? groups[0]
   if (!main) return CHAT
   const merged: Group = { type: 'group', id: main.id, views: groups.flatMap((g) => g.views), active: activeOf(main) }
   const share = l.narrow ?? 0.45
   return { type: 'split', dir: 'col', children: [CHAT, merged], sizes: [1 - share, share] }
+}
+
+// ── One chat's view of its workspace's panels ──
+//
+// The layout is what was arranged, for every chat in the workspace; what a chat shows is worked out
+// from it, never written back. So switching chats changes nothing stored: there's nothing to tidy
+// up after the switch, and so nothing that shows for a moment and goes, and a chat's own tasks,
+// plans and attachments are where they were when it's opened again.
+
+/** For each split in a chat's tree that isn't the stored one: where the stored one is, and which of its children it kept. */
+const sources = new WeakMap<Split, { path: number[]; index: number[] }>()
+
+/**
+ * The panels one chat sees: the workspace's, less other chats' tasks, plans and attachments, and
+ * the groups and splits left empty without them. Splits aren't folded together, so each is one
+ * stored split with some of its children, and resizing it can be put back there.
+ */
+export function shownTree(tree: Node, session: string): Node {
+  const mine = (v: View) => (sessionOf(v) ?? session) === session
+  if (viewsOf(tree).every(mine)) return tree
+  const go = (n: Node, path: number[]): Node | undefined => {
+    if (n.type === 'chat') return n
+    if (n.type === 'group') {
+      const views = n.views.filter(mine)
+      return views.length === n.views.length ? n : views.length ? { ...n, views } : undefined
+    }
+    const kept = n.children.flatMap((c, i) => {
+      const k = go(c, [...path, i])
+      return k ? [{ node: k, index: i }] : []
+    })
+    if (kept.length < 2) return kept[0]?.node
+    const total = kept.reduce((a, k) => a + n.sizes[k.index], 0)
+    const split: Split = { ...n, children: kept.map((k) => k.node), sizes: kept.map((k) => n.sizes[k.index] / total) }
+    sources.set(split, { path, index: kept.map((k) => k.index) })
+    return split
+  }
+  return go(tree, []) ?? CHAT
+}
+
+/** Resizes a split as one chat sees it, `path` and `sizes` being in its shownTree. Panes it doesn't show keep their share. */
+export function resizeShown(tree: Node, session: string, path: number[], sizes: number[]): Node {
+  const shown = shownTree(tree, session)
+  if (shown === tree) return setSizes(tree, path, sizes)
+  let n = shown
+  for (const i of path) if (n.type === 'split') n = n.children[i]
+  const src = n.type === 'split' ? sources.get(n) : undefined
+  let stored = tree
+  for (const i of src?.path ?? []) if (stored.type === 'split') stored = stored.children[i]
+  if (!src || stored.type !== 'split') return tree
+  const room = src.index.reduce((a, i) => a + stored.sizes[i], 0)
+  const next = [...stored.sizes]
+  src.index.forEach((j, i) => (next[j] = sizes[i] * room))
+  return setSizes(tree, src.path, next)
+}
+
+/** Moves a tab as one chat sees it: a tab-bar index counts only the tabs it shows. */
+export function moveShown(tree: Node, session: string, key: string, drop: Drop): { tree: Node; group?: string } {
+  if (drop.index === undefined) return moveView(tree, key, drop)
+  const stored = groupsOf(tree).find((g) => g.id === drop.target)
+  const shown = groupsOf(shownTree(tree, session)).find((g) => g.id === drop.target)
+  const before = shown?.views[drop.index]
+  const index = before ? stored!.views.findIndex((v) => viewKey(v) === viewKey(before)) : stored?.views.length
+  return moveView(tree, key, { ...drop, index })
 }
 
 // ── State, per workspace: a root on a machine ──
@@ -342,15 +422,19 @@ export function updateLayout(ws: Ws, change: (l: Layout) => Layout): void {
   saveTimer = setTimeout(save, 300)
 }
 
-/** Whether a workspace's panels are on screen. */
-export const panelsShown = (ws: Ws) => !layoutOf(ws).hidden && groupsOf(layoutOf(ws).tree).length > 0
-
-/** Whether a view is on screen: its group's tab showing, with panels shown. */
-export function viewShown(ws: Ws, key: string): boolean {
-  if (!panelsShown(ws)) return false
-  const tree = wide() ? layoutOf(ws).tree : narrowTree(layoutOf(ws))
-  return groupsOf(tree).some((g) => activeOf(g) === key)
+/** What a chat has on screen: its panels around it as the screen's width lays them out, or just itself with them hidden. */
+export function screenTree(ws: Ws, session: string): Node {
+  const l = layoutOf(ws)
+  if (l.hidden) return CHAT
+  const tree = shownTree(l.tree, session)
+  return wide() ? tree : narrowTree(tree, l)
 }
+
+/** Whether a chat's panels are on screen. */
+export const panelsShown = (ws: Ws, session: string) => groupsOf(screenTree(ws, session)).length > 0
+
+/** Whether a view is on screen beside a chat: its group's tab showing, with panels shown. */
+export const viewShown = (ws: Ws, session: string, key: string) => groupsOf(screenTree(ws, session)).some((g) => activeOf(g) === key)
 
 /** The view to focus once it's on screen, e.g. a terminal just opened. */
 const [focusRequest, setFocusRequest] = createSignal<string | undefined>(undefined, { equals: false })
@@ -388,14 +472,14 @@ export function placeTerminals(ws: Ws, ids: string[]): void {
  * or by default in the group last worked in (a new panel under the chat if there's none).
  * Rejects if the terminal couldn't be started, for the caller to say so.
  */
-export async function openTerminal(ws: Ws, cwd: string, where?: { group: string } | { beside: string; edge: Edge }, command?: string): Promise<void> {
+export async function openTerminal(ws: Ws, session: string, cwd: string, where?: { group: string } | { beside: string; edge: Edge }, command?: string): Promise<void> {
   const { id } = await api.createTerminal({ cwd, machine: ws.machine, command })
   pending.add(id)
   const view: View = { kind: 'terminal', id }
   updateLayout(ws, (l) => {
     // The server's list may have got here first and placed it already.
     const tree = removeView(l.tree, viewKey(view))
-    const groups = groupsOf(tree)
+    const groups = groupsOf(shownTree(tree, session))
     const into = where && 'group' in where ? where.group : !where ? (groups.find((g) => g.id === l.focus) ?? groups[0])?.id : undefined
     if (into && groups.some((g) => g.id === into)) return { ...l, tree: addToGroup(tree, into, view), focus: into, hidden: false }
     const placed = where && 'beside' in where ? splitWith(tree, where.beside, where.edge, [view]) : splitWith(tree, 'chat', 'bottom', [view])
@@ -413,7 +497,8 @@ export function openView(ws: Ws, view: View): void {
   updateLayout(ws, (l) => {
     const at = groupOf(l.tree, key)
     if (at) return { ...l, tree: setActive(l.tree, key), focus: at.id, hidden: false }
-    const groups = groupsOf(l.tree)
+    // Where its chat can see it: a group holding only other chats' views is hidden there.
+    const groups = groupsOf(shownTree(l.tree, sessionOf(view) ?? ''))
     const into = groups.find((g) => g.id === l.focus) ?? groups[0]
     if (into) return { ...l, tree: addToGroup(l.tree, into.id, view), focus: into.id, hidden: false }
     const placed = splitWith(l.tree, 'chat', 'right', [view])
@@ -422,12 +507,17 @@ export function openView(ws: Ws, view: View): void {
   setFocusRequest(key)
 }
 
-/** Takes other chats' tasks and plans out of a workspace's panels: they only show beside their own chat. */
-export function dropOtherChats(ws: Ws, session: string): void {
+/**
+ * Notes a chat being opened in a workspace. Other chats' tasks, plans and attachments stay, hidden,
+ * for when they're opened again, unless they haven't been for a while. Nothing this chat shows changes.
+ */
+export function openedIn(ws: Ws, session: string): void {
   updateLayout(ws, (l) => {
+    if (l.recent?.[0] === session) return l
+    const recent = [session, ...(l.recent ?? []).filter((s) => s !== session)].slice(0, RECENT_CHATS)
     let tree = l.tree
-    for (const v of viewsOf(tree)) if (sessionOf(v) && sessionOf(v) !== session) tree = removeView(tree, viewKey(v))
-    return tree === l.tree ? l : { ...l, tree }
+    for (const v of viewsOf(tree)) if (sessionOf(v) && !recent.includes(sessionOf(v)!)) tree = removeView(tree, viewKey(v))
+    return { ...l, tree, recent }
   })
 }
 
@@ -466,12 +556,16 @@ export function reloadPreview(ws: Ws, view: PreviewView): void {
   updateLayout(ws, (l) => ({ ...l, tree: replaceView(l.tree, { ...view, nav: (view.nav ?? 0) + 1 }) }))
 }
 
-/** Show or hide a workspace's panels. Showing with nothing to show opens a shell, like any terminal panel. */
-export function togglePanels(ws: Ws, cwd: string): void {
-  if (panelsShown(ws)) return updateLayout(ws, (l) => ({ ...l, hidden: true }))
+/**
+ * Show or hide a chat's panels. Showing with nothing to show opens a shell, like any terminal panel; that rejects
+ * if the shell couldn't be started.
+ */
+export async function togglePanels(ws: Ws, session: string, cwd: string): Promise<void> {
+  if (panelsShown(ws, session)) return updateLayout(ws, (l) => ({ ...l, hidden: true }))
   const l = layoutOf(ws)
-  if (!groupsOf(l.tree).length) return void openTerminal(ws, cwd)
+  const groups = groupsOf(shownTree(l.tree, session))
+  if (!groups.length) return openTerminal(ws, session, cwd)
   updateLayout(ws, (l) => ({ ...l, hidden: false }))
-  const g = groupsOf(l.tree).find((g) => g.id === l.focus) ?? groupsOf(l.tree)[0]
+  const g = groups.find((g) => g.id === l.focus) ?? groups[0]
   setFocusRequest(activeOf(g))
 }

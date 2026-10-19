@@ -30,6 +30,8 @@ type TranscriptProps = {
   onLogin?: () => void
   /** Given, a prompt one model refused and another answered offers to fork from just before it, with its text to edit and send again. */
   onRetry?: (retry: { at: string; text: string }) => void
+  /** Given, what went in with a prompt can be opened in a panel: by the prompt's message, and which part of it. */
+  onOpenAttachment?: (prompt: string, part: string) => void
 }
 
 export function Transcript(props: TranscriptProps & { sessionId?: string; index?: Accessor<Index> }) {
@@ -108,7 +110,9 @@ export function Messages(props: TranscriptProps & { nested?: boolean }) {
     switch (item.kind) {
       case 'work':
         return <WorkRow work={item} />
-      case 'user':
+      case 'user': {
+        const id = view().promptIds.get(item)
+        const open = !props.nested && id ? props.onOpenAttachment : undefined
         return (
           <UserMessage
             text={item.text}
@@ -117,8 +121,10 @@ export function Messages(props: TranscriptProps & { nested?: boolean }) {
             card={view().extras.get(item)?.card}
             move={view().extras.get(item)?.move}
             context={view().extras.get(item)?.chips.map(contextChip)}
+            onOpenAttachment={open && ((part) => open(id!, part))}
           />
         )
+      }
       case 'text':
         return (
           <div class="my-4">
