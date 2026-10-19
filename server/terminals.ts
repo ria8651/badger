@@ -16,6 +16,8 @@ type Reply = { result?: unknown; error?: string }
 
 /** How often running terminals are checked for ports they listen on. */
 const PORTS_POLL_MS = 2000
+/** The longest a request to the host is waited on. A host on older code never answers one it doesn't know. */
+const CALL_TIMEOUT_MS = 60 * 1000
 
 /**
  * The server's connection to the PTY host (server/ptyHost.ts), starting the
@@ -156,7 +158,15 @@ export class Terminals {
     if (!this.socket) throw new Error('PTY host disconnected')
     const reqId = this.nextReq++
     return new Promise((resolve, reject) => {
-      this.pending.set(reqId, (r) => (r.error ? reject(new Error(r.error)) : resolve(r.result)))
+      const timer = setTimeout(() => {
+        this.pending.delete(reqId)
+        reject(new Error(`The PTY host didn't answer in ${CALL_TIMEOUT_MS / 1000}s`))
+      }, CALL_TIMEOUT_MS)
+      this.pending.set(reqId, (r) => {
+        clearTimeout(timer)
+        if (r.error) reject(new Error(r.error))
+        else resolve(r.result)
+      })
       this.write(build(reqId))
     })
   }

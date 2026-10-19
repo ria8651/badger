@@ -309,6 +309,9 @@ async function handle(client: Socket, req: HostRequest): Promise<void> {
       case 'remove':
         await remove(t)
         return reply()
+      default:
+        // A newer server's request: answered, so it isn't left waiting.
+        return reply(undefined, `Unknown request ${(req as { type: string }).type}`)
     }
   } catch (err) {
     reply(undefined, err instanceof Error ? err.message : String(err))

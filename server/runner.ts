@@ -339,12 +339,12 @@ export class Runner implements RunnerApi {
   }
 
   async gitPull(path: string) {
-    if (this.manager.in(path).some((s) => s.running)) throw new BadRequest('A chat is working here. Pull once it has finished.')
+    if (this.manager.busyIn(path)) throw new BadRequest('A chat is working here. Pull once it has finished.')
     await gitPull(path).catch(badRequest)
   }
 
   async removeWorktree(dir: string): Promise<void> {
-    if (this.manager.in(dir).some((s) => s.running)) throw new BadRequest('A chat is still working in this worktree')
+    if (this.manager.busyIn(dir)) throw new BadRequest('A chat is still working in this worktree')
     if (this.terminals.terminals.some((t) => t.root === dir)) throw new BadRequest('Close its terminals first')
     for (const s of this.manager.in(dir)) s.close()
     await removeWorktree(dir).catch(badRequest)

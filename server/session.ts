@@ -368,6 +368,11 @@ export class LiveSession {
     return fn(this.agent)
   }
 
+  /** Taking a turn, or waiting on background work it started: closing it now would cut that off. */
+  get working(): boolean {
+    return this.running || this.busy
+  }
+
   /** A permission prompt or question is waiting on the user. */
   get waiting(): boolean {
     return this.pending.size > 0
@@ -687,8 +692,7 @@ export class SessionManager {
 
   /** Taking a turn, or waiting on background work it started. */
   isRunning(id: string): boolean {
-    const s = this.sessions.get(id)
-    return !!s && (s.running || s.busy)
+    return !!this.sessions.get(id)?.working
   }
 
   all(): LiveSession[] {
@@ -700,12 +704,17 @@ export class SessionManager {
     return this.sessions.values().next().value
   }
 
-  /** Return the live session, resuming it from disk or creating it as needed. */
   /** Live sessions running in a directory, e.g. a worktree about to be removed. */
   in(cwd: string): LiveSession[] {
     return [...this.sessions.values()].filter((s) => s.cwd === cwd)
   }
 
+  /** A chat in this directory is working, background work included: closing it, or pulling under it, would cut that off. */
+  busyIn(cwd: string): boolean {
+    return this.in(cwd).some((s) => s.working)
+  }
+
+  /** Return the live session, resuming it from disk or creating it as needed. */
   async open(id: string, opts: { cwd?: string; mode?: PermissionMode; model?: string; worktree?: string }): Promise<LiveSession> {
     const existing = this.sessions.get(id)
     if (existing) return existing

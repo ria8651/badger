@@ -72,8 +72,7 @@ export function mergeTool(deps: MergeDeps, sessionId: string, cwd: () => string,
       return serialised(main, async () => {
         const blocker = await mergeBlocker(main)
         if (blocker) return error(`${blocker} Sort that out in the main checkout, then merge again.`)
-        const busy = deps.manager.in(main).filter((s) => s.running)
-        if (busy.length) return error(`Another chat is working in the main checkout (${main}). Wait for it to finish, then merge again.`)
+        if (deps.manager.busyIn(main)) return error(`Another chat is working in the main checkout (${main}). Wait for it to finish, then merge again.`)
 
         const card = await deps.cardOf(sessionId)
         const before = await worktreeStatus(dir)
@@ -142,7 +141,7 @@ function cardFinished(deps: MergeDeps, card: ChatCard | undefined, dir: string):
 /** After the merging chat's turn: the worktree goes, and the chat (or its whole card) is put away. */
 async function cleanUp(deps: MergeDeps, p: { sessionId: string; dir: string; card?: Card }): Promise<void> {
   try {
-    if (deps.manager.in(p.dir).some((s) => s.running)) throw new Error('a chat is still working in it')
+    if (deps.manager.busyIn(p.dir)) throw new Error('a chat is still working in it')
     for (const s of deps.manager.in(p.dir)) s.close()
     for (const t of deps.terminals.terminals.filter((t) => t.root === p.dir)) await deps.terminals.remove(t.id)
     await removeWorktree(p.dir)
