@@ -8,7 +8,7 @@ import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '.
 import { inWs, terminalLabel, terminalState, terminalTooltip, terminals, terminalsListed, type Ws } from '../terminals.ts'
 import { TerminalView } from './TerminalView.tsx'
 import { showError } from './Popover.tsx'
-import { Loading, ltr } from './ui.tsx'
+import { Loading, ghostClass, ltr } from './ui.tsx'
 
 /** Green while running, red if it failed or was killed, grey once it exited cleanly. */
 export function StatusDot(props: { terminal: TerminalInfo }) {
@@ -18,9 +18,6 @@ export function StatusDot(props: { terminal: TerminalInfo }) {
 
 const inWorkspace = (ws: Ws) => terminals().filter((t) => inWs(t, ws))
 
-export const ghost = (active = false) =>
-  `grid size-7 shrink-0 place-items-center rounded-md transition-colors hover:bg-surface hover:text-fg ${active ? 'text-fg' : 'text-fg-3'}`
-
 /** For the composer: shows or hides the panels and says how many terminals are running here. */
 export function TerminalButton(props: { ws: Ws; session: string; cwd: string }) {
   const running = () => inWorkspace(props.ws).filter((t) => t.running).length
@@ -28,7 +25,7 @@ export function TerminalButton(props: { ws: Ws; session: string; cwd: string }) 
   return (
     <button
       type="button"
-      onClick={() => togglePanels(props.ws, props.session, props.cwd)}
+      onClick={() => togglePanels(props.ws, props.session, props.cwd).catch((e: Error) => showError("Couldn't open a terminal", e.message))}
       title={`${open() ? 'Hide' : 'Show'} terminals (${LEADER} P)`}
       class={`flex h-7 items-center gap-1 rounded-button-md px-2 text-xs tabular-nums transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 ${
         open() ? 'bg-surface text-fg-2' : 'text-fg-3'
@@ -44,7 +41,7 @@ export function TerminalButton(props: { ws: Ws; session: string; cwd: string }) 
 export function RestartButton(props: { terminal: TerminalInfo }) {
   return (
     <Show when={props.terminal.command}>
-      <button onClick={() => api.restartTerminal(props.terminal.id)} title="Restart: stop it and run the command again" class={ghost()}>
+      <button onClick={() => api.restartTerminal(props.terminal.id)} title="Restart: stop it and run the command again" class={ghostClass()}>
         <RotateCw class="size-3.5" />
       </button>
     </Show>
@@ -142,13 +139,13 @@ export function TerminalPage(props: { id: string; onClosed: () => void }) {
         when={terminal()}
         fallback={
           <Show when={missing()} fallback={<Loading />}>
-            {(text) => <p class="flex flex-1 items-center justify-center px-6 text-center text-[13px] text-fg-3">{text()}</p>}
+            {(text) => <p class="flex flex-1 items-center justify-center px-6 text-center text-ui text-fg-3">{text()}</p>}
           </Show>
         }
       >
         {(t) => (
           <>
-            <div class="bar flex h-12 shrink-0 items-center gap-2 px-5 text-[13px]">
+            <div class="bar flex h-12 shrink-0 items-center gap-2 px-5 text-ui">
               <StatusDot terminal={t()} />
               <Show
                 when={renaming()}
@@ -158,17 +155,17 @@ export function TerminalPage(props: { id: string; onClosed: () => void }) {
                   </span>
                 }
               >
-                <RenameTerminal terminal={t()} onDone={() => setRenaming(false)} class="w-48 text-[13px]" />
+                <RenameTerminal terminal={t()} onDone={() => setRenaming(false)} class="w-48 text-ui" />
               </Show>
-              <span class="min-w-0 flex-1 truncate text-left font-mono text-[11px] text-fg-3 [direction:rtl]">{ltr(t().cwd)}</span>
-              <Show when={onMachine(t().machine)}>{(name) => <span class="shrink-0 text-[11px] text-fg-3">{name()}</span>}</Show>
+              <span class="min-w-0 flex-1 truncate text-left font-mono text-meta text-fg-3 [direction:rtl]">{ltr(t().cwd)}</span>
+              <Show when={onMachine(t().machine)}>{(name) => <span class="shrink-0 text-meta text-fg-3">{name()}</span>}</Show>
               <span class="shrink-0 text-xs text-fg-3">{terminalState(t())}</span>
               <PortButtons terminal={t()} />
               <RestartButton terminal={t()} />
               <button
                 onClick={() => api.closeTerminal(t().id).then(props.onClosed)}
                 title="Delete terminal: stops it and everything it started"
-                class={ghost()}
+                class={ghostClass()}
               >
                 <Trash2 class="size-3.5" />
               </button>

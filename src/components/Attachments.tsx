@@ -4,7 +4,8 @@ import type { CardContext } from '../../shared/cardContext.ts'
 import type { Move, Place } from '../../shared/forkNote.ts'
 import { basename } from '../folders.ts'
 import { imageUrl, type ShownImage } from '../images.ts'
-import { STATUS_LABELS } from './Board.tsx'
+import { STATUS_LABELS } from '../stores/cards.ts'
+import { Link } from '../router.tsx'
 import { Markdown } from './Markdown.tsx'
 import { viewImages } from './ImageViewer.tsx'
 import { plural } from './ui.tsx'
@@ -159,26 +160,16 @@ export function Attachments(props: {
       <Show when={openContext()}>
         {(c) => (
           <Opened onOpen={props.onOpen && (() => openBeside(`context:${(open() as { context: number }).context}`))}>
-            <div class="text-[13px] text-fg-2">{c().body()}</div>
+            <div class="text-ui text-fg-2">{c().body()}</div>
           </Opened>
         )}
       </Show>
       <Show when={open() === 'card' && props.card?.card}>
         {(card) => (
-          <div class="mt-2 max-h-80 overflow-auto rounded-lg border border-edge px-3 py-2.5 text-[13px] text-fg-2">
-            <a
-              href={`/c/${card().id}`}
-              onClick={(e) => {
-                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
-                e.preventDefault()
-                // App routes on popstate, so this navigates without a reload.
-                history.pushState(null, '', `/c/${card().id}`)
-                dispatchEvent(new PopStateEvent('popstate'))
-              }}
-              class="mb-1.5 block font-medium text-fg hover:underline"
-            >
+          <div class="mt-2 max-h-80 overflow-auto rounded-lg border border-edge px-3 py-2.5 text-ui text-fg-2">
+            <Link to={{ kind: 'card', id: card().id }} class="mb-1.5 block font-medium text-fg hover:underline">
               #{card().id} {card().title}
-            </a>
+            </Link>
             <Show when={card().description} fallback={<p class="text-fg-3">No description</p>}>
               <Markdown text={card().description} />
             </Show>
@@ -187,7 +178,7 @@ export function Attachments(props: {
       </Show>
       <Show when={open() === 'move' && props.move}>
         {(move) => (
-          <div class="mt-2 rounded-lg border border-edge px-3 py-2.5 text-[13px] text-fg-2">
+          <div class="mt-2 rounded-lg border border-edge px-3 py-2.5 text-ui text-fg-2">
             Forked from a chat in <span class="font-mono text-xs">{place(move().from)}</span>, and now in{' '}
             <span class="font-mono text-xs">{place(move().to)}</span>. Claude was told that paths from before may not be here.
           </div>

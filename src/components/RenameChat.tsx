@@ -3,8 +3,9 @@ import { Portal } from 'solid-js/web'
 import { RefreshCw, Sparkles } from '../icons'
 import type { SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
+import { renameSession } from '../stores/sessions.ts'
 import { showError } from './Popover.tsx'
-import { floatBy } from './ui.tsx'
+import { createDismiss, floatBy } from './ui.tsx'
 
 /**
  * A trigger that opens a box to rename a chat, floating over the page, with a
@@ -14,7 +15,6 @@ import { floatBy } from './ui.tsx'
  */
 export function RenameChat(props: {
   session: SessionSummary
-  onSaved?: (title: string) => void
   trigger: (open: () => boolean) => JSX.Element
   triggerClass: (open: boolean) => string
   title?: string
@@ -55,24 +55,14 @@ export function RenameChat(props: {
     props.onOpenChange?.(false)
     title = title?.trim()
     if (title && title !== props.session.title) {
-      props.onSaved?.(title)
-      api.rename(props.session.id, title).catch((e: Error) => showError("Couldn't rename it", e.message, trigger))
+      renameSession(props.session.id, title).catch((e: Error) => showError("Couldn't rename it", e.message, trigger))
     }
     if (refocus) trigger.focus()
   }
 
-  const onOutside = (e: PointerEvent) => {
-    const target = e.target as Node
-    if (open() && !panel?.contains(target) && !trigger.contains(target)) close(typed ? input?.value : undefined, false)
-  }
-  const onResize = () => close(typed ? input?.value : undefined, false)
-  document.addEventListener('pointerdown', onOutside)
-  addEventListener('resize', onResize)
-  onCleanup(() => {
-    document.removeEventListener('pointerdown', onOutside)
-    removeEventListener('resize', onResize)
-    if (open()) props.onOpenChange?.(false)
-  })
+  // What's typed is kept; leaving it as suggested isn't.
+  createDismiss(open, () => [panel, trigger], () => close(typed ? input?.value : undefined, false), { resize: true })
+  onCleanup(() => open() && props.onOpenChange?.(false))
 
   return (
     <>
@@ -114,7 +104,7 @@ export function RenameChat(props: {
                   typed = true
                 }
               }}
-              class="h-10 shrink-0 border-b border-line bg-transparent px-3.5 text-[13px] text-fg outline-none pointer-coarse:h-12 pointer-coarse:text-base"
+              class="h-10 shrink-0 border-b border-line bg-transparent px-3.5 text-ui text-fg outline-none pointer-coarse:h-12 pointer-coarse:text-base"
             />
             <div class="flex items-center gap-1 p-1">
               <Show
@@ -130,7 +120,7 @@ export function RenameChat(props: {
                   type="button"
                   onClick={() => close(suggestion())}
                   title="Use this title (Tab to edit it first)"
-                  class="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-fg-2 transition-colors hover:bg-surface hover:text-fg pointer-coarse:py-2.5"
+                  class="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-ui text-fg-2 transition-colors hover:bg-surface hover:text-fg pointer-coarse:py-2.5"
                 >
                   <Sparkles class="size-3.5 shrink-0 text-fg-3" />
                   <span class="truncate">{suggestion()}</span>

@@ -1,17 +1,13 @@
-import { For, Show, createSignal, type JSX } from 'solid-js'
+import { For, Show, type JSX } from 'solid-js'
 import { render } from 'solid-js/web'
 import { X } from '../icons'
-import { Button, floatBy, inputClass, modalOpen, setModalOpen } from './ui.tsx'
+import { Button, floatBy, inputClass, openModal, setPopoverOpen } from './ui.tsx'
 
 /**
  * What a popover floats by: the control it's about, or a spot on the page such as a text selection.
  * Without one, or once the control has gone from the page, it sits at the top.
  */
 export type Anchor = Element | DOMRect | undefined
-
-/** A popover is open. Escape is its to close, so dialogs behind it leave Escape be. */
-const [popoverOpen, setPopoverOpen] = createSignal(false)
-export { popoverOpen }
 
 /** Closes the one open now, since a new one replaces it. */
 let closeCurrent: (() => void) | undefined
@@ -30,7 +26,6 @@ function float(
   closeCurrent?.()
   const width = Math.min(opts.width, innerWidth - 16)
   const before = document.activeElement as HTMLElement | null
-  const wasModal = modalOpen()
   const host = document.createElement('div')
   document.body.append(host)
 
@@ -46,7 +41,7 @@ function float(
     host.remove()
     setPopoverOpen(false)
     if (opts.modal) {
-      setModalOpen(wasModal)
+      modal?.release()
       if (before?.isConnected) before.focus()
     }
     onClose?.()
@@ -81,7 +76,7 @@ function float(
   addEventListener('keydown', onKey, true)
   addEventListener('resize', close)
   setPopoverOpen(true)
-  if (opts.modal) setModalOpen(true)
+  const modal = opts.modal ? openModal() : undefined
   closeCurrent = close
 }
 
@@ -97,7 +92,7 @@ export function confirmBy(anchor: Anchor, ask: { message: string; notes?: string
       { width: 320, role: 'alertdialog', label: ask.message, modal: true },
       (close) => (
         <>
-          <p class="text-[13px] leading-snug text-fg">{ask.message}</p>
+          <p class="text-ui leading-snug text-fg">{ask.message}</p>
           <For each={ask.notes}>{(note) => <p class="mt-1.5 text-xs leading-snug text-fg-2">{note}</p>}</For>
           <div class="mt-3 flex justify-end gap-2">
             <Button onClick={close}>Cancel</Button>
@@ -174,7 +169,7 @@ export function showError(title: string, detail: string, anchor?: Anchor) {
   float(anchor, { width: 380, role: 'alert', label: title, modal: false }, (close) => (
     <>
       <div class="flex items-start gap-2">
-        <p class="min-w-0 flex-1 text-[13px] font-medium text-danger">{title}</p>
+        <p class="min-w-0 flex-1 text-ui font-medium text-danger">{title}</p>
         <button
           type="button"
           title="Dismiss"
@@ -187,7 +182,7 @@ export function showError(title: string, detail: string, anchor?: Anchor) {
       {/* Lines of output, like git's, keep their shape; a sentence reads as one. */}
       <Show when={detail.trim()}>
         <Show when={detail.trim().includes('\n')} fallback={<p class="mt-1 text-xs leading-snug text-fg-2 select-text">{detail.trim()}</p>}>
-          <pre class="mt-1.5 max-h-60 overflow-auto font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-fg-2 select-text">{detail.trim()}</pre>
+          <pre class="mt-1.5 max-h-60 overflow-auto font-mono text-meta leading-relaxed whitespace-pre-wrap text-fg-2 select-text">{detail.trim()}</pre>
         </Show>
       </Show>
     </>

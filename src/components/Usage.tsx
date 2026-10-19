@@ -1,6 +1,7 @@
-import { For, Show, createSignal, onCleanup } from 'solid-js'
+import { For, Show, createSignal } from 'solid-js'
 import type { AccountUsage, ContextUsage } from '../../shared/protocol.ts'
 import { resets, tokens } from '../usage.ts'
+import { createDismiss } from './ui.tsx'
 
 /** Past this much of the window, the meter turns red: autocompact is close. */
 const CONTEXT_FULL = 85
@@ -9,9 +10,7 @@ const CONTEXT_FULL = 85
 export function ContextMeter(props: { usage: ContextUsage }) {
   const [open, setOpen] = createSignal(false)
   let root!: HTMLDivElement
-  const onOutside = (e: PointerEvent) => open() && !root.contains(e.target as Node) && setOpen(false)
-  document.addEventListener('pointerdown', onOutside)
-  onCleanup(() => document.removeEventListener('pointerdown', onOutside))
+  createDismiss(open, () => [root], () => setOpen(false))
 
   const full = () => props.usage.percent >= CONTEXT_FULL
   const rows = () => props.usage.categories.filter((c) => c.tokens > 0)
@@ -32,7 +31,7 @@ export function ContextMeter(props: { usage: ContextUsage }) {
       </button>
       <Show when={open()}>
         <div class="absolute right-0 bottom-full z-10 mb-1.5 w-72 origin-bottom animate-[pop-in_120ms_ease-out] rounded-xl border border-edge bg-bg p-3 pop shadow-(--shadow-pop)">
-          <div class="flex items-baseline justify-between text-[13px]">
+          <div class="flex items-baseline justify-between text-ui">
             <span class="text-fg">Context</span>
             <span class="text-xs text-fg-3 tabular-nums">
               {tokens(props.usage.tokens)} / {tokens(props.usage.max)}
@@ -65,7 +64,7 @@ export function AccountLimits(props: { usage: AccountUsage }) {
             const high = () => l.severity !== 'normal' || l.percent >= 90
             return (
               <div title={l.resetsAt ? `Resets ${new Date(l.resetsAt).toLocaleString()}` : undefined}>
-                <div class="flex items-baseline gap-2 text-[11px] tabular-nums">
+                <div class="flex items-baseline gap-2 text-meta tabular-nums">
                   <span class="text-fg-2">{l.label}</span>
                   <Show when={l.resetsAt}>{(at) => <span class="min-w-0 flex-1 truncate text-fg-3">resets {resets(at())}</span>}</Show>
                   <span class={`ml-auto ${high() ? 'text-danger' : 'text-fg-3'}`}>{Math.round(l.percent)}%</span>

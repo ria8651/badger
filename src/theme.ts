@@ -3,7 +3,7 @@ import { createMemo, createSignal } from 'solid-js'
 // ── Themes: a palette (colours) and a frame (how panes sit together) ──
 //
 // index.css holds the tokens for each; this only picks which ones apply. index.html
-// repeats the choosing before anything paints, so the page doesn't flash another theme first.
+// repeats the last step, resolving "system", before anything paints, from what load() saves back here.
 
 export type Palette = 'light' | 'dark' | 'black' | 'terminal' | 'oms' | 'win95'
 export type Frame = 'classic' | 'modern'

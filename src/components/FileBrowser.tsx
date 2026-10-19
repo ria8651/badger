@@ -1,11 +1,9 @@
-import { For, Show, createMemo, createResource, createSignal, onCleanup, onMount } from 'solid-js'
-import { Portal } from 'solid-js/web'
-import { Check, CornerLeftUp, Eye, EyeOff, File, Folder, FolderGit2, FolderPlus, House, Upload, X } from '../icons'
+import { For, Show, createMemo, createResource, createSignal, onMount } from 'solid-js'
+import { Check, CornerLeftUp, Eye, EyeOff, File, Folder, FolderGit2, FolderPlus, House, Upload } from '../icons'
 import type { FileEntry, Listing } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { LOCAL } from '../machines.ts'
-import { popoverOpen } from './Popover.tsx'
-import { Button, inputClass, ltr, modalOpen, plural } from './ui.tsx'
+import { Button, Dialog, DialogTitle, GhostButton, inputClass, ltr, plural } from './ui.tsx'
 
 /** Bytes as a short size, e.g. 1.2 GB. */
 export function formatBytes(bytes: number): string {
@@ -112,191 +110,174 @@ export function FileBrowser(props: {
     }
   }
 
-  const onKey = (e: KeyboardEvent) => {
-    if (e.key !== 'Escape' || modalOpen() || popoverOpen()) return
-    e.stopPropagation()
-    if (naming()) setNaming(false)
-    else props.onClose()
-  }
-  addEventListener('keydown', onKey, true)
-  onCleanup(() => removeEventListener('keydown', onKey, true))
   onMount(() => filterInput.focus())
 
-  const toolButton = 'grid size-8 shrink-0 place-items-center rounded-lg text-fg-3 transition-colors hover:bg-surface hover:text-fg disabled:opacity-40 disabled:hover:bg-transparent'
-
   return (
-    <Portal>
-      <div class="fixed inset-0 z-50 flex animate-[fade-in_120ms_ease-out] items-center justify-center bg-black/40 sm:p-6" onClick={props.onClose}>
-        <div
-          role="dialog"
-          aria-label={props.title}
-          onClick={(e) => e.stopPropagation()}
-          class="flex h-full w-full flex-col overflow-hidden border-edge bg-bg p-(--inset) shadow-(--shadow-modal) sm:h-[min(40rem,90vh)] sm:max-w-2xl sm:rounded-xl sm:border-(length:--dialog-border)"
-        >
-          <div class="bar flex items-center gap-2 border-b border-line px-4 py-3">
-            <h2 class="flex-1 text-sm font-medium text-fg">{props.title}</h2>
-            <button type="button" title="Close" onClick={props.onClose} class={toolButton}>
-              <X class="size-4" />
-            </button>
-          </div>
+    <Dialog label={props.title} onClose={props.onClose} size="sm:h-[min(40rem,90vh)] sm:max-w-2xl">
+      <DialogTitle title={props.title} onClose={props.onClose} />
 
-          <div class="flex items-center gap-1 border-b border-line px-3 py-2">
-            <button type="button" title="Up a folder" disabled={!listing.latest?.parent} onClick={() => go(listing.latest!.parent!)} class={toolButton}>
-              <CornerLeftUp class="size-4" />
-            </button>
-            <button type="button" title="Home" onClick={() => go('')} class={toolButton}>
-              <House class="size-4" />
-            </button>
-            <input
-              value={current()}
-              spellcheck={false}
-              title="Type a path and press Enter"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') go(e.currentTarget.value.trim())
-              }}
-              onBlur={(e) => (e.currentTarget.value = current())}
-              class={`${inputClass} min-w-0 flex-1 font-mono text-xs`}
-            />
-            <button type="button" title={hidden() ? 'Hide hidden files' : 'Show hidden files'} onClick={() => setHidden((h) => !h)} class={toolButton}>
-              <Show when={hidden()} fallback={<EyeOff class="size-4" />}>
-                <Eye class="size-4" />
-              </Show>
-            </button>
-            <button type="button" title="New folder" onClick={() => setNaming(true)} class={toolButton}>
-              <FolderPlus class="size-4" />
-            </button>
-          </div>
-
-          <div class="px-3 pt-2">
-            <input
-              ref={filterInput}
-              value={filter()}
-              onInput={(e) => setFilter(e.currentTarget.value)}
-              onKeyDown={(e) => {
-                // Enter opens the only match, so typing a name and Enter walks down the tree.
-                if (e.key === 'Enter' && entries().length === 1) open(entries()[0])
-                if (e.key === 'Backspace' && !filter() && listing.latest?.parent) go(listing.latest.parent)
-              }}
-              placeholder="Filter"
-              class={inputClass}
-            />
-          </div>
-
-          <div class="min-h-0 flex-1 overflow-y-auto px-2 py-2">
-            <Show when={naming()}>
-              <div class="flex items-center gap-3 rounded-lg px-2.5 py-1.5">
-                <Folder class="size-4 shrink-0 text-fg-3" />
-                <input
-                  ref={(el) => queueMicrotask(() => el.focus())}
-                  placeholder="Folder name, then Enter"
-                  onKeyDown={(e) => e.key === 'Enter' && makeFolder(e.currentTarget.value)}
-                  onBlur={(e) => makeFolder(e.currentTarget.value)}
-                  class={`${inputClass} h-7`}
-                />
-              </div>
-            </Show>
-            <For each={entries()}>
-              {(entry) => {
-                const full = () => join(current(), entry.name)
-                const picked = () => selected().includes(full())
-                const inert = () => !entry.dir && props.mode === 'folder'
-                return (
-                  <div
-                    role="button"
-                    tabindex={inert() ? -1 : 0}
-                    onClick={() => !inert() && open(entry)}
-                    onKeyDown={(e) => e.key === 'Enter' && !inert() && open(entry)}
-                    class={`group flex h-9 items-center gap-3 rounded-lg px-2.5 text-[13px] outline-none pointer-coarse:h-11 ${
-                      inert() ? 'text-fg-3' : `cursor-pointer text-fg-2 hover:bg-surface hover:text-fg focus-visible:bg-surface ${picked() ? 'bg-surface text-fg' : ''}`
-                    }`}
-                  >
-                    <Show
-                      when={entry.dir}
-                      fallback={
-                        <Show when={props.mode === 'files'} fallback={<File class="size-4 shrink-0" />}>
-                          <span class={`grid size-4 shrink-0 place-items-center rounded-sm border ${picked() ? 'border-primary bg-primary text-on-primary' : 'border-edge'}`}>
-                            <Show when={picked()}>
-                              <Check class="size-3" stroke-width={3} />
-                            </Show>
-                          </span>
-                        </Show>
-                      }
-                    >
-                      <Show when={entry.git} fallback={<Folder class="size-4 shrink-0 text-fg-3" />}>
-                        <FolderGit2 class="size-4 shrink-0 text-accent" />
-                      </Show>
-                    </Show>
-                    <span class="min-w-0 flex-1 truncate">{entry.name}</span>
-                    <Show when={entry.size !== undefined}>
-                      <span class="shrink-0 text-xs text-fg-3 tabular-nums">{formatBytes(entry.size!)}</span>
-                    </Show>
-                    <Show when={entry.dir && props.mode === 'folder'}>
-                      <button
-                        type="button"
-                        title={`Add ${entry.name} to Badger`}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          void pickFolder(full())
-                        }}
-                        class="hidden h-6 shrink-0 rounded-button-md border border-button-edge shadow-(--shadow-control) px-2 text-xs text-fg-2 group-hover:block hover:bg-bg hover:text-fg pointer-coarse:block"
-                      >
-                        Add
-                      </button>
-                    </Show>
-                  </div>
-                )
-              }}
-            </For>
-            <Show when={listing.latest && !entries().length && !naming()}>
-              <p class="px-2.5 py-6 text-center text-[13px] text-fg-3">{filter() ? 'Nothing matches' : 'Empty folder'}</p>
-            </Show>
-            <Show when={listing.latest?.truncated}>
-              <p class="px-2.5 py-2 text-xs text-fg-3">Only the first {listing.latest!.entries.length} are shown. Filter to narrow it down.</p>
-            </Show>
-          </div>
-
-          <Show when={error()}>
-            <p class="border-t border-line px-4 py-2 text-xs text-danger">{error()}</p>
+      <div class="flex items-center gap-1 border-b border-line px-3 py-2">
+        <GhostButton size="lg" title="Up a folder" disabled={!listing.latest?.parent} onClick={() => go(listing.latest!.parent!)}>
+          <CornerLeftUp class="size-4" />
+        </GhostButton>
+        <GhostButton size="lg" title="Home" onClick={() => go('')}>
+          <House class="size-4" />
+        </GhostButton>
+        <input
+          value={current()}
+          spellcheck={false}
+          title="Type a path and press Enter"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') go(e.currentTarget.value.trim())
+          }}
+          onBlur={(e) => (e.currentTarget.value = current())}
+          class={`${inputClass} min-w-0 flex-1 font-mono text-xs`}
+        />
+        <GhostButton size="lg" title={hidden() ? 'Hide hidden files' : 'Show hidden files'} onClick={() => setHidden((h) => !h)}>
+          <Show when={hidden()} fallback={<EyeOff class="size-4" />}>
+            <Eye class="size-4" />
           </Show>
-
-          <div class="flex items-center gap-2 border-t border-line px-4 py-3">
-            <Show
-              when={props.mode === 'files'}
-              fallback={
-                <>
-                  <span class="min-w-0 flex-1 truncate text-left font-mono text-[11px] text-fg-3 [direction:rtl]">{ltr(current())}</span>
-                  <Button primary disabled={busy() || !listing.latest} onClick={() => pickFolder(current())}>
-                    Add this folder
-                  </Button>
-                </>
-              }
-            >
-              <Show when={props.onUpload}>
-                <Button
-                  class="flex items-center gap-1.5"
-                  onClick={() => {
-                    props.onUpload!()
-                    props.onClose()
-                  }}
-                >
-                  <Upload class="size-3.5" /> From this device
-                </Button>
-              </Show>
-              <span class="flex-1 text-xs text-fg-3">{selected().length ? plural(selected().length, 'file') + ' selected' : ''}</span>
-              <Button
-                primary
-                disabled={!selected().length}
-                onClick={() => {
-                  props.onPickFiles?.(selected())
-                  props.onClose()
-                }}
-              >
-                Attach
-              </Button>
-            </Show>
-          </div>
-        </div>
+        </GhostButton>
+        <GhostButton size="lg" title="New folder" onClick={() => setNaming(true)}>
+          <FolderPlus class="size-4" />
+        </GhostButton>
       </div>
-    </Portal>
+
+      <div class="px-3 pt-2">
+        <input
+          ref={filterInput}
+          value={filter()}
+          onInput={(e) => setFilter(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            // Enter opens the only match, so typing a name and Enter walks down the tree.
+            if (e.key === 'Enter' && entries().length === 1) open(entries()[0])
+            if (e.key === 'Backspace' && !filter() && listing.latest?.parent) go(listing.latest.parent)
+          }}
+          placeholder="Filter"
+          class={inputClass}
+        />
+      </div>
+
+      <div class="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+        <Show when={naming()}>
+          <div class="flex items-center gap-3 rounded-lg px-2.5 py-1.5">
+            <Folder class="size-4 shrink-0 text-fg-3" />
+            <input
+              ref={(el) => queueMicrotask(() => el.focus())}
+              placeholder="Folder name, then Enter"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') makeFolder(e.currentTarget.value)
+                // Handled, so it puts the name away rather than closing the browser.
+                if (e.key === 'Escape') {
+                  e.preventDefault()
+                  setNaming(false)
+                }
+              }}
+              onBlur={(e) => makeFolder(e.currentTarget.value)}
+              class={`${inputClass} h-7`}
+            />
+          </div>
+        </Show>
+        <For each={entries()}>
+          {(entry) => {
+            const full = () => join(current(), entry.name)
+            const picked = () => selected().includes(full())
+            const inert = () => !entry.dir && props.mode === 'folder'
+            return (
+              <div
+                role="button"
+                tabindex={inert() ? -1 : 0}
+                onClick={() => !inert() && open(entry)}
+                onKeyDown={(e) => e.key === 'Enter' && !inert() && open(entry)}
+                class={`group flex h-9 items-center gap-3 rounded-lg px-2.5 text-ui outline-none pointer-coarse:h-11 ${
+                  inert() ? 'text-fg-3' : `cursor-pointer text-fg-2 hover:bg-surface hover:text-fg focus-visible:bg-surface ${picked() ? 'bg-surface text-fg' : ''}`
+                }`}
+              >
+                <Show
+                  when={entry.dir}
+                  fallback={
+                    <Show when={props.mode === 'files'} fallback={<File class="size-4 shrink-0" />}>
+                      <span class={`grid size-4 shrink-0 place-items-center rounded-sm border ${picked() ? 'border-primary bg-primary text-on-primary' : 'border-edge'}`}>
+                        <Show when={picked()}>
+                          <Check class="size-3" stroke-width={3} />
+                        </Show>
+                      </span>
+                    </Show>
+                  }
+                >
+                  <Show when={entry.git} fallback={<Folder class="size-4 shrink-0 text-fg-3" />}>
+                    <FolderGit2 class="size-4 shrink-0 text-accent" />
+                  </Show>
+                </Show>
+                <span class="min-w-0 flex-1 truncate">{entry.name}</span>
+                <Show when={entry.size !== undefined}>
+                  <span class="shrink-0 text-xs text-fg-3 tabular-nums">{formatBytes(entry.size!)}</span>
+                </Show>
+                <Show when={entry.dir && props.mode === 'folder'}>
+                  <button
+                    type="button"
+                    title={`Add ${entry.name} to Badger`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void pickFolder(full())
+                    }}
+                    class="hidden h-6 shrink-0 rounded-button-md border border-button-edge shadow-(--shadow-control) px-2 text-xs text-fg-2 group-hover:block hover:bg-bg hover:text-fg pointer-coarse:block"
+                  >
+                    Add
+                  </button>
+                </Show>
+              </div>
+            )
+          }}
+        </For>
+        <Show when={listing.latest && !entries().length && !naming()}>
+          <p class="px-2.5 py-6 text-center text-ui text-fg-3">{filter() ? 'Nothing matches' : 'Empty folder'}</p>
+        </Show>
+        <Show when={listing.latest?.truncated}>
+          <p class="px-2.5 py-2 text-xs text-fg-3">Only the first {listing.latest!.entries.length} are shown. Filter to narrow it down.</p>
+        </Show>
+      </div>
+
+      <Show when={error()}>
+        <p class="border-t border-line px-4 py-2 text-xs text-danger">{error()}</p>
+      </Show>
+
+      <div class="flex items-center gap-2 border-t border-line px-4 py-3">
+        <Show
+          when={props.mode === 'files'}
+          fallback={
+            <>
+              <span class="min-w-0 flex-1 truncate text-left font-mono text-meta text-fg-3 [direction:rtl]">{ltr(current())}</span>
+              <Button primary disabled={busy() || !listing.latest} onClick={() => pickFolder(current())}>
+                Add this folder
+              </Button>
+            </>
+          }
+        >
+          <Show when={props.onUpload}>
+            <Button
+              class="flex items-center gap-1.5"
+              onClick={() => {
+                props.onUpload!()
+                props.onClose()
+              }}
+            >
+              <Upload class="size-3.5" /> From this device
+            </Button>
+          </Show>
+          <span class="flex-1 text-xs text-fg-3">{selected().length ? plural(selected().length, 'file') + ' selected' : ''}</span>
+          <Button
+            primary
+            disabled={!selected().length}
+            onClick={() => {
+              props.onPickFiles?.(selected())
+              props.onClose()
+            }}
+          >
+            Attach
+          </Button>
+        </Show>
+      </div>
+    </Dialog>
   )
 }

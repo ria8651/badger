@@ -1,6 +1,5 @@
 import { createSignal } from 'solid-js'
 import { api } from './api.ts'
-import { showError } from './components/Popover.tsx'
 import { LOCAL } from './machines.ts'
 import { wsKey, type Ws } from './terminals.ts'
 
@@ -398,8 +397,18 @@ function load(storage: Storage): Record<string, Layout> | undefined {
 
 // This tab's own layouts survive reloads; a new tab starts from the last one saved anywhere.
 const [layouts, setLayouts] = createSignal<Record<string, Layout>>(load(sessionStorage) ?? load(localStorage) ?? {})
-localStorage.removeItem('badger.terminalDock')
-localStorage.removeItem('badger.terminalDockHeight')
+
+// Saved a moment after the last change rather than on every one, since dragging a divider changes it on every
+// pointer move; and before the page goes, so nothing's lost.
+let saveTimer: ReturnType<typeof setTimeout> | undefined
+function save() {
+  clearTimeout(saveTimer)
+  saveTimer = undefined
+  const json = JSON.stringify(layouts())
+  sessionStorage.setItem(KEY, json)
+  localStorage.setItem(KEY, json)
+}
+addEventListener('pagehide', () => saveTimer !== undefined && save())
 
 export const layoutOf = (ws: Ws): Layout => layouts()[wsKey(ws)] ?? EMPTY
 
@@ -409,9 +418,8 @@ export function updateLayout(ws: Ws, change: (l: Layout) => Layout): void {
   if (after === before) return
   const next = { ...layouts(), [wsKey(ws)]: after }
   setLayouts(next)
-  const json = JSON.stringify(next)
-  sessionStorage.setItem(KEY, json)
-  localStorage.setItem(KEY, json)
+  clearTimeout(saveTimer)
+  saveTimer = setTimeout(save, 300)
 }
 
 /** What a chat has on screen: its panels around it as the screen's width lays them out, or just itself with them hidden. */
@@ -462,15 +470,10 @@ export function placeTerminals(ws: Ws, ids: string[]): void {
 /**
  * Opens a shell, or runs `command`, and shows it: in a group, beside a leaf,
  * or by default in the group last worked in (a new panel under the chat if there's none).
+ * Rejects if the terminal couldn't be started, for the caller to say so.
  */
 export async function openTerminal(ws: Ws, session: string, cwd: string, where?: { group: string } | { beside: string; edge: Edge }, command?: string): Promise<void> {
-  let id: string
-  try {
-    id = (await api.createTerminal({ cwd, machine: ws.machine, command })).id
-  } catch (err) {
-    showError("Couldn't open a terminal", err instanceof Error ? err.message : String(err))
-    return
-  }
+  const { id } = await api.createTerminal({ cwd, machine: ws.machine, command })
   pending.add(id)
   const view: View = { kind: 'terminal', id }
   updateLayout(ws, (l) => {
@@ -553,12 +556,15 @@ export function reloadPreview(ws: Ws, view: PreviewView): void {
   updateLayout(ws, (l) => ({ ...l, tree: replaceView(l.tree, { ...view, nav: (view.nav ?? 0) + 1 }) }))
 }
 
-/** Show or hide a chat's panels. Showing with nothing to show opens a shell, like any terminal panel. */
-export function togglePanels(ws: Ws, session: string, cwd: string): void {
+/**
+ * Show or hide a chat's panels. Showing with nothing to show opens a shell, like any terminal panel; that rejects
+ * if the shell couldn't be started.
+ */
+export async function togglePanels(ws: Ws, session: string, cwd: string): Promise<void> {
   if (panelsShown(ws, session)) return updateLayout(ws, (l) => ({ ...l, hidden: true }))
   const l = layoutOf(ws)
   const groups = groupsOf(shownTree(l.tree, session))
-  if (!groups.length) return void openTerminal(ws, session, cwd)
+  if (!groups.length) return openTerminal(ws, session, cwd)
   updateLayout(ws, (l) => ({ ...l, hidden: false }))
   const g = groups.find((g) => g.id === l.focus) ?? groups[0]
   setFocusRequest(activeOf(g))

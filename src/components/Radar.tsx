@@ -1,9 +1,10 @@
 import { For, Show, createMemo, type JSX } from 'solid-js'
-import { projectOf } from '../../shared/cardTree.ts'
-import type { Card, SessionSummary } from '../../shared/protocol.ts'
+import type { Card } from '../../shared/protocol.ts'
 import { attention } from '../attention.ts'
-import { STATUS_LABELS } from './Board.tsx'
+import { STATUS_LABELS } from '../stores/cards.ts'
 import { ChatDot } from './ui.tsx'
+import { cardOf, cards, projectOf } from '../stores/cards.ts'
+import { sessions } from '../stores/sessions.ts'
 
 const DAY = 24 * 60 * 60 * 1000
 /** In progress with no chat activity for this long is flagged. */
@@ -15,30 +16,27 @@ const UP_NEXT_PER_PROJECT = 3
  * what's next in each project and what got done. Everything is yours until there are users.
  */
 export function Radar(props: {
-  cards: Card[]
-  sessions: SessionSummary[]
   onOpenCard: (id: number) => void
   onOpenChat: (id: string) => void
 }) {
-  const cardOf = createMemo(() => new Map(props.cards.flatMap((c) => c.sessionIds.map((id) => [id, c] as const))))
-  const projectTitle = (c: Card) => (c.parentId === null ? undefined : projectOf(props.cards, c.id)?.title)
+  const projectTitle = (c: Card) => (c.parentId === null ? undefined : projectOf(c.id)?.title)
   /** When a card was last worked on: its latest chat, or when it last changed column. */
-  const lastActive = (c: Card) => Math.max(c.statusChangedAt, ...props.sessions.filter((s) => c.sessionIds.includes(s.id)).map((s) => s.lastModified))
-  const chatsOf = (c: Card) => props.sessions.filter((s) => c.sessionIds.includes(s.id))
+  const lastActive = (c: Card) => Math.max(c.statusChangedAt, ...sessions().filter((s) => c.sessionIds.includes(s.id)).map((s) => s.lastModified))
+  const chatsOf = (c: Card) => sessions().filter((s) => c.sessionIds.includes(s.id))
 
-  const needsYou = createMemo(() => props.sessions.filter((s) => !s.archived && attention()[s.id]).sort((a, b) => b.lastModified - a.lastModified))
+  const needsYou = createMemo(() => sessions().filter((s) => !s.archived && attention()[s.id]).sort((a, b) => b.lastModified - a.lastModified))
   // Projects are containers, so only the work inside them counts as in flight.
-  const work = createMemo(() => props.cards.filter((c) => c.parentId !== null))
+  const work = createMemo(() => cards().filter((c) => c.parentId !== null))
   const inFlight = createMemo(() =>
     work()
       .filter((c) => c.status === 'in_progress' || c.status === 'review')
       .sort((a, b) => lastActive(b) - lastActive(a)),
   )
   const upNext = createMemo(() =>
-    props.cards
+    cards()
       .filter((p) => p.parentId === null && p.status !== 'done')
       .flatMap((p) => {
-        const inside = props.cards.filter((c) => c.parentId === p.id).sort((a, b) => a.position - b.position)
+        const inside = cards().filter((c) => c.parentId === p.id).sort((a, b) => a.position - b.position)
         const todo = inside.filter((c) => c.status === 'todo')
         return (todo.length ? todo : inside.filter((c) => c.status === 'backlog')).slice(0, UP_NEXT_PER_PROJECT)
       }),
@@ -72,12 +70,12 @@ export function Radar(props: {
         <Section title="Needs you" count={needsYou().length} empty="Nothing is waiting on you.">
           <For each={needsYou()}>
             {(s) => {
-              const card = () => cardOf().get(s.id)
+              const card = () => cardOf(s.id)
               return (
                 <Row
                   onClick={() => props.onOpenChat(s.id)}
                   title={s.title}
-                  project={card() ? (projectOf(props.cards, card()!.id)?.title ?? undefined) : undefined}
+                  project={card() ? (projectOf(card()!.id)?.title ?? undefined) : undefined}
                   dot={<ChatDot running={s.running} attention={attention()[s.id]} />}
                   note={<span>{attention()[s.id] === 'waiting' ? 'Waiting on you' : 'Finished'}</span>}
                 />
@@ -116,11 +114,11 @@ export function Radar(props: {
 function Section(props: { title: string; count: number; empty: string; children: JSX.Element }) {
   return (
     <section class="mt-6">
-      <h2 class="flex items-baseline gap-2 border-b border-line pb-2 text-[13px] font-medium text-fg-2">
+      <h2 class="flex items-baseline gap-2 border-b border-line pb-2 text-ui font-medium text-fg-2">
         {props.title}
         <span class="text-xs font-normal text-fg-3 tabular-nums">{props.count}</span>
       </h2>
-      <Show when={props.count} fallback={<p class="py-3 text-[13px] text-fg-3">{props.empty}</p>}>
+      <Show when={props.count} fallback={<p class="py-3 text-ui text-fg-3">{props.empty}</p>}>
         {props.children}
       </Show>
     </section>
@@ -130,12 +128,12 @@ function Section(props: { title: string; count: number; empty: string; children:
 function Row(props: { onClick: () => void; title: string; project?: string; dot: JSX.Element; note: JSX.Element }) {
   return (
     <button onClick={props.onClick} class="group -mx-2 flex w-[calc(100%+1rem)] items-center gap-3 rounded-lg px-2 py-2.5 text-left transition-colors hover:bg-surface/60">
-      <span class="min-w-0 flex-1 truncate text-[13px] text-fg-2 group-hover:text-fg">{props.title}</span>
+      <span class="min-w-0 flex-1 truncate text-ui text-fg-2 group-hover:text-fg">{props.title}</span>
       <Show when={props.project}>
-        <span class="max-w-40 shrink-0 truncate text-[11px] text-fg-3">{props.project}</span>
+        <span class="max-w-40 shrink-0 truncate text-meta text-fg-3">{props.project}</span>
       </Show>
       {props.dot}
-      <span class="w-36 shrink-0 text-right text-[11px] text-fg-3 tabular-nums">{props.note}</span>
+      <span class="w-36 shrink-0 text-right text-meta text-fg-3 tabular-nums">{props.note}</span>
     </button>
   )
 }

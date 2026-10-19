@@ -127,7 +127,7 @@ export function FolderPicker(props: {
           <div class="rounded-xl border border-line shadow-(--shadow-card)">
             <Row selected={props.selected === scratch()} onClick={() => pick(scratch(), false)}>
               <MessageSquare class="size-4 shrink-0 text-fg-3" />
-              <span class="text-[13px] text-fg-2">No folder</span>
+              <span class="text-ui text-fg-2">No folder</span>
               <span class="min-w-0 flex-1 truncate text-xs text-fg-3">Quick questions, not tied to a repo</span>
             </Row>
           </div>
@@ -175,7 +175,7 @@ export function FolderPicker(props: {
                             {/* The status drops under the name when the row's too narrow for both. */}
                             <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3">
                               <FolderName folder={folder} onHide={(button) => hide(folder, button)} />
-                              <GitSummary git={c.git} branch class="shrink-0 text-[11px]" />
+                              <GitSummary git={c.git} branch class="shrink-0 text-meta" />
                             </div>
                             <Size path={c.path} machine={props.machine} />
                           </Row>
@@ -187,10 +187,10 @@ export function FolderPicker(props: {
                             <span class="flex min-w-32 flex-1 items-baseline gap-2" title={c.path}>
                               <span class="truncate font-mono text-xs text-fg-2">{basename(c.path)}</span>
                               <Show when={c.git.branch && !c.git.branch.endsWith(basename(c.path))}>
-                                <span class="min-w-8 truncate font-mono text-[11px] text-fg-3">{c.git.branch}</span>
+                                <span class="min-w-8 truncate font-mono text-meta text-fg-3">{c.git.branch}</span>
                               </Show>
                             </span>
-                            <GitSummary git={c.git} class="shrink-0 text-[11px]" />
+                            <GitSummary git={c.git} class="shrink-0 text-meta" />
                           </div>
                           <Size path={c.path} machine={props.machine} />
                           {/* Faded rather than disabled while it has changes, so a click says why instead of picking the row. */}
@@ -222,7 +222,7 @@ export function FolderPicker(props: {
                   >
                     <Plus class="size-3.5 shrink-0 text-fg-3" />
                     <span class="text-xs text-fg-2">New worktree</span>
-                    <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-fg-3">
+                    <span class="min-w-0 flex-1 truncate font-mono text-meta text-fg-3">
                       {props.worktreeName ?? 'named by Claude'}
                     </span>
                   </Row>
@@ -301,7 +301,7 @@ function FolderName(props: { folder: Folder; onHide: (button: Element) => void }
   return (
     <div class="min-w-32 flex-1">
       <div class="flex items-center gap-1">
-        <span class="truncate text-[13px] text-fg">{basename(props.folder.path)}</span>
+        <span class="truncate text-ui text-fg">{basename(props.folder.path)}</span>
         <button
           type="button"
           title="Take off this list (nothing on disk changes)"
@@ -314,7 +314,7 @@ function FolderName(props: { folder: Folder; onHide: (button: Element) => void }
           <X class="size-3" />
         </button>
       </div>
-      <div class="truncate text-left font-mono text-[11px] text-fg-3 [direction:rtl]">{ltr(props.folder.path)}</div>
+      <div class="truncate text-left font-mono text-meta text-fg-3 [direction:rtl]">{ltr(props.folder.path)}</div>
     </div>
   )
 }
@@ -323,7 +323,7 @@ function FolderName(props: { folder: Folder; onHide: (button: Element) => void }
 function Size(props: { path: string; machine: string }) {
   const [size] = createResource(() => props.path, (path) => api.folderSize(path, props.machine).then((s) => s.bytes))
   return (
-    <span class="w-14 shrink-0 text-right text-[11px] text-fg-3 tabular-nums" title="Space on disk">
+    <span class="w-14 shrink-0 text-right text-meta text-fg-3 tabular-nums" title="Space on disk">
       <Show when={size.latest !== undefined} fallback={<span class="ml-auto block h-2 w-8 animate-pulse rounded-full bg-fg-3/15" />}>
         {formatBytes(size.latest!)}
       </Show>

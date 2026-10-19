@@ -22,10 +22,10 @@ export function ChatSummary(props: {
   return (
     <>
       <div class="flex items-center gap-2">
-        <span class={`min-w-0 flex-1 truncate text-[13px] ${props.titleClass}`}>{s().title}</span>
+        <span class={`min-w-0 flex-1 truncate text-ui ${props.titleClass}`}>{s().title}</span>
         <ChatDot running={s().running} attention={attention()[s().id]} />
       </div>
-      <div class={`mt-0.5 flex gap-1.5 text-[11px] text-fg-3 tabular-nums ${props.metaClass ?? ''}`}>
+      <div class={`mt-0.5 flex gap-1.5 text-meta text-fg-3 tabular-nums ${props.metaClass ?? ''}`}>
         <span class="truncate">{s().cwd && folderLabel(s().cwd!)}</span>
         <Show when={onMachine(s().machine)}>{(name) => <MachineName machine={s().machine} name={name()} />}</Show>
         <Show when={props.card}>{(c) => <span class="shrink-0">#{c().id}</span>}</Show>

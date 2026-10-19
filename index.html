@@ -7,12 +7,12 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Badger</title>
     <script>
-      // Before first paint, so the page doesn't flash another theme. src/theme.ts takes over after.
+      // Before first paint, so the page doesn't flash another theme. src/theme.ts takes over after; it saves the
+      // choice back as it applies it (older shapes read, a fun palette's own frame filled in), so all this has to do
+      // is resolve "system".
       {
-        const raw = localStorage.getItem('badger.theme')
         const c = { mode: 'system', frame: 'classic' }
-        if (raw === 'light' || raw === 'dark') c.mode = raw
-        else try { Object.assign(c, JSON.parse(raw || '{}')) } catch {}
+        try { Object.assign(c, JSON.parse(localStorage.getItem('badger.theme') || '{}')) } catch {}
         const palette = c.mode === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : c.mode
         const root = document.documentElement
         root.dataset.palette = palette

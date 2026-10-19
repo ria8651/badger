@@ -46,7 +46,7 @@ export function Crashes() {
     void navigator.clipboard.writeText(crashes().map((c) => `${c.stack ?? c.message}${c.count > 1 ? `\n(${c.count} times)` : ''}`).join('\n\n'))
   return (
     <Show when={crashes().length}>
-      <div class="fixed right-4 bottom-4 z-50 w-96 max-w-[calc(100vw-2rem)] animate-[pop-in_120ms_ease-out] rounded-2xl border border-danger/40 bg-bg p-4 text-[13px] pop shadow-(--shadow-pop)">
+      <div class="fixed right-4 bottom-4 z-50 w-96 max-w-[calc(100vw-2rem)] animate-[pop-in_120ms_ease-out] rounded-2xl border border-danger/40 bg-bg p-4 text-ui pop shadow-(--shadow-pop)">
         <div class="flex items-start gap-2.5">
           <TriangleAlert class="mt-0.5 size-4 shrink-0 text-danger" />
           <div class="min-w-0 flex-1">
@@ -66,7 +66,7 @@ export function Crashes() {
                   <span class="text-fg-3"> ×{c.count}</span>
                 </Show>
                 <Show when={open() && c.stack}>
-                  <pre class="mt-1 whitespace-pre-wrap text-[11px] text-fg-3">{c.stack}</pre>
+                  <pre class="mt-1 whitespace-pre-wrap text-meta text-fg-3">{c.stack}</pre>
                 </Show>
               </div>
             )}

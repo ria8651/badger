@@ -182,7 +182,7 @@ function questionAnswers(questions: Question[], result: ToolResult): (string | u
 /** What the user answered, laid out like the questions were. */
 function Answers(props: { questions: Question[]; answers: (string | undefined)[] }) {
   return (
-    <div class="my-3 space-y-2.5 border-l-2 border-line pl-4 text-[13px]">
+    <div class="my-3 space-y-2.5 border-l-2 border-line pl-4 text-ui">
       <For each={props.questions}>
         {(q, i) => (
           <div>
@@ -278,7 +278,7 @@ export function Disclosure(props: {
     ),
   )
   return (
-    <div data-id={props.id} class="text-[13px]">
+    <div data-id={props.id} class="text-ui">
       <button
         onClick={toggle}
         class="group -mx-2 flex w-[calc(100%+1rem)] items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-surface pointer-coarse:py-1.5"
@@ -573,7 +573,7 @@ interface TodoItem {
 
 function Todos(props: { todos: TodoItem[] }) {
   return (
-    <div class="my-1 space-y-1 text-[13px]">
+    <div class="my-1 space-y-1 text-ui">
       <For each={props.todos}>
         {(t) => (
           <div class="flex items-start gap-2.5">

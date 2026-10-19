@@ -1,7 +1,7 @@
 import { Show, createEffect, createSignal, on, onCleanup } from 'solid-js'
 import { Portal } from 'solid-js/web'
 import { ChevronLeft, ChevronRight, Download, X, ZoomIn, ZoomOut } from '../icons'
-import { modalOpen, setModalOpen } from './ui.tsx'
+import { openModal } from './ui.tsx'
 
 const [shown, setShown] = createSignal<{ urls: string[]; index: number }>()
 
@@ -48,9 +48,7 @@ function Viewer(props: { urls: string[]; index: number; onClose: () => void }) {
   const many = () => props.urls.length > 1
 
   // Shortcuts behind this leave its keys be, as for any modal.
-  const wasModal = modalOpen()
-  setModalOpen(true)
-  onCleanup(() => setModalOpen(wasModal))
+  onCleanup(openModal().release)
 
   const reset = () => {
     setScale(1)

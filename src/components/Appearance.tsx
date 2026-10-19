@@ -20,12 +20,12 @@ export function Appearance() {
   return (
     <div>
       <h3 class="text-sm font-medium text-fg">Theme</h3>
-      <p class="mt-1 text-[13px] leading-relaxed text-fg-2">Saved in this browser, so a phone and a laptop can each have their own.</p>
+      <p class="mt-1 text-ui leading-relaxed text-fg-2">Saved in this browser, so a phone and a laptop can each have their own.</p>
 
       <For each={sections}>
         {(section) => (
           <div class="mt-5">
-            <div class="mb-2 flex items-baseline gap-2 text-[13px]">
+            <div class="mb-2 flex items-baseline gap-2 text-ui">
               <span class="font-medium text-fg">{section.label}</span>
               <span class="text-fg-3">{section.description}</span>
             </div>
@@ -48,7 +48,7 @@ export function Appearance() {
                         <Preview palette="dark" frame={theme.frame} class="[clip-path:polygon(100%_0,100%_100%,0_100%)]" />
                       </Show>
                     </div>
-                    <div class={`mt-1.5 text-[13px] ${selected(theme.mode, theme.frame) ? 'text-fg' : 'text-fg-2 group-hover:text-fg'}`}>{theme.label}</div>
+                    <div class={`mt-1.5 text-ui ${selected(theme.mode, theme.frame) ? 'text-fg' : 'text-fg-2 group-hover:text-fg'}`}>{theme.label}</div>
                   </button>
                 )}
               </For>

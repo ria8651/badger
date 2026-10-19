@@ -55,7 +55,19 @@ export const terminalWs = (t: TerminalInfo): Ws => ({ machine: t.machine || LOCA
 
 export const inWs = (t: TerminalInfo, ws: Ws) => t.root === ws.root && (t.machine || LOCAL) === ws.machine
 
-const roots = new Map<string, { get: Accessor<string | undefined>; set: (root: string) => void }>()
+/**
+ * Roots by folder, the most recently used last. Past ROOTS_KEPT the oldest are let go, so the map doesn't grow
+ * for ever; one let go is looked up again if it's wanted.
+ */
+const roots = new Map<string, { get: Accessor<string | undefined>; set: (root: string) => void; stop: () => void }>()
+const ROOTS_KEPT = 500
+const keep = (key: string, entry: { get: Accessor<string | undefined>; set: (root: string) => void; stop: () => void }) => {
+  roots.set(key, entry)
+  if (roots.size <= ROOTS_KEPT) return
+  const [oldest, old] = roots.entries().next().value!
+  roots.delete(oldest)
+  old.stop()
+}
 
 /** How long a workspace root that couldn't be looked up stands in as its folder before it's asked for again; doubling each time. */
 const RETRY_ROOT_MS = 30 * 1000
@@ -82,7 +94,7 @@ export function knowRoots(known: { machine: string; cwd: string; root: string }[
       if (found.get() !== root) (retries.delete(key), found.set(root))
     } else {
       const [get, set] = createSignal<string | undefined>(root)
-      roots.set(key, { get, set })
+      keep(key, { get, set, stop: () => {} })
     }
   }
 }
@@ -98,27 +110,34 @@ export const knownRoot = (machine: string, cwd: string) => roots.get(wsKey({ mac
  */
 export function workspaceOf(machine: string, cwd: string): Accessor<string | undefined> {
   const key = wsKey({ machine, root: cwd })
-  let found = roots.get(key)
-  if (!found) {
-    const [get, set] = createSignal<string>()
-    let wait = RETRY_ROOT_MS
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const ask = () => {
-      clearTimeout(timer)
-      api.workspace(cwd, machine).then(
-        (r) => set(r.root),
-        () => {
-          set((last) => last ?? cwd)
-          retries.set(key, { machine, again: ask })
-          timer = setTimeout(() => retries.get(key)?.again === ask && (retries.delete(key), ask()), wait)
-          wait = Math.min(wait * 2, RETRY_ROOT_MAX_MS)
-        },
-      )
-    }
-    ask()
-    roots.set(key, (found = { get, set }))
+  const found = roots.get(key)
+  if (found) {
+    roots.delete(key)
+    roots.set(key, found)
+    return found.get
   }
-  return found.get
+  const [get, set] = createSignal<string>()
+  let wait = RETRY_ROOT_MS
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const ask = () => {
+    clearTimeout(timer)
+    api.workspace(cwd, machine).then(
+      (r) => set(r.root),
+      () => {
+        set((last) => last ?? cwd)
+        retries.set(key, { machine, again: ask })
+        timer = setTimeout(() => retries.get(key)?.again === ask && (retries.delete(key), ask()), wait)
+        wait = Math.min(wait * 2, RETRY_ROOT_MAX_MS)
+      },
+    )
+  }
+  ask()
+  const stop = () => {
+    clearTimeout(timer)
+    if (retries.get(key)?.again === ask) retries.delete(key)
+  }
+  keep(key, { get, set, stop })
+  return get
 }
 
 /** What a terminal is called: its name, else the command it runs, else (from older hosts) whatever the shell last titled it. */

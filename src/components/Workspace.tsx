@@ -25,7 +25,6 @@ import {
   screenTree,
   shownTree,
   setActive,
-  setFocusRequest,
   togglePanels,
   updateLayout,
   viewKey,
@@ -47,9 +46,10 @@ import { dragSidebar } from '../sidebar.ts'
 import { previewUrl } from '../previews.ts'
 import { inWs, terminalLabel, terminalTooltip, terminals, terminalsListed, type Ws } from '../terminals.ts'
 import { PreviewFrame } from './PreviewFrame.tsx'
-import { PortButtons, RenameTerminal, RestartButton, StatusDot, ghost } from './Terminals.tsx'
+import { PortButtons, RenameTerminal, RestartButton, StatusDot } from './Terminals.tsx'
 import { TerminalView } from './TerminalView.tsx'
-import { LiveDot, modalOpen } from './ui.tsx'
+import { showError } from './Popover.tsx'
+import { LiveDot, ghostClass, modalOpen } from './ui.tsx'
 
 /** Height of a group's tab bar, which its views sit under. */
 const BAR = 36
@@ -216,7 +216,9 @@ export function Workspace(props: {
     props.onFocusChat()
   }
 
-  const newTerminal = (where?: Parameters<typeof openTerminal>[3]) => props.ws && props.cwd && void openTerminal(props.ws, props.sessionId, props.cwd, where)
+  const terminalFailed = (e: Error) => showError("Couldn't open a terminal", e.message)
+  const newTerminal = (where?: Parameters<typeof openTerminal>[3]) =>
+    props.ws && props.cwd && void openTerminal(props.ws, props.sessionId, props.cwd, where).catch(terminalFailed)
 
   // ── Resizing ──
 
@@ -398,7 +400,7 @@ export function Workspace(props: {
         return props.onFocusChat()
       case 'p':
         if (panelsShown(props.ws!, props.sessionId)) return hide()
-        return props.cwd && togglePanels(props.ws!, props.sessionId, props.cwd)
+        return props.cwd && void togglePanels(props.ws!, props.sessionId, props.cwd).catch(terminalFailed)
     }
   }
   const cancelLeader = () => setLeader(false)
@@ -542,7 +544,7 @@ export function Workspace(props: {
               }}
             </For>
           </div>
-          <button onClick={() => newTerminal({ group: g().id })} title={`New terminal (${LEADER} T)`} class={ghost()}>
+          <button onClick={() => newTerminal({ group: g().id })} title={`New terminal (${LEADER} T)`} class={ghostClass()}>
             <Plus class="size-3.5" />
           </button>
           <div class="flex-1" />
@@ -551,7 +553,7 @@ export function Workspace(props: {
               <>
                 <PortButtons terminal={t()} onOpen={(port) => props.ws && openPreview(props.ws, port, { name: terminalLabel(t()) })} />
                 <RestartButton terminal={t()} />
-                <button onClick={() => props.onOpenPage(t().id)} title="Open on its own page" class={ghost()}>
+                <button onClick={() => props.onOpenPage(t().id)} title="Open on its own page" class={ghostClass()}>
                   <SquareArrowOutUpRight class="size-3.5" />
                 </button>
               </>
@@ -560,12 +562,12 @@ export function Workspace(props: {
           <Show when={preview()}>
             {(v) => (
               <>
-                <button onClick={() => props.ws && reloadPreview(props.ws, v())} title="Reload" class={ghost()}>
+                <button onClick={() => props.ws && reloadPreview(props.ws, v())} title="Reload" class={ghostClass()}>
                   <RotateCw class="size-3.5" />
                 </button>
                 <Show when={previewUrl(v().id, v().path, machine())}>
                   {(url) => (
-                    <a href={url()} target="_blank" rel="noopener" title="Open in a new browser tab" class={ghost()}>
+                    <a href={url()} target="_blank" rel="noopener" title="Open in a new browser tab" class={ghostClass()}>
                       <SquareArrowOutUpRight class="size-3.5" />
                     </a>
                   )}
@@ -573,7 +575,7 @@ export function Workspace(props: {
               </>
             )}
           </Show>
-          <button onClick={hide} title={`Hide panels (${LEADER} P)`} class={ghost()}>
+          <button onClick={hide} title={`Hide panels (${LEADER} P)`} class={ghostClass()}>
             <Minimize2 class="size-3.5" />
           </button>
         </div>
@@ -690,8 +692,8 @@ export function Workspace(props: {
       </Show>
 
       <Show when={leader()}>
-        <div class="pointer-events-none absolute bottom-4 left-1/2 z-50 w-64 -translate-x-1/2 animate-[pop-in_120ms_ease-out] rounded-xl border border-edge bg-bg p-2 text-[13px] pop shadow-(--shadow-pop)">
-          <div class="px-1.5 pb-1 text-[11px] text-fg-3">{LEADER}, then</div>
+        <div class="pointer-events-none absolute bottom-4 left-1/2 z-50 w-64 -translate-x-1/2 animate-[pop-in_120ms_ease-out] rounded-xl border border-edge bg-bg p-2 text-ui pop shadow-(--shadow-pop)">
+          <div class="px-1.5 pb-1 text-meta text-fg-3">{LEADER}, then</div>
           <For each={BINDINGS}>
             {([key, what]) => (
               <div class="flex items-center gap-3 px-1.5 py-0.5">

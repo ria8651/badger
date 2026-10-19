@@ -102,6 +102,11 @@ export function collectTasks(messages: WireMessage[]): Map<string, Task> {
   return byToolUse
 }
 
+const TASK_EVENTS = new Set(['task_started', 'task_progress', 'task_updated', 'task_notification'])
+
+/** Whether a message says anything about tasks, so what collectTasks makes of the messages can change with it. */
+export const affectsTasks = (m: WireMessage) => (m.type === 'system' ? TASK_EVENTS.has(m.subtype as string) : m.type === 'user' && !!notification(m))
+
 /** The `<task-notification>` Claude was given when a background task ended, as saved in the transcript. */
 function notification(m: WireMessage) {
   const content = (m.message as { content?: unknown } | undefined)?.content

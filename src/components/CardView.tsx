@@ -1,10 +1,11 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, on, type JSX } from 'solid-js'
 import { ChevronDown, FolderInput, GitBranch, Link, Pencil, Plus, Trash2, X } from '../icons'
-import { ancestors, descendants, projectOf } from '../../shared/cardTree.ts'
+import { ancestors, descendants } from '../../shared/cardTree.ts'
 import { CARD_STATUSES, type Card, type SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { folderLabel, lastWorkedIn, worktreeOf } from '../folders.ts'
-import { Columns, STATUS_LABELS } from './Board.tsx'
+import { Columns } from './Board.tsx'
+import { STATUS_LABELS } from '../stores/cards.ts'
 import { MarkdownEditor } from './MarkdownEditor.tsx'
 import { RenameChat } from './RenameChat.tsx'
 import { confirmBy } from './Popover.tsx'
@@ -12,6 +13,8 @@ import { ChatDot, Menu, SearchMenu, Select, type SearchItem } from './ui.tsx'
 import { ChatSummary, MachineName } from './ChatSummary.tsx'
 import { LOCAL, onMachine } from '../machines.ts'
 import { attention } from '../attention.ts'
+import { cardOf, cards, deleteCard, linkSession, projectOf, unlinkSession, updateCard } from '../stores/cards.ts'
+import { sessions } from '../stores/sessions.ts'
 
 const STATUS_OPTIONS = CARD_STATUSES.map((value) => ({ value, label: STATUS_LABELS[value] }))
 
@@ -27,9 +30,6 @@ const menuTrigger = (open: boolean) =>
 export function CardView(props: {
   card: Card
   /** Every card, for the project above this one and the board inside it. */
-  cards: Card[]
-  setCards: (cards: Card[]) => void
-  sessions: SessionSummary[]
   /** Opens a card, or the projects board for null. */
   onOpenCard: (id: number | null) => void
   onOpenChat: (id: string) => void
@@ -37,33 +37,32 @@ export function CardView(props: {
   onNewChat: (from?: { cwd: string; machine: string; worktree: boolean }) => void
 }) {
   const isProject = () => props.card.parentId === null
-  const path = createMemo(() => ancestors(props.cards, props.card.id))
-  const inside = createMemo(() => props.cards.filter((c) => c.parentId === props.card.id))
+  const path = createMemo(() => ancestors(cards(), props.card.id))
+  const inside = createMemo(() => cards().filter((c) => c.parentId === props.card.id))
   /** Projects it can move into, or null to make it a project itself. */
   const destinations = createMemo(() => {
-    const below = new Set(descendants(props.cards, props.card.id).map((c) => c.id))
-    const projects = props.cards.filter((c) => c.parentId === null && c.id !== props.card.id && !below.has(c.id) && c.status !== 'done')
+    const below = new Set(descendants(cards(), props.card.id).map((c) => c.id))
+    const projects = cards().filter((c) => c.parentId === null && c.id !== props.card.id && !below.has(c.id) && c.status !== 'done')
     return [null, ...projects.sort((a, b) => a.title.localeCompare(b.title))]
   })
   // Linked ids with no transcript yet (a chat opened but never sent) are left out.
-  const chats = createMemo(() => props.sessions.filter((s) => props.card.sessionIds.includes(s.id)))
+  const chats = createMemo(() => sessions().filter((s) => props.card.sessionIds.includes(s.id)))
   /**
    * Chats that could go on this card: ones on no card first, then ones it would take off another card, then archived
    * ones, greyed. Newest first in each.
    */
   const linkable = (q: string): SearchItem[] => {
-    const cardOf = new Map(props.cards.flatMap((c) => c.sessionIds.map((id) => [id, c] as const)))
     const needle = q.toLowerCase()
-    const found = props.sessions.filter(
+    const found = sessions().filter(
       (s) =>
         !props.card.sessionIds.includes(s.id) &&
         (!q || s.title.toLowerCase().includes(needle) || (s.cwd && folderLabel(s.cwd).toLowerCase().includes(needle))),
     )
-    const rank = (s: SessionSummary) => (s.archived ? 2 : 0) + (cardOf.has(s.id) ? 1 : 0)
+    const rank = (s: SessionSummary) => (s.archived ? 2 : 0) + (cardOf(s.id) ? 1 : 0)
     const item = (s: SessionSummary): SearchItem => ({
       label: s.title,
-      render: () => <ChatSummary session={s} card={cardOf.get(s.id)} titleClass={s.archived ? 'text-fg-3' : 'text-fg'} />,
-      pick: () => api.linkSession(props.card.id, s.id),
+      render: () => <ChatSummary session={s} card={cardOf(s.id)} titleClass={s.archived ? 'text-fg-3' : 'text-fg'} />,
+      pick: () => void linkSession(props.card.id, s.id),
     })
     // Capped so a long history stays quick to open; searching reaches the rest.
     return found.sort((a, b) => rank(a) - rank(b) || b.lastModified - a.lastModified).slice(0, 100).map(item)
@@ -76,9 +75,9 @@ export function CardView(props: {
   // A new chat picks up where the card's latest chat ran, else where its project's work happens, but not in another card's worktree.
   // Its folder can still be changed before the first message.
   const newChat = () => {
-    const project = projectOf(props.cards, props.card.id)
-    const projectIds = project ? [project, ...descendants(props.cards, project.id)].flatMap((c) => c.sessionIds) : []
-    const fallback = lastWorkedIn(props.sessions.filter((s) => projectIds.includes(s.id)))
+    const project = projectOf(props.card.id)
+    const projectIds = project ? [project, ...descendants(cards(), project.id)].flatMap((c) => c.sessionIds) : []
+    const fallback = lastWorkedIn(sessions().filter((s) => projectIds.includes(s.id)))
     props.onNewChat(lastWorkedIn(chats()) ?? (fallback && { ...fallback, worktree: false }))
   }
   // A project with nothing on its board yet opens with its brief showing, so there's somewhere to start.
@@ -87,17 +86,17 @@ export function CardView(props: {
 
   const saveTitle = (title: string) => {
     if (!title.trim() || title.trim() === props.card.title.trim()) return
-    api.updateCard(props.card.id, { title })
+    void updateCard(props.card.id, { title })
   }
 
   const remove = async (e: MouseEvent) => {
-    const n = descendants(props.cards, props.card.id).length
+    const n = descendants(cards(), props.card.id).length
     const what = isProject() ? `project "${props.card.title}"` : `card #${props.card.id}`
     const inside = n ? ` and the ${n === 1 ? 'card' : `${n} cards`} inside it` : ''
     const ask = { message: `Delete ${what}${inside}?`, notes: ['Its chats are kept.'], action: 'Delete' }
     if (!(await confirmBy(e.currentTarget as Element, ask))) return
     const parent = props.card.parentId
-    api.deleteCard(props.card.id).then(() => props.onOpenCard(parent))
+    deleteCard(props.card.id).then(() => props.onOpenCard(parent))
   }
 
   const actions = () => (
@@ -106,7 +105,7 @@ export function CardView(props: {
         items={destinations().map((c) =>
           c ? { label: c.title, description: `#${c.id}`, selected: c.id === props.card.parentId } : { label: 'Make it a project', selected: isProject() },
         )}
-        onPick={(i) => api.updateCard(props.card.id, { parentId: destinations()[i]?.id ?? null })}
+        onPick={(i) => void updateCard(props.card.id, { parentId: destinations()[i]?.id ?? null })}
         placement="bottom"
         class="right-0 left-auto! max-h-80 w-72 overflow-y-auto"
         triggerClass={menuTrigger}
@@ -142,7 +141,7 @@ export function CardView(props: {
         class="block w-full resize-none bg-transparent text-xl leading-snug font-medium outline-none [field-sizing:content]"
       />
       <div class="mt-2 -ml-2">
-        <Select value={props.card.status} options={STATUS_OPTIONS} onChange={(status) => api.updateCard(props.card.id, { status })} placement="bottom" title="Status" />
+        <Select value={props.card.status} options={STATUS_OPTIONS} onChange={(status) => void updateCard(props.card.id, { status })} placement="bottom" title="Status" />
       </div>
 
       {/* Keyed so switching cards saves the last one's edits to it before loading the next. */}
@@ -150,7 +149,7 @@ export function CardView(props: {
         {(id) => (
           <MarkdownEditor
             value={props.card.description}
-            onSave={(description) => api.updateCard(id, { description })}
+            onSave={(description) => updateCard(id, { description })}
             placeholder={isProject() ? 'What this project is for, and anything every chat in it should know' : 'Describe the work'}
             class="mt-4 min-h-[6.6em]"
           />
@@ -158,7 +157,7 @@ export function CardView(props: {
       </Show>
 
       <div class="mt-8 flex items-center gap-1 border-b border-line pb-2">
-        <h2 class="mr-auto text-[13px] font-medium text-fg-2">Chats</h2>
+        <h2 class="mr-auto text-ui font-medium text-fg-2">Chats</h2>
         <SearchMenu
           items={linkable}
           placeholder="Find a chat by title or folder"
@@ -178,7 +177,7 @@ export function CardView(props: {
       <Show
         when={chats().length}
         fallback={
-          <p class="py-3 text-[13px] text-fg-3">
+          <p class="py-3 text-ui text-fg-3">
             {isProject() ? 'No chats on the project itself. Chats about one piece of work go on its card.' : 'No chats yet. Chats can be in any repo.'}
           </p>
         }
@@ -187,10 +186,10 @@ export function CardView(props: {
           {(s) => (
             <div class="group -mx-2 flex items-center gap-2 rounded-lg px-2 transition-colors hover:bg-surface/60">
               <button onClick={() => props.onOpenChat(s.id)} class="flex min-w-0 flex-1 items-center gap-2 py-2.5 text-left">
-                <span class="min-w-0 flex-1 truncate text-[13px] text-fg-2 group-hover:text-fg">{s.title}</span>
+                <span class="min-w-0 flex-1 truncate text-ui text-fg-2 group-hover:text-fg">{s.title}</span>
                 <ChatDot running={s.running} attention={attention()[s.id]} />
-                <span class="max-w-[40%] shrink-0 truncate text-[11px] text-fg-3">{s.cwd && folderLabel(s.cwd)}</span>
-                <Show when={onMachine(s.machine)}>{(name) => <MachineName machine={s.machine} name={name()} class="text-[11px] text-fg-3" />}</Show>
+                <span class="max-w-[40%] shrink-0 truncate text-meta text-fg-3">{s.cwd && folderLabel(s.cwd)}</span>
+                <Show when={onMachine(s.machine)}>{(name) => <MachineName machine={s.machine} name={name()} class="text-meta text-fg-3" />}</Show>
               </button>
               <RenameChat
                 session={s}
@@ -203,7 +202,7 @@ export function CardView(props: {
                 trigger={() => <Pencil class="size-3.5" />}
               />
               <button
-                onClick={() => api.unlinkSession(props.card.id, s.id)}
+                onClick={() => void unlinkSession(props.card.id, s.id)}
                 title="Unlink chat"
                 class="grid size-6 place-items-center rounded-button-md text-fg-3 opacity-0 transition hover:bg-surface hover:text-fg group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:size-9 pointer-coarse:opacity-100"
               >
@@ -215,11 +214,11 @@ export function CardView(props: {
       </Show>
 
       <Show when={worktrees().length}>
-        <h2 class="mt-8 border-b border-line pb-2 text-[13px] font-medium text-fg-2">Worktrees</h2>
+        <h2 class="mt-8 border-b border-line pb-2 text-ui font-medium text-fg-2">Worktrees</h2>
         <For each={worktrees()}>
           {(key) => {
             const [machine, path] = JSON.parse(key) as [string, string]
-            return <WorktreeRow path={path} machine={machine} sessions={props.sessions} />
+            return <WorktreeRow path={path} machine={machine} />
           }}
         </For>
       </Show>
@@ -227,7 +226,7 @@ export function CardView(props: {
   )
 
   const board = (cls: string) => (
-    <Columns cards={props.cards} sessions={props.sessions} setCards={props.setCards} onOpen={props.onOpenCard} parentId={props.card.id} class={cls} />
+    <Columns onOpen={props.onOpenCard} parentId={props.card.id} class={cls} />
   )
 
   return (
@@ -235,7 +234,7 @@ export function CardView(props: {
       when={isProject()}
       fallback={
         <div class="flex h-full min-w-0 flex-1 flex-col overflow-y-auto">
-          <div class="bar flex h-12 shrink-0 items-center gap-1 px-5 text-[13px]">
+          <div class="bar flex h-12 shrink-0 items-center gap-1 px-5 text-ui">
             <button onClick={() => props.onOpenCard(null)} class="text-fg-3 transition-colors hover:text-fg">
               Projects
             </button>
@@ -261,7 +260,7 @@ export function CardView(props: {
       }
     >
       <div class="flex h-full min-w-0 flex-1 flex-col">
-        <div class="bar flex h-12 shrink-0 items-center gap-1 px-5 text-[13px]">
+        <div class="bar flex h-12 shrink-0 items-center gap-1 px-5 text-ui">
           <button onClick={() => props.onOpenCard(null)} class="text-fg-3 transition-colors hover:text-fg">
             Projects
           </button>
@@ -293,10 +292,10 @@ export function CardView(props: {
 }
 
 /** One worktree's branch and what's not merged yet, with a way to remove it once the work is in. */
-function WorktreeRow(props: { path: string; machine: string; sessions: SessionSummary[] }) {
+function WorktreeRow(props: { path: string; machine: string }) {
   // Refetched whenever the chat list changes, which is roughly whenever work happened.
   const [status, { refetch }] = createResource(
-    () => [props.path, props.machine, props.sessions] as const,
+    () => [props.path, props.machine, sessions()] as const,
     ([path, machine]) => api.worktree(path, machine),
   )
   const [error, setError] = createSignal<string>()
@@ -321,13 +320,13 @@ function WorktreeRow(props: { path: string; machine: string; sessions: SessionSu
   }
   return (
     <div class="group -mx-2 rounded-lg px-2 py-2.5 transition-colors hover:bg-surface/60">
-      <div class="flex items-center gap-2 text-[13px]">
+      <div class="flex items-center gap-2 text-ui">
         <GitBranch class="size-3.5 shrink-0 text-fg-3" />
         <span class="min-w-0 truncate font-mono text-xs text-fg-2" title={props.path}>
           {status()?.branch || folderLabel(props.path)}
         </span>
-        <Show when={onMachine(props.machine)}>{(name) => <MachineName machine={props.machine} name={name()} class="text-[11px] text-fg-3" />}</Show>
-        <span class="ml-auto shrink-0 text-[11px] text-fg-3">{summary()}</span>
+        <Show when={onMachine(props.machine)}>{(name) => <MachineName machine={props.machine} name={name()} class="text-meta text-fg-3" />}</Show>
+        <span class="ml-auto shrink-0 text-meta text-fg-3">{summary()}</span>
         <button
           onClick={remove}
           title="Remove worktree (its branch goes too, if merged)"
