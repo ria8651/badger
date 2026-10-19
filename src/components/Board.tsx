@@ -1,12 +1,12 @@
 import { For, Show, createSignal } from 'solid-js'
 import { ArrowLeftRight, GitBranch, ListChecks, MessageSquare, Plus } from '../icons'
 import { descendants } from '../../shared/cardTree.ts'
-import { CARD_STATUSES, type Card, type CardStatus, type SessionSummary } from '../../shared/protocol.ts'
-import { api } from '../api.ts'
+import { CARD_STATUSES, type CardStatus } from '../../shared/protocol.ts'
 import { folderLabel, worktreeOf } from '../folders.ts'
 import { ChatDot, inputClass } from './ui.tsx'
 import { attention } from '../attention.ts'
-import { STATUS_LABELS } from '../stores/cards.ts'
+import { STATUS_LABELS, cards, createCard, updateCard } from '../stores/cards.ts'
+import { sessions } from '../stores/sessions.ts'
 
 /** Where a dragged card would land: before the card at `index` in the column, ignoring the dragged card itself. */
 interface DropTarget {
@@ -16,10 +16,6 @@ interface DropTarget {
 
 type BoardProps = {
   /** Every card; each board shows the ones inside its parent. */
-  cards: Card[]
-  sessions: SessionSummary[]
-  /** Optimistic local update; the server's cards_changed brings the truth. */
-  setCards: (cards: Card[]) => void
   onOpen: (id: number) => void
 }
 
@@ -41,7 +37,7 @@ export function Columns(props: BoardProps & { parentId: number | null; class?: s
   const [target, setTarget] = createSignal<DropTarget | null>(null)
   const [adding, setAdding] = createSignal<CardStatus | null>(null)
 
-  const column = (status: CardStatus) => props.cards.filter((c) => (c.parentId ?? null) === props.parentId && c.status === status).sort((a, b) => a.position - b.position)
+  const column = (status: CardStatus) => cards().filter((c) => (c.parentId ?? null) === props.parentId && c.status === status).sort((a, b) => a.position - b.position)
   const others = (status: CardStatus) => column(status).filter((c) => c.id !== dragging())
 
   const drop = () => {
@@ -54,20 +50,18 @@ export function Columns(props: BoardProps & { parentId: number | null; class?: s
     const prev = list[t.index - 1]?.position
     const next = list[t.index]?.position
     const position = prev === undefined ? (next === undefined ? 1 : next - 1) : next === undefined ? prev + 1 : (prev + next) / 2
-    props.setCards(props.cards.map((c) => (c.id === id ? { ...c, status: t.status, position } : c)))
-    api.updateCard(id, { status: t.status, position })
+    void updateCard(id, { status: t.status, position })
   }
 
   /** Without dragging, as on touch screens: to the bottom of another column. */
   const move = (id: number, status: CardStatus) => {
     const position = Math.max(0, ...column(status).map((c) => c.position)) + 1
-    props.setCards(props.cards.map((c) => (c.id === id ? { ...c, status, position } : c)))
-    api.updateCard(id, { status, position })
+    void updateCard(id, { status, position })
   }
 
   const create = (status: CardStatus, title: string) => {
     if (!title.trim()) return setAdding(null)
-    api.createCard({ title, status, parentId: props.parentId })
+    void createCard({ title, status, parentId: props.parentId })
   }
 
   return (
@@ -106,11 +100,11 @@ export function Columns(props: BoardProps & { parentId: number | null; class?: s
               >
                 <For each={column(status)}>
                   {(card) => {
-                    const chats = () => props.sessions.filter((s) => card.sessionIds.includes(s.id))
-                    const inside = () => props.cards.filter((c) => c.parentId === card.id)
+                    const chats = () => sessions().filter((s) => card.sessionIds.includes(s.id))
+                    const inside = () => cards().filter((c) => c.parentId === card.id)
                     const done = () => inside().filter((c) => c.status === 'done').length
                     // Chats on the cards inside it count too, so a project shows when anything in it needs you.
-                    const allIds = () => [card, ...descendants(props.cards, card.id)].flatMap((c) => c.sessionIds)
+                    const allIds = () => [card, ...descendants(cards(), card.id)].flatMap((c) => c.sessionIds)
                     // The most urgent of its chats'.
                     const cardAttention = () => {
                       const states = allIds().map((id) => attention()[id])
@@ -169,7 +163,7 @@ export function Columns(props: BoardProps & { parentId: number | null; class?: s
                               </Show>
                               <ChatDot
                                 class="ml-auto"
-                                running={props.sessions.some((s) => s.running && allIds().includes(s.id))}
+                                running={sessions().some((s) => s.running && allIds().includes(s.id))}
                                 attention={cardAttention()}
                               />
                             </div>

@@ -1,9 +1,8 @@
-import { createSignal } from 'solid-js'
 import { LOCAL, machineOf, machines } from './machines.ts'
+import { config } from './stores/config.ts'
 
 /** Where folderless chats run on the hub's own machine, from the server's config. */
-const [scratch, setScratch] = createSignal<string>()
-export { setScratch }
+const scratch = () => config()?.scratchCwd
 
 /** Where a machine's folderless chats run: the hub's from its config, another's once its runner has said. */
 export const scratchDir = (machine: string = LOCAL) => machineOf(machine)?.scratchDir ?? (machine === LOCAL ? scratch() : undefined)

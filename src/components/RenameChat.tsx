@@ -3,6 +3,7 @@ import { Portal } from 'solid-js/web'
 import { RefreshCw, Sparkles } from '../icons'
 import type { SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
+import { renameSession } from '../stores/sessions.ts'
 import { showError } from './Popover.tsx'
 import { createDismiss, floatBy } from './ui.tsx'
 
@@ -14,7 +15,6 @@ import { createDismiss, floatBy } from './ui.tsx'
  */
 export function RenameChat(props: {
   session: SessionSummary
-  onSaved?: (title: string) => void
   trigger: (open: () => boolean) => JSX.Element
   triggerClass: (open: boolean) => string
   title?: string
@@ -55,8 +55,7 @@ export function RenameChat(props: {
     props.onOpenChange?.(false)
     title = title?.trim()
     if (title && title !== props.session.title) {
-      props.onSaved?.(title)
-      api.rename(props.session.id, title).catch((e: Error) => showError("Couldn't rename it", e.message, trigger))
+      renameSession(props.session.id, title).catch((e: Error) => showError("Couldn't rename it", e.message, trigger))
     }
     if (refocus) trigger.focus()
   }

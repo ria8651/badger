@@ -1,9 +1,11 @@
 import { For, Show, createEffect, createMemo, createSignal, mapArray, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
 import { ArrowUp, FolderX, GitBranch, MonitorOff, Paperclip, Pencil, ListChevronsDownUp, ListChevronsUpDown, SlidersHorizontal, Square, WifiOff, X } from '../icons'
 import { isLongPaste } from '../../shared/pastes.ts'
-import { IMAGE_EXTENSIONS, type Card, type DraftAttachments, type PermissionMode, type QueuedMessage, type SessionSummary } from '../../shared/protocol.ts'
+import { IMAGE_EXTENSIONS, type DraftAttachments, type PermissionMode, type QueuedMessage } from '../../shared/protocol.ts'
 import { chatActions } from '../actions.ts'
 import { navigate } from '../router.tsx'
+import { cardOf } from '../stores/cards.ts'
+import { sessionById } from '../stores/sessions.ts'
 import { api, connected, socket } from '../api.ts'
 import { readImage } from '../images.ts'
 import { lastModel, modelValue, models, setLastModel } from '../models.ts'
@@ -44,18 +46,11 @@ export function Chat(props: {
   draftMachine?: string
   /** Given, the empty chat offers runners, folders and worktrees to start in until the first message goes out. */
   onPickCwd?: (cwd: string, machine: string) => void
-  /** The card this chat is on. A worktree it starts in is named after the card; otherwise Claude names it. */
-  card?: Card
   /** Start with "New worktree" picked. */
   worktree?: boolean
   onPickWorktree?: (worktree: boolean) => void
   /** Called once, when the first message is sent. */
   onStart?: () => void
-  /** The chat as the sidebar lists it, for the header's title, move, rename and archive. Absent until it's listed. */
-  session?: SessionSummary
-  cards: Card[]
-  onRenamed: (title: string) => void
-  onToggleArchived: () => void
   /** The top bar on narrow screens, to go above the chat's header. */
   bar: JSX.Element
 }) {
@@ -113,7 +108,9 @@ export function Chat(props: {
     return options.some((o) => o.value === current) ? options : [...options, { value: current, label: current }]
   })
   const [inWorktree, setInWorktree] = createSignal(!!props.worktree)
-  const worktreeName = () => props.card && cardWorktreeName(props.card)
+  /** The card this chat is on. A worktree it starts in is named after the card; otherwise Claude names it. */
+  const card = () => cardOf(props.sessionId)
+  const worktreeName = () => card() && cardWorktreeName(card()!)
   // Offered before the first message, for a repo checkout that isn't already a worktree.
   const canWorktree = () => !started() && !state.cwd && !!cwd() && !isScratch(cwd()) && !worktreeOf(cwd())
   let scroller!: HTMLDivElement
@@ -348,7 +345,7 @@ export function Chat(props: {
   }
 
   // A card's new chat sends the card with its first message, so it's shown as attached until then.
-  const pendingCard = () => (props.card && state.loaded && state.messages.length === 0 ? { card: props.card } : undefined)
+  const pendingCard = () => (card() && state.loaded && state.messages.length === 0 ? { card: card()! } : undefined)
   const interrupt = () => socket.send({ type: 'interrupt', sessionId: props.sessionId })
   const unqueue = (id: string, edit = false) => {
     // Saved first so the server puts the message ahead of what's typed, and the composer takes the result.
@@ -380,10 +377,7 @@ export function Chat(props: {
         <div class={`md:contents ${cwd() ? '' : 'border-b border-line'}`}>{props.bar}</div>
         <Show when={cwd()}>
           <ChatHeader
-            session={props.session}
-            cards={props.cards}
-            onRenamed={props.onRenamed}
-            onToggleArchived={props.onToggleArchived}
+            session={sessionById(props.sessionId)}
             cwd={cwd()}
             machine={machine()}
             ws={ws()}

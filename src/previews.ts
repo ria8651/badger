@@ -1,5 +1,6 @@
 import { createSignal } from 'solid-js'
-import { api, socket } from './api.ts'
+import { socket } from './api.ts'
+import { configReady } from './stores/config.ts'
 import { openPreview } from './layout.ts'
 import { LOCAL } from './machines.ts'
 
@@ -23,7 +24,7 @@ function templateFor(serverPort: number): string | undefined {
 /** The server gives Claude these URLs, so they work wherever the user is looking from. */
 const tellServer = () => template() && socket.send({ type: 'preview_url', url: template()! })
 
-api.config().then((c) => {
+configReady.then((c) => {
   setTemplate(templateFor(c.port))
   if (socket.connected) tellServer()
 })

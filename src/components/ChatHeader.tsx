@@ -1,6 +1,6 @@
 import { Show, createEffect, createSignal, on, onCleanup } from 'solid-js'
 import { Archive, ArchiveRestore, FolderInput, Zap } from '../icons'
-import type { Card, GitStatus, SessionSummary } from '../../shared/protocol.ts'
+import type { GitStatus, SessionSummary } from '../../shared/protocol.ts'
 import type { ChatAction } from '../actions.ts'
 import { api } from '../api.ts'
 import { basename, worktreeOf } from '../folders.ts'
@@ -12,6 +12,8 @@ import { GitSummary } from './GitSummary.tsx'
 import { showError } from './Popover.tsx'
 import { Menu, plural, type MenuItem } from './ui.tsx'
 import { Link } from '../router.tsx'
+import { cardOf } from '../stores/cards.ts'
+import { toggleArchived } from '../stores/sessions.ts'
 
 /**
  * A checkout's git status, kept current: read as soon as it's shown and again
@@ -73,9 +75,6 @@ type GitItem = MenuItem & { run: () => void }
 export function ChatHeader(props: {
   /** Absent until the chat is listed, e.g. before its first message. */
   session?: SessionSummary
-  cards: Card[]
-  onRenamed: (title: string) => void
-  onToggleArchived: () => void
   cwd?: string
   machine: string
   ws?: Ws
@@ -87,7 +86,7 @@ export function ChatHeader(props: {
   onAsk?: (prompt: string) => void
 }) {
   const [busy, setBusy] = createSignal<'push' | 'pull'>()
-  const card = () => props.session && props.cards.find((c) => c.sessionIds.includes(props.session!.id))
+  const card = () => props.session && cardOf(props.session.id)
   const folder = () => {
     const dir = props.cwd
     if (!dir) return ''
@@ -204,7 +203,6 @@ export function ChatHeader(props: {
             {/* On narrow screens the bar above has the title, and the sidebar's row renames. */}
             <RenameChat
               session={s()}
-              onSaved={props.onRenamed}
               title="Rename"
               triggerClass={(open) =>
                 `hidden min-w-[6rem] max-w-[40%] shrink-[10] truncate rounded-md px-1.5 py-0.5 -mx-1.5 font-medium text-fg transition-colors hover:bg-surface md:block ${open ? 'bg-surface' : ''}`
@@ -222,7 +220,7 @@ export function ChatHeader(props: {
             </Show>
             <FileChat
               session={s()}
-              cards={props.cards}
+             
               title={card() ? 'Move to another project or card' : 'Put in a project'}
               triggerClass={(open) => `${button} shrink-0 ${card() ? '-ml-2' : ''} ${open ? 'bg-surface text-fg-2' : 'text-fg-3'}`}
               trigger={() => <FolderInput class="size-3.5" />}
@@ -280,7 +278,7 @@ export function ChatHeader(props: {
         <Show when={props.session}>
           {(s) => (
             <>
-              <button type="button" onClick={props.onToggleArchived} title={s().archived ? 'Unarchive' : 'Archive'} class={`${button} text-fg-3`}>
+              <button type="button" onClick={() => toggleArchived(s()).catch((e: Error) => showError("Couldn't change it", e.message))} title={s().archived ? 'Unarchive' : 'Archive'} class={`${button} text-fg-3`}>
                 <Show when={s().archived} fallback={<Archive class="size-3.5" />}>
                   <ArchiveRestore class="size-3.5" />
                 </Show>

@@ -1,13 +1,16 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup, on, onMount, untrack, type Component, type JSX } from 'solid-js'
 import { Dynamic } from 'solid-js/web'
-import { createStore, reconcile } from 'solid-js/store'
 import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, FolderInput, PanelLeft, Pencil, Plus, Radar as RadarIcon, Search, Settings as SettingsIcon, Trash2, X } from './icons'
-import { descendants, projectOf } from '../shared/cardTree.ts'
+import { descendants } from '../shared/cardTree.ts'
 import type { Card, SessionSummary } from '../shared/protocol.ts'
 import { api, socket } from './api.ts'
 import { navigate, replace, route } from './router.tsx'
+import { config } from './stores/config.ts'
+import { cardById, cardOf, cards, cardsLoaded, linkSession, projectOf, projectOfChat, projects } from './stores/cards.ts'
+import { toggleArchived as archive, sessionById, sessions, sessionsLoaded } from './stores/sessions.ts'
+import { showError } from './components/Popover.tsx'
 import { attention, looking, notifications, notify, onAttention, toggleNotifications } from './attention.ts'
-import { basename, folderLabel, isScratch, lastWorkedIn, scratchDir, setScratch } from './folders.ts'
+import { basename, folderLabel, isScratch, lastWorkedIn, scratchDir } from './folders.ts'
 import { LOCAL, machineOf, machines, onMachine } from './machines.ts'
 import { Board } from './components/Board.tsx'
 import { CardView } from './components/CardView.tsx'
@@ -36,12 +39,6 @@ function uuid(): string {
 }
 
 export function App() {
-  const [config, setConfig] = createSignal<{ defaultCwd: string; scratchCwd: string } | null>(null)
-  const [sessions, setSessions] = createSignal<SessionSummary[]>([])
-  // Reconciled by id so a refresh updates cards in place instead of rebuilding them mid-drag or mid-edit.
-  const [cardStore, setCardStore] = createStore<Card[]>([])
-  const cards = () => cardStore
-  const setCards = (next: Card[]) => setCardStore(reconcile(next, { key: 'id' }))
   const [drafts, setDrafts] = createSignal<Record<string, string>>(loadRecord(DRAFTS_KEY))
   /** The runner each blank chat will run on, picked along with its folder. */
   const [machineDrafts, setMachineDrafts] = createSignal<Record<string, string>>(loadRecord(MACHINES_KEY))
@@ -66,54 +63,19 @@ export function App() {
     localStorage.setItem(WORKTREES_KEY, JSON.stringify(keep(worktreeDrafts())))
   })
 
-  const [loaded, setLoaded] = createSignal(false)
-  const refresh = () => {
-    api.sessions().then((list) => {
-      setSessions(list)
-      setLoaded(true)
-    })
-  }
-  const [cardsLoaded, setCardsLoaded] = createSignal(false)
-  const refreshCards = () => {
-    api.cards().then((list) => {
-      setCards(list)
-      setCardsLoaded(true)
-    })
-  }
-  /** Config first, since the folder defaults need it, then the lists, which may have changed while the server was away. */
-  const load = () =>
-    (config() ? Promise.resolve() : api.config().then((c) => (setScratch(c.scratchCwd), setConfig(c))))
-      .then(() => {
-        refresh()
-        refreshCards()
-      })
-      // The next reconnect tries again.
-      .catch(() => {})
+  const loaded = sessionsLoaded
 
   onMount(() => {
-    // Every connect loads, the first included, so a server that was down when the page opened is picked up once it's back.
-    const offConn = socket.onConnection((c) => c && load())
+    // The stores load on every connect, the first included.
     socket.connect()
-    // Refresh the list when sessions appear, finish a turn, or change state.
-    let timer: ReturnType<typeof setTimeout>
-    const off = socket.on((e) => {
-      if (e.type === 'cards_changed') refreshCards()
-      if (e.type === 'sessions_changed' || e.type === 'status') {
-        clearTimeout(timer)
-        timer = setTimeout(refresh, 300)
-      }
-    })
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !modalOpen() && setDrawer(false)
     addEventListener('keydown', onKey)
     const offAttention = onAttention((id, state) => {
-      const title = sessions().find((s) => s.id === id)?.title ?? 'New chat'
+      const title = sessionById(id)?.title ?? 'New chat'
       notify(id, title, state === 'waiting' ? 'Needs your input' : 'Finished', () => navigate({ kind: 'chat', id }))
     })
     onCleanup(() => {
-      clearTimeout(timer)
-      off()
       offAttention()
-      offConn()
       removeEventListener('keydown', onKey)
     })
   })
@@ -159,38 +121,33 @@ export function App() {
     if (id === null) sessionStorage.removeItem(FOCUS_KEY)
     else sessionStorage.setItem(FOCUS_KEY, String(id))
   })
-  /** Projects are the top-level cards. */
-  const allProjects = createMemo(() => cards().filter((c) => (c.parentId ?? null) === null))
+  const allProjects = createMemo(projects)
   // Undefined while cards load, or if the project was deleted or moved, in which case the tab shows everything.
   const focus = createMemo(() => allProjects().find((c) => c.id === focusId()))
   const unfiled = () => focusId() === 'none'
-  const projectOfChat = (id: string) => {
-    const card = cardOf().get(id)
-    return card && projectOf(cards(), card.id)
-  }
   // Focus follows where you go: a project's board focuses it, the projects board shows them all,
   // and opening something in another project moves there. Chats on no card leave it alone, and so does
   // filing the open chat, so only going somewhere moves it. Filing stays put until you open a project.
   createEffect(
     on([route, cardsLoaded], ([r]) => {
-      const card = r.kind === 'card' ? cards().find((c) => c.id === r.id) : r.kind === 'chat' ? cardOf().get(r.id) : undefined
+      const card = r.kind === 'card' ? cardById(r.id) : r.kind === 'chat' ? cardOf(r.id) : undefined
       if (card && (card.parentId ?? null) === null && r.kind === 'card') return setFocusId(card.id)
       if (focusId() === 'none') return
       if (r.kind === 'board') return setFocusId(null)
-      const project = card && projectOf(cards(), card.id)
+      const project = card && projectOf(card.id)
       if (project && focusId() !== null && project.id !== focusId()) setFocusId(project.id)
     }),
   )
-  const unfiledCount = createMemo(() => sessions().filter((s) => !s.archived && !cardOf().has(s.id)).length)
+  const unfiledCount = createMemo(() => sessions().filter((s) => !s.archived && !cardOf(s.id)).length)
   const inFocus = (s: SessionSummary) => {
     if (s.id === current()) return true
-    if (unfiled()) return !cardOf().has(s.id)
+    if (unfiled()) return !cardOf(s.id)
     const f = focus()
     return !f || projectOfChat(s.id)?.id === f.id
   }
   const currentCard = () => {
     const r = route()
-    return r.kind === 'card' ? cards().find((c) => c.id === r.id) : undefined
+    return r.kind === 'card' ? cardById(r.id) : undefined
   }
   const currentTerminal = () => {
     const r = route()
@@ -224,22 +181,17 @@ export function App() {
     const words = query().toLowerCase().split(/\s+/).filter(Boolean)
     if (!words.length) return
     const matches = sessions().filter((s) => {
-      const card = cardOf().get(s.id)
+      const card = cardOf(s.id)
       const text = [s.title, s.cwd && folderLabel(s.cwd), card && `#${card.id} ${card.title}`, projectOfChat(s.id)?.title].join(' ').toLowerCase()
       return words.every((w) => text.includes(w))
     })
     return [...matches.filter((s) => !s.archived), ...matches.filter((s) => s.archived)]
   })
-  const toggleArchived = (s: SessionSummary) => {
-    // Move it straight away; the server's sessions_changed confirms it.
-    setSessions((all) => all.map((x) => (x.id === s.id ? { ...x, archived: !s.archived } : x)))
-    ;(s.archived ? api.unarchive(s.id) : api.archive(s.id)).catch(refresh)
-  }
+  const toggleArchived = (s: SessionSummary) => void archive(s).catch((e: Error) => showError("Couldn't change it", e.message))
 
   /** The chat whose project picker or rename box is open, so its row keeps its buttons showing. */
   const [filing, setFiling] = createSignal<string>()
   const keepOpen = (id: string) => (open: boolean) => setFiling(open ? id : (current) => (current === id ? undefined : current))
-  const renamed = (id: string, title: string) => setSessions((all) => all.map((x) => (x.id === id ? { ...x, title } : x)))
 
   const SessionRow = (props: { session: SessionSummary }) => {
     const s = () => props.session
@@ -253,7 +205,7 @@ export function App() {
         >
           <ChatSummary
             session={s()}
-            card={cardOf().get(s().id)}
+            card={cardOf(s().id)}
             titleClass={
               s().id === current() || attention()[s().id]
                 ? 'text-fg'
@@ -274,15 +226,13 @@ export function App() {
         >
           <FileChat
             session={s()}
-            cards={cards()}
-            title={cardOf().has(s().id) ? 'Move to another project or card' : 'Put in a project'}
+            title={!!cardOf(s().id) ? 'Move to another project or card' : 'Put in a project'}
             onOpenChange={keepOpen(s().id)}
             triggerClass={(open) => ghostClass('sm', open)}
             trigger={() => <FolderInput class="size-3.5" />}
           />
           <RenameChat
             session={s()}
-            onSaved={(title) => renamed(s().id, title)}
             title="Rename"
             onOpenChange={keepOpen(s().id)}
             triggerClass={(open) => ghostClass('sm', open)}
@@ -297,7 +247,6 @@ export function App() {
       </div>
     )
   }
-  const cardOf = createMemo(() => new Map(cards().flatMap((c) => c.sessionIds.map((id) => [id, c] as const))))
 
   /** The most recent chat a new one could start where it ran: temp dirs and ones that are gone (removed worktrees) don't count. */
   const latestChat = (machine?: string) =>
@@ -343,7 +292,7 @@ export function App() {
     if (from?.worktree) setWorktreeDrafts((w) => ({ ...w, [id]: true }))
     if (cardId !== undefined) {
       setBlanks((b) => ({ ...b, [cardId]: id }))
-      api.linkSession(cardId, id)
+      void linkSession(cardId, id)
     }
     navigate({ kind: 'chat', id })
   }
@@ -379,7 +328,7 @@ export function App() {
   /** For the top bar on narrow screens, which has no sidebar beside it to say where you are. */
   const pageTitle = () => {
     const r = route()
-    if (r.kind === 'chat') return sessions().find((s) => s.id === r.id)?.title ?? 'New chat'
+    if (r.kind === 'chat') return sessionById(r.id)?.title ?? 'New chat'
     if (r.kind === 'card') return currentCard()?.title ?? ''
     if (r.kind === 'terminal') {
       const t = terminals().find((t) => t.id === r.id)
@@ -410,19 +359,16 @@ export function App() {
         <Loading />
       </Match>
       <Match when={route().kind === 'radar'}>
-        <Radar cards={cards()} sessions={sessions()} onOpenCard={(id) => navigate({ kind: 'card', id })} onOpenChat={(id) => navigate({ kind: 'chat', id })} />
+        <Radar onOpenCard={(id) => navigate({ kind: 'card', id })} onOpenChat={(id) => navigate({ kind: 'chat', id })} />
       </Match>
       <Match when={route().kind === 'board'}>
-        <Board cards={cards()} sessions={sessions()} setCards={setCards} onOpen={(id) => navigate({ kind: 'card', id })} />
+        <Board onOpen={(id) => navigate({ kind: 'card', id })} />
       </Match>
       <Match when={route().kind === 'card'}>
         <Show when={currentCard()} fallback={<p class="flex flex-1 items-center justify-center text-[13px] text-fg-3">No such card</p>}>
           {(card) => (
             <CardView
               card={card()}
-              cards={cards()}
-              setCards={setCards}
-              sessions={sessions()}
               onOpenCard={(id) => navigate(id === null ? { kind: 'board' } : { kind: 'card', id })}
               onOpenChat={(id) => navigate({ kind: 'chat', id })}
               onNewChat={(from) => newChat(from, card().id)}
@@ -675,21 +621,13 @@ export function App() {
                 <Chat
                   sessionId={id}
                   draftCwd={drafts()[id] ?? defaultCwd()}
-                  draftMachine={sessions().find((s) => s.id === id)?.machine ?? draftMachine(id)}
+                  draftMachine={sessionById(id)?.machine ?? draftMachine(id)}
                   worktree={worktreeDrafts()[id]}
                   onPickCwd={(cwd, machine) => {
                     pickDraft(id, cwd, machine)
                     setLastMachine(machine)
                   }}
                   onPickWorktree={(on) => setWorktreeDrafts((w) => ({ ...w, [id]: on }))}
-                  card={cardOf().get(id)}
-                  session={sessions().find((s) => s.id === id)}
-                  cards={cards()}
-                  onRenamed={(title) => renamed(id, title)}
-                  onToggleArchived={() => {
-                    const s = sessions().find((s) => s.id === id)
-                    if (s) toggleArchived(s)
-                  }}
                   onStart={() => home() && startHomeChat(id, drafts()[id] ?? defaultCwd(), draftMachine(id))}
                   bar={mobileBar()}
                 />
