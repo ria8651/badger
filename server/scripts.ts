@@ -1,6 +1,7 @@
 import { Worker } from 'node:worker_threads'
 import { z } from 'zod'
-import { OpError, message, op, runForScript, signature, type Op, type OpContext } from './ops.ts'
+import { message } from './errors.ts'
+import { OpError, clip, op, runForScript, signature, type Op, type OpContext } from './ops.ts'
 
 /** Most output a script hands back; Claude reads all of it. */
 const MAX_OUTPUT_CHARS = 30_000
@@ -99,7 +100,7 @@ export function scriptOp(server: string, ops: () => Op[]): Op {
       const { value, logs } = await runScript(args.code, usable(), ctx, (args.timeout ?? DEFAULT_TIMEOUT_S) * 1000)
       const result = value === undefined ? undefined : JSON.parse(value)
       const shown = result === undefined ? '' : typeof result === 'string' ? result : JSON.stringify(result, null, 2)
-      return { text: clip([...logs, shown].filter(Boolean).join('\n')) || '(no output)', value: result }
+      return { text: clip([...logs, shown].filter(Boolean).join('\n'), MAX_OUTPUT_CHARS) || '(no output)', value: result }
     },
   })
 }
@@ -140,6 +141,3 @@ function runScript(code: string, ops: Op[], ctx: OpContext, timeoutMs: number): 
     worker.on('exit', () => finish(new Error('The script stopped without finishing.')))
   })
 }
-
-
-const clip = (text: string) => (text.length > MAX_OUTPUT_CHARS ? `${text.slice(0, MAX_OUTPUT_CHARS)}\n… (${text.length - MAX_OUTPUT_CHARS} more characters)` : text)

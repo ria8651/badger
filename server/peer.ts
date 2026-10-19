@@ -1,6 +1,6 @@
 import type { WebSocket } from 'ws'
 import type { ZodType } from 'zod'
-import { BadRequest } from './db.ts'
+import { BadRequest, message } from './errors.ts'
 
 /**
  * One end of the connection between the hub and a runner: the runner built
@@ -43,8 +43,23 @@ export function memoryLinks(): [Link, Link] {
   return [end(a, b), end(b, a)]
 }
 
-/** A link over a WebSocket, one JSON frame per message. */
-export function wsLink(ws: WebSocket): Link {
+/**
+ * A link over a WebSocket, one JSON frame per message. With `pingMs`, the
+ * other end is pinged that often, and the connection dropped if it hasn't
+ * answered the last ping by the next: a laptop gone to sleep can leave it
+ * half-open, answering nothing.
+ */
+export function wsLink(ws: WebSocket, opts: { pingMs?: number } = {}): Link {
+  if (opts.pingMs) {
+    let alive = true
+    ws.on('pong', () => (alive = true))
+    const ping = setInterval(() => {
+      if (!alive) return ws.terminate()
+      alive = false
+      ws.ping()
+    }, opts.pingMs)
+    ws.on('close', () => clearInterval(ping))
+  }
   return {
     send: (frame) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(frame)),
     onFrame: (fn) =>
@@ -197,8 +212,7 @@ export class Peer<Theirs> {
   }
 
   private async serve(frame: Extract<Frame, { t: 'call' }>): Promise<void> {
-    const fail = (err: unknown) =>
-      this.link.send({ t: 'reply', id: frame.id, error: err instanceof Error ? err.message : String(err), bad: err instanceof BadRequest })
+    const fail = (err: unknown) => this.link.send({ t: 'reply', id: frame.id, error: message(err), bad: err instanceof BadRequest })
     try {
       const args = this.argsFor(String(frame.method), frame.args)
       const fn = (this.methods as Record<string, Handler>)[frame.method]

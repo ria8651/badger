@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { descendants } from '../shared/cardTree.ts'
 import { CARD_STATUSES, type Card, type CardStatus, type DraftAttachments } from '../shared/protocol.ts'
+import { BadRequest } from './errors.ts'
 
 /**
  * Transcript lines holding images, and the uuid the SDK's reader gives each one's message: a message sent while
@@ -193,10 +194,10 @@ interface CardRow {
 
 export type CardPatch = Partial<Pick<Card, 'title' | 'description' | 'status' | 'position' | 'parentId'>>
 
-/** Who made a change. There are no users yet, so for now it's where the change came from. */
 /** A chat's unsent composer contents. */
 export type Draft = { text: string; attachments: DraftAttachments }
 
+/** Who made a change. There are no users yet, so for now it's where the change came from. */
 export type Actor = { source: 'ui' } | { source: 'claude'; sessionId: string }
 
 type AuditEntity = 'card' | 'card_session' | 'archived_session'
@@ -286,6 +287,12 @@ export class Store {
       links.map((l) => l.session_id),
       this.statusChanges(id).get(id),
     )
+  }
+
+  /** The card a chat is on, if it's on one that isn't deleted. */
+  cardOf(sessionId: string): Card | undefined {
+    const row = this.db.prepare('SELECT card_id FROM card_sessions WHERE session_id = ?').get(sessionId) as { card_id: number } | undefined
+    return row ? this.card(row.card_id) : undefined
   }
 
   /** When each card (or just `id`) last changed status, by the audit log. Creating one counts. */
@@ -580,5 +587,3 @@ function requireStatus(status: unknown): CardStatus {
   if (!CARD_STATUSES.includes(status as CardStatus)) throw new BadRequest(`Unknown status: ${status}`)
   return status as CardStatus
 }
-
-export class BadRequest extends Error {}

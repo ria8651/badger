@@ -88,17 +88,24 @@ export class Transcripts {
       .run(batch.sessionId, next.mtime, JSON.stringify(next.data))
   }
 
-  /** A transcript file's entries, or null if there isn't one. A subagent's metadata goes last, as the SDK's own stores keep it. */
-  private entries(sessionId: string, subpath: string): SessionStoreEntry[] | null {
+  /** A transcript file's lines, as copied, and a subagent's metadata; undefined if there's no such file. */
+  private file(sessionId: string, subpath: string): { lines: string[]; meta?: Record<string, unknown> } | undefined {
     const file = this.db.prepare('SELECT meta FROM transcript_files WHERE session_id = ? AND subpath = ?').get(sessionId, subpath) as
       | { meta: string | null }
       | undefined
-    if (!file) return null
+    if (!file) return undefined
     const rows = this.db.prepare('SELECT entry FROM transcript_lines WHERE session_id = ? AND subpath = ? ORDER BY n').all(sessionId, subpath) as {
       entry: string
     }[]
-    const entries = parse(rows.map((r) => r.entry))
-    if (file.meta) entries.push({ type: 'agent_metadata', ...JSON.parse(file.meta) })
+    return { lines: rows.map((r) => r.entry), ...(file.meta ? { meta: JSON.parse(file.meta) } : {}) }
+  }
+
+  /** A transcript file's entries, or null if there isn't one. A subagent's metadata goes last, as the SDK's own stores keep it. */
+  private entries(sessionId: string, subpath: string): SessionStoreEntry[] | null {
+    const file = this.file(sessionId, subpath)
+    if (!file) return null
+    const entries = parse(file.lines)
+    if (file.meta) entries.push({ type: 'agent_metadata', ...file.meta })
     return entries
   }
 
@@ -117,28 +124,31 @@ export class Transcripts {
     return rows.map((r) => r.subpath)
   }
 
-  /** The entry for one of a chat's messages with images, its subagents' included, or undefined if it hasn't been copied here. */
-  imageEntry(sessionId: string, uuid: string): Record<string, unknown> | undefined {
+  /** The line holding one of a chat's messages with images, its subagents' included, if it has been copied here. */
+  private imageLine(sessionId: string, uuid: string): string | undefined {
     const row = this.db
       .prepare(`SELECT entry FROM transcript_lines INDEXED BY transcript_lines_images WHERE session_id = ? AND ${IMAGE_LINE_UUID} = ? AND ${IMAGE_LINE} LIMIT 1`)
       .get(sessionId, uuid) as { entry: string } | undefined
-    return row ? (parse([row.entry])[0] as Record<string, unknown> | undefined) : undefined
+    return row?.entry
+  }
+
+  /** The entry for one of a chat's messages with images, or undefined if it hasn't been copied here. */
+  imageEntry(sessionId: string, uuid: string): Record<string, unknown> | undefined {
+    const line = this.imageLine(sessionId, uuid)
+    return line === undefined ? undefined : (parse([line])[0] as Record<string, unknown> | undefined)
   }
 
   /** Whether a message with images has been copied here, so they can be served from here. */
   hasImageEntry(sessionId: string, uuid: string): boolean {
-    return !!this.db.prepare(`SELECT 1 FROM transcript_lines INDEXED BY transcript_lines_images WHERE session_id = ? AND ${IMAGE_LINE_UUID} = ? AND ${IMAGE_LINE} LIMIT 1`).get(sessionId, uuid)
+    return this.imageLine(sessionId, uuid) !== undefined
   }
 
   /** A chat's subagents' transcripts, as their lines, with each one's metadata. */
   subagentFiles(sessionId: string): { subpath: string; lines: string[]; meta?: Record<string, unknown> }[] {
-    return this.subpaths(sessionId).map((subpath) => {
-      const file = this.db.prepare('SELECT meta FROM transcript_files WHERE session_id = ? AND subpath = ?').get(sessionId, subpath) as { meta: string | null }
-      const rows = this.db.prepare('SELECT entry FROM transcript_lines WHERE session_id = ? AND subpath = ? ORDER BY n').all(sessionId, subpath) as {
-        entry: string
-      }[]
+    return this.subpaths(sessionId).flatMap((subpath) => {
+      const file = this.file(sessionId, subpath)
       // Lines too long to copy came over blank.
-      return { subpath, lines: rows.map((r) => r.entry).filter(Boolean), ...(file.meta ? { meta: JSON.parse(file.meta) } : {}) }
+      return file ? [{ subpath, ...file, lines: file.lines.filter(Boolean) }] : []
     })
   }
 
@@ -410,6 +420,10 @@ function isPrompt(m: WireMessage): boolean {
   if (typeof content === 'string') return typed(content)
   return Array.isArray(content) && content.some((b) => b?.type === 'text' && typed(String(b.text)))
 }
+
+/** What a chat is called: the title someone gave it, else Claude Code's summary, else how it started. */
+export const titleOf = (info: Pick<SDKSessionInfo, 'customTitle' | 'summary' | 'firstPrompt'> | undefined): string | undefined =>
+  info?.customTitle || info?.summary || info?.firstPrompt
 
 /** The model a transcript's main agent last answered with: a model id, e.g. `claude-opus-5-5`. */
 export function transcriptModel(messages: WireMessage[]): string | undefined {

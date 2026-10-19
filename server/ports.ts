@@ -1,8 +1,5 @@
-import { execFile } from 'node:child_process'
 import { readFile, readdir, readlink } from 'node:fs/promises'
-import { promisify } from 'node:util'
-
-const run = promisify(execFile)
+import { processTrees, run } from './proc.ts'
 
 /**
  * The TCP ports each process tree is listening on, keyed by its root pid.
@@ -22,24 +19,6 @@ export async function listeningPorts(roots: number[]): Promise<Map<number, numbe
   return found
 }
 
-/** Each root with every process under it, through the parent links in `ps`. */
-async function processTrees(roots: number[]): Promise<Map<number, number[]>> {
-  const children = new Map<number, number[]>()
-  try {
-    const { stdout } = await run('ps', ['-A', '-o', 'pid=,ppid='])
-    for (const line of stdout.split('\n')) {
-      const [child, parent] = line.trim().split(/\s+/).map(Number)
-      if (child && parent) children.set(parent, [...(children.get(parent) ?? []), child])
-    }
-  } catch {}
-  const trees = new Map<number, number[]>()
-  for (const root of roots) {
-    const pids = [root]
-    for (let i = 0; i < pids.length; i++) pids.push(...(children.get(pids[i]) ?? []))
-    trees.set(root, pids)
-  }
-  return trees
-}
 
 /** macOS and anything else with lsof. */
 async function lsofListeners(pids: number[]): Promise<Map<number, number[]>> {

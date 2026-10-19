@@ -1,19 +1,20 @@
 import { randomUUID } from 'node:crypto'
-import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage } from 'node:http'
 import { homedir } from 'node:os'
 import { extname, isAbsolute, join, resolve } from 'node:path'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { z } from 'zod'
 import { renderMoveNote, splitMoveNote } from '../shared/forkNote.ts'
-import { IMAGE_TYPES, type AnswerDraft, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
+import { IMAGE_TYPES, LOCAL_MACHINE, type AnswerDraft, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../shared/protocol.ts'
 import { Attention } from './attention.ts'
 import { BRIDGE_PATH, Bridges } from './bridge.ts'
 import { boardOps, cardContext, contextSeen, type ChatInfo } from './boardTools.ts'
-import { type Actor, BadRequest, type Draft, Store } from './db.ts'
+import { type Actor, type Draft, Store } from './db.ts'
+import { BadRequest, absolutePath, badRequest, message } from './errors.ts'
 import { forkTranscript } from './fork.ts'
-import { LOCAL, Machines, mismatch, type Connection } from './machines.ts'
-import { OpError, type Op } from './ops.ts'
+import { loadDotEnv, shellEnv } from './env.ts'
+import { Machines, mismatch, type Connection } from './machines.ts'
+import { OpError, parseInput, type Op } from './ops.ts'
 import { memoryLinks, wsLink } from './peer.ts'
 import { proxyPreview, proxyPreviewUpgrade, previewPort } from './preview.ts'
 import { bridgeOps } from './previewTools.ts'
@@ -29,10 +30,9 @@ import {
   type RunnerEvent,
   type TranscriptLines,
 } from './runnerProtocol.ts'
-import { shellEnv } from './terminals.ts'
 import { suggestTitle } from './titles.ts'
 import { IMAGE_PATH, entryImage, externalizeImages } from './transcriptImages.ts'
-import { Transcripts, transcriptModel } from './transcripts.ts'
+import { Transcripts, titleOf, transcriptModel } from './transcripts.ts'
 import { AccountLimits } from './usage.ts'
 import { prepareScratch } from './workspace.ts'
 
@@ -143,7 +143,7 @@ function runnerFor(sessionId: string): Connection | undefined {
 }
 
 /** Any connected runner, the hub's own first, for questions about the account rather than a chat. */
-const anyRunner = () => machines.get(LOCAL) ?? machines.online()[0]
+const anyRunner = () => machines.get(LOCAL_MACHINE) ?? machines.online()[0]
 
 /** Tells one viewer, or all of them, how full the chat's context is. */
 function sendContext(sessionId: string, ws?: WebSocket): void {
@@ -155,7 +155,7 @@ function sendContext(sessionId: string, ws?: WebSocket): void {
       if (ws) send(ws, event)
       else broadcast(event)
     })
-    .catch((err) => console.error(`Reading context usage for ${sessionId} failed:`, err instanceof Error ? err.message : err))
+    .catch((err) => console.error(`Reading context usage for ${sessionId} failed:`, message(err)))
 }
 
 // Limits move with use on other machines too, so read them now and then while anyone's looking.
@@ -268,12 +268,10 @@ function hubApi(machine: string): Omit<HubApi, 'hello'> {
       own(chat)
       const o = hubOps.find((o) => o.script === script)
       if (!o) throw new BadRequest(`No badger.${script}`)
-      if (hubOnly.has(script) && machine !== LOCAL) throw new BadRequest(`${script} only works for chats on the hub's own machine`)
-      const parsed = z.object(o.input).safeParse(input ?? {})
-      if (!parsed.success) throw new BadRequest(`Bad input for ${script}: ${z.prettifyError(parsed.error)}`)
+      if (hubOnly.has(script) && machine !== LOCAL_MACHINE) throw new BadRequest(`${script} only works for chats on the hub's own machine`)
       try {
         // Claude in one of this machine's chats is who makes the change; runners never act for the UI.
-        return await o.run(parsed.data, { sessionId: chat, cwd: () => machines.live(chat)?.cwd ?? '' })
+        return await o.run(parseInput(o, input), { sessionId: chat, cwd: () => machines.live(chat)?.cwd ?? '' })
       } catch (err) {
         if (err instanceof OpError) throw new BadRequest(err.message)
         console.error(`badger.${script} failed for ${chat}:`, err)
@@ -281,7 +279,7 @@ function hubApi(machine: string): Omit<HubApi, 'hello'> {
       }
     },
     chatCard: async (chat) => {
-      const card = store.cards().find((c) => c.sessionIds.includes(own(chat)))
+      const card = store.cardOf(own(chat))
       if (!card) return undefined
       const archived = store.archivedIds()
       const chats = await chatInfo(card.sessionIds)
@@ -298,7 +296,7 @@ function hubApi(machine: string): Omit<HubApi, 'hello'> {
       own(chat)
       broadcast({ type: 'open_preview', root, machine, port, name, path })
       // The hub proxies its own machine's ports; another machine's only open where they are.
-      const template = machine === LOCAL ? previewUrl() : 'http://localhost:{port}'
+      const template = machine === LOCAL_MACHINE ? previewUrl() : 'http://localhost:{port}'
       return { tabs: sockets.size, url: template?.replace('{port}', String(port)).concat(path) }
     },
     startChild: ({ parentId, toolUseId, kind }) => {
@@ -325,7 +323,7 @@ async function chatInfo(ids: string[]): Promise<ChatInfo[]> {
       const machine = where.get(id)
       return {
         id,
-        title: info?.customTitle || info?.summary || info?.firstPrompt,
+        title: titleOf(info),
         cwd: machines.live(id)?.cwd ?? info?.cwd,
         machine,
         machineName: machine && machines.name(machine),
@@ -546,7 +544,7 @@ async function handleClient(ws: WebSocket, event: ClientEvent): Promise<void> {
       if (!isUuid(event.sessionId)) throw new BadRequest('sessionId must be a UUID')
       // A chat stays where it started; a new one goes where it was asked to.
       const placed = machines.machineOf(event.sessionId)
-      const machine = placed ?? (event.machine || LOCAL)
+      const machine = placed ?? (event.machine || LOCAL_MACHINE)
       const runner = machines.require(machine)
       // Picking an archived chat back up brings it back to the sidebar.
       store.setArchived(event.sessionId, false, UI)
@@ -676,7 +674,7 @@ async function sessionList(): Promise<SessionSummary[]> {
     const live = machines.live(s.sessionId)
     return {
       id: s.sessionId,
-      title: s.customTitle || s.summary || s.firstPrompt || 'Untitled',
+      title: titleOf(s) || 'Untitled',
       // A live chat may have moved into a worktree since its transcript was last written.
       cwd: live?.cwd ?? s.cwd,
       machine,
@@ -747,7 +745,7 @@ async function cardsApi(method: string, path: string, req: IncomingMessage): Pro
     if (!store.card(id)) return [404, { error: 'No such card' }]
     if (method === 'POST' && !link[2]) {
       const { sessionId } = await readJson(req)
-      if (typeof sessionId !== 'string' || !/^[0-9a-f-]{36}$/.test(sessionId)) throw new BadRequest('sessionId is required')
+      if (!isUuid(sessionId)) throw new BadRequest('sessionId is required')
       store.linkSession(id, sessionId, UI)
       return changed([200, store.card(id)])
     }
@@ -781,9 +779,7 @@ async function sessionsApi(method: string, path: string, req: IncomingMessage): 
   if (action === 'title/suggest' && method === 'POST') {
     const info = await transcripts.info(id)
     if (!info) return [404, { error: 'No such chat' }]
-    const current = info.customTitle || info.summary || info.firstPrompt || ''
-    const card = store.cards().find((c) => c.sessionIds.includes(id))
-    return [200, { title: await suggestTitle(id, current, card, SCRATCH_DIR, transcripts.store).catch(badRequest) }]
+    return [200, { title: await suggestTitle(id, titleOf(info) || '', store.cardOf(id), SCRATCH_DIR, transcripts.store).catch(badRequest) }]
   }
   return undefined
 }
@@ -804,18 +800,18 @@ async function forkChat(id: string, body: { at?: unknown; machine?: unknown; cwd
   const fromCwd = machines.live(id)?.cwd ?? info?.cwd
   if (!info || !fromMachine || !fromCwd) throw new BadRequest("This chat hasn't been saved yet, so it can't be forked")
   const runner = machineParam(body.machine ?? fromMachine)
-  const cwd = body.cwd === undefined ? fromCwd : requirePath(body.cwd)
+  const cwd = body.cwd === undefined ? fromCwd : absolutePath(body.cwd)
   const worktree = body.worktree
   const moved = runner.id !== fromMachine || cwd !== fromCwd || worktree !== undefined
-  const title = `${(info.customTitle || info.summary || info.firstPrompt || 'Untitled').replace(/ \(fork\)$/, '')} (fork)`
+  const title = `${(titleOf(info) || 'Untitled').replace(/ \(fork\)$/, '')} (fork)`
   const fork = await forkTranscript(transcripts.store, transcripts.subagentFiles(id), id, { at: body.at, title, cwd: moved ? cwd : undefined }).catch((err) => {
     // The turn's last messages may not have been copied here yet.
-    throw new BadRequest(`Couldn't fork it: ${err instanceof Error ? err.message : err}`)
+    throw new BadRequest(`Couldn't fork it: ${message(err)}`)
   })
   const note = moved
     ? renderMoveNote({ from: { machine: machines.name(fromMachine), cwd: fromCwd }, to: { machine: runner.name, cwd, worktree: worktree !== undefined || undefined } })
     : undefined
-  const card = store.cards().find((c) => c.sessionIds.includes(id))
+  const card = store.cardOf(id)
   const draft = body.draft
   store.transaction(() => {
     machines.assign(fork.sessionId, runner.id)
@@ -857,18 +853,13 @@ async function machinesApi(method: string, path: string, req: IncomingMessage): 
 /** The connected runner for a machine named in a request, defaulting to the hub's own. */
 function machineParam(value: unknown): Connection {
   if (value !== undefined && value !== null && typeof value !== 'string') throw new BadRequest('machine must be a string')
-  return machines.require(value || LOCAL)
-}
-
-const requirePath = (dir: unknown) => {
-  if (typeof dir !== 'string' || !isAbsolute(dir)) throw new BadRequest('path must be an absolute path')
-  return resolve(dir)
+  return machines.require(value || LOCAL_MACHINE)
 }
 
 /** Worktree routes, by machine and path. Making them is Claude Code's job (--worktree); these look and clean up. */
 async function worktreesApi(method: string, path: string, url: URL): Promise<[number, unknown] | undefined> {
   if (path !== '/api/worktree') return undefined
-  const dir = requirePath(url.searchParams.get('path'))
+  const dir = absolutePath(url.searchParams.get('path'))
   const runner = machineParam(url.searchParams.get('machine'))
   if (method === 'GET') return [200, await runner.peer.remote.worktreeStatus(dir)]
   if (method === 'DELETE') {
@@ -889,7 +880,7 @@ async function foldersApi(method: string, path: string, url: URL, req: IncomingM
       const runner = machineParam(url.searchParams.get('machine'))
       const used = new Map<string, number>()
       for (const s of await sessionList()) {
-        if ((s.machine ?? LOCAL) !== runner.id || !s.cwd || s.gone || TEMP_DIR.test(s.cwd)) continue
+        if ((s.machine ?? LOCAL_MACHINE) !== runner.id || !s.cwd || s.gone || TEMP_DIR.test(s.cwd)) continue
         used.set(s.cwd, Math.max(s.lastModified, used.get(s.cwd) ?? 0))
       }
       const { added, hidden } = store.folders(runner.id)
@@ -898,30 +889,30 @@ async function foldersApi(method: string, path: string, url: URL, req: IncomingM
     if (method === 'POST') {
       const body = await readJson(req)
       const runner = machineParam(body.machine)
-      const dir = requirePath(body.path)
+      const dir = absolutePath(body.path)
       if ((await runner.peer.remote.inaccessible([dir])).length) throw new BadRequest(`${dir} isn't a folder Badger can open`)
       store.addFolder(runner.id, dir)
       return [204, null]
     }
     if (method === 'DELETE') {
       // Hiding needs no runner, so it works while the machine is offline.
-      const machine = url.searchParams.get('machine') || LOCAL
-      store.hideFolder(machine, requirePath(url.searchParams.get('path')))
+      const machine = url.searchParams.get('machine') || LOCAL_MACHINE
+      store.hideFolder(machine, absolutePath(url.searchParams.get('path')))
       return [204, null]
     }
   }
   if (path === '/api/folders/size' && method === 'GET') {
     const runner = machineParam(url.searchParams.get('machine'))
-    return [200, { bytes: await runner.peer.remote.folderSize(requirePath(url.searchParams.get('path'))) }]
+    return [200, { bytes: await runner.peer.remote.folderSize(absolutePath(url.searchParams.get('path'))) }]
   }
   if (path === '/api/fs' && method === 'GET') {
     const runner = machineParam(url.searchParams.get('machine'))
     const dir = url.searchParams.get('path')
-    return [200, await runner.peer.remote.listDir(dir ? requirePath(dir) : undefined, url.searchParams.get('hidden') === '1')]
+    return [200, await runner.peer.remote.listDir(dir ? absolutePath(dir) : undefined, url.searchParams.get('hidden') === '1')]
   }
   if (path === '/api/fs/folder' && method === 'POST') {
     const body = await readJson(req)
-    return [201, { path: await machineParam(body.machine).peer.remote.makeDir(requirePath(body.path)) }]
+    return [201, { path: await machineParam(body.machine).peer.remote.makeDir(absolutePath(body.path)) }]
   }
   return undefined
 }
@@ -957,9 +948,6 @@ async function terminalsApi(method: string, path: string, req: IncomingMessage):
   return undefined
 }
 
-const badRequest = (err: Error): never => {
-  throw new BadRequest(err.message)
-}
 
 const found = (card: unknown): [number, unknown] => (card ? [200, card] : [404, { error: 'No such card' }])
 
@@ -1037,14 +1025,14 @@ const server = createServer(async (req, res) => {
         return json(200, { root: await machineParam(url.searchParams.get('machine')).peer.remote.workspaceRoot(cwd) })
       }
       if (url.pathname === '/api/git' && method === 'GET') {
-        const dir = requirePath(url.searchParams.get('path'))
+        const dir = absolutePath(url.searchParams.get('path'))
         const runner = machineParam(url.searchParams.get('machine'))
         return json(200, (await runner.peer.remote.gitStatus(dir, url.searchParams.get('fetch') === '1')) ?? null)
       }
       if ((url.pathname === '/api/git/push' || url.pathname === '/api/git/pull') && method === 'POST') {
         const body = await readJson(req)
         const runner = machineParam(body.machine)
-        const dir = requirePath(body.path)
+        const dir = absolutePath(body.path)
         await (url.pathname === '/api/git/push' ? runner.peer.remote.gitPush(dir) : runner.peer.remote.gitPull(dir))
         return json(204, null)
       }
@@ -1060,7 +1048,7 @@ const server = createServer(async (req, res) => {
       }
       // A file from the file browser, e.g. an image to attach.
       if (url.pathname === '/api/fs/file' && method === 'GET') {
-        const file = await machineParam(url.searchParams.get('machine')).peer.remote.readFile(requirePath(url.searchParams.get('path')))
+        const file = await machineParam(url.searchParams.get('machine')).peer.remote.readFile(absolutePath(url.searchParams.get('path')))
         // Only images keep their type: anything else, like an HTML file from a repo, must never render as Badger's own page.
         res.writeHead(200, { 'content-type': file.type ?? 'application/octet-stream', 'x-content-type-options': 'nosniff', 'content-disposition': 'attachment' })
         return void res.end(Buffer.from(file.data, 'base64'))
@@ -1084,7 +1072,7 @@ const server = createServer(async (req, res) => {
     // Failed partway through a response: too late to say why.
     if (res.headersSent) return void res.destroy()
     if (err instanceof BadRequest) return json(400, { error: err.message })
-    json(500, { error: err instanceof Error ? err.message : String(err) })
+    json(500, { error: message(err) })
   }
 })
 
@@ -1113,25 +1101,14 @@ server.on('upgrade', (req, socket, head) => {
       machines.refused(machine, why)
       return refuse('426 Upgrade Required', why)
     }
-    return runnerWss.handleUpgrade(req, socket, head, (ws) => connectRunner(machine, token, ws))
+    // Dropped if it stops answering pings, e.g. a laptop that went to sleep mid-connection.
+    return runnerWss.handleUpgrade(req, socket, head, (ws) => machines.attach(machine, wsLink(ws, { pingMs: RUNNER_PING_MS }), hubApi, token))
   }
   if (url.pathname !== '/ws') return refuse('404 Not Found')
   if (!sameOrigin(req)) return refuse('403 Forbidden')
   wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws))
 })
 
-/** A remote runner's connection, dropped if it stops answering pings (a laptop that went to sleep mid-connection). */
-function connectRunner(machine: string, token: string, ws: WebSocket): void {
-  let alive = true
-  ws.on('pong', () => (alive = true))
-  const ping = setInterval(() => {
-    if (!alive) return ws.terminate()
-    alive = false
-    ws.ping()
-  }, RUNNER_PING_MS)
-  ws.on('close', () => clearInterval(ping))
-  machines.attach(machine, wsLink(ws), hubApi, token)
-}
 
 wss.on('connection', (ws: WebSocket) => {
   sockets.add(ws)
@@ -1158,7 +1135,7 @@ wss.on('connection', (ws: WebSocket) => {
         send(ws, {
           type: 'error',
           sessionId: 'sessionId' in event ? event.sessionId : undefined,
-          error: err instanceof Error ? err.message : String(err),
+          error: message(err),
         }),
       ),
     )
@@ -1177,7 +1154,7 @@ wss.on('connection', (ws: WebSocket) => {
 const runner = new Runner({ workspaceDir: WORKSPACE_DIR, scratchDir: SCRATCH_DIR, dataDir: DATA_DIR, env: startEnv })
 const [hubEnd, runnerEnd] = memoryLinks()
 importOlderChats()
-machines.attach(LOCAL, hubEnd, hubApi)
+machines.attach(LOCAL_MACHINE, hubEnd, hubApi)
 runner.connect(runnerEnd).catch((err) => console.error('The hub’s own runner failed to start:', err))
 
 server.listen(PORT, HOST, () => {
@@ -1209,7 +1186,7 @@ function importOlderChats(): void {
         const sessionId = name.slice(0, -'.jsonl'.length)
         if (!name.endsWith('.jsonl') || !isUuid(sessionId)) continue
         const info = statSync(join(projects, project, name), { throwIfNoEntry: false })
-        if (info?.isFile()) insert.run(sessionId, LOCAL, Math.floor(info.mtimeMs))
+        if (info?.isFile()) insert.run(sessionId, LOCAL_MACHINE, Math.floor(info.mtimeMs))
       }
     }
     store.db.exec('DELETE FROM pending_import')
@@ -1221,13 +1198,5 @@ function readdirSafe(dir: string): string[] {
     return readdirSync(dir)
   } catch {
     return []
-  }
-}
-
-function loadDotEnv(): void {
-  if (!existsSync('.env')) return
-  for (const line of readFileSync('.env', 'utf8').split('\n')) {
-    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/)
-    if (m && m[2] && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '')
   }
 }

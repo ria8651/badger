@@ -5,6 +5,7 @@ import { connect, type Socket } from 'node:net'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { TerminalInfo } from '../shared/protocol.ts'
+import { message } from './errors.ts'
 import { listeningPorts } from './ports.ts'
 import { PTY_HOST_VERSION, type CreateSpec, type HostEvent, type HostRequest } from './ptyProtocol.ts'
 
@@ -121,7 +122,7 @@ export class Terminals {
       this.terminals = this.terminals.map(this.withPorts)
       this.emit({ type: 'terminals', terminals: this.terminals })
     } catch (err) {
-      console.error('Checking terminal ports failed:', err instanceof Error ? err.message : err)
+      console.error('Checking terminal ports failed:', message(err))
     } finally {
       this.polling = false
     }
@@ -294,18 +295,4 @@ export class Terminals {
       }
     }
   }
-}
-
-/** Drops what running under pnpm and Badger adds, so terminals behave like the user's own. */
-export function shellEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const clean: NodeJS.ProcessEnv = {}
-  for (const [key, value] of Object.entries(env)) {
-    if (/^(npm_|PNPM_|CLAUDE_CODE_|CLAUDECODE$|INIT_CWD$|FORCE_COLOR$|NODE$|COLUMNS$|LINES$)/.test(key)) continue
-    clean[key] = value
-  }
-  // pnpm puts this project's node_modules/.bin dirs at the front of PATH.
-  clean.PATH = env.PATH?.split(':')
-    .filter((p) => !/\/node_modules\/(\.bin|\.pnpm\/)|node-gyp-bin/.test(p))
-    .join(':')
-  return clean
 }

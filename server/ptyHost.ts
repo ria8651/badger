@@ -8,7 +8,6 @@
  *
  * Usage: node --import tsx server/ptyHost.ts <socket path>
  */
-import { execFileSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, statSync, unlinkSync } from 'node:fs'
 import { connect, createServer, type Socket } from 'node:net'
@@ -17,6 +16,8 @@ import headless from '@xterm/headless'
 import serialize from '@xterm/addon-serialize'
 import { spawn, type IPty } from '@lydell/node-pty'
 import type { TerminalInfo } from '../shared/protocol.ts'
+import { message } from './errors.ts'
+import { alive, descendants, signal } from './proc.ts'
 import { PTY_HOST_VERSION, type CreateSpec, type HostEvent, type HostRequest } from './ptyProtocol.ts'
 import { workspaceRoot } from './workspace.ts'
 
@@ -145,7 +146,7 @@ function start(t: Term): void {
       env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'badger' } as Record<string, string>,
     })
   } catch (err) {
-    note(t, `failed to start: ${err instanceof Error ? err.message : err}`)
+    note(t, `failed to start: ${message(err)}`)
     Object.assign(t.info, { running: false, exitCode: -1, signal: undefined })
     changed()
     return
@@ -314,44 +315,8 @@ async function handle(client: Socket, req: HostRequest): Promise<void> {
         return reply(undefined, `Unknown request ${(req as { type: string }).type}`)
     }
   } catch (err) {
-    reply(undefined, err instanceof Error ? err.message : String(err))
+    reply(undefined, message(err))
   }
-}
-
-// ── Process helpers ──
-
-/** Every process under pid, found through the parent links in `ps`. */
-function descendants(pid: number): number[] {
-  let out: string
-  try {
-    out = execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' })
-  } catch {
-    return []
-  }
-  const children = new Map<number, number[]>()
-  for (const line of out.split('\n')) {
-    const [child, parent] = line.trim().split(/\s+/).map(Number)
-    if (child && parent) children.set(parent, [...(children.get(parent) ?? []), child])
-  }
-  const found: number[] = []
-  const queue = [pid]
-  while (queue.length) for (const c of children.get(queue.shift()!) ?? []) found.push(c), queue.push(c)
-  return found
-}
-
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
-function signal(pid: number, sig: NodeJS.Signals): void {
-  try {
-    process.kill(pid, sig)
-  } catch {}
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))

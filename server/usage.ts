@@ -1,5 +1,6 @@
 import { getSessionInfo, type Query, type SDKControlGetContextUsageResponse, type SDKControlGetUsageResponse } from '@anthropic-ai/claude-agent-sdk'
 import type { AccountUsage, ContextUsage } from '../shared/protocol.ts'
+import { message } from './errors.ts'
 import { oneOff, type SessionManager } from './session.ts'
 import { inaccessible } from './workspace.ts'
 
@@ -31,7 +32,6 @@ export class ContextReader {
     this.contexts.set(sessionId, { modified: info.lastModified, usage })
     return usage
   }
-
 }
 
 /** The plan's limits, from any live process on this machine or a one-off one. They're the account's, not a chat's. */
@@ -69,7 +69,7 @@ export class AccountLimits {
         this.onAccount(this.account)
         return this.account
       } catch (err) {
-        console.error('Reading plan usage failed:', err instanceof Error ? err.message : err)
+        console.error('Reading plan usage failed:', message(err))
         return this.account
       } finally {
         this.reading = undefined

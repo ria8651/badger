@@ -4,7 +4,8 @@ import { CARD_STATUSES, type Card } from '../shared/protocol.ts'
 import { NO_CARD_CONTEXT, renderCardContext } from '../shared/cardContext.ts'
 import { ancestors, descendants, projectOf } from '../shared/cardTree.ts'
 import type { Actor, Store } from './db.ts'
-import { OpError, op, type Op, type OpContext } from './ops.ts'
+import { fail, op, type Op, type OpContext } from './ops.ts'
+import { UUID } from './runnerProtocol.ts'
 
 export const BOARD_SERVER = 'badger'
 
@@ -28,11 +29,10 @@ const status = z.enum(CARD_STATUSES)
  * lost on the way can't lose it.
  */
 export function cardContext(store: Store, sessionId: string): string | undefined {
-  const cards = store.cards()
-  const card = cards.find((c) => c.sessionIds.includes(sessionId))
+  const card = store.cardOf(sessionId)
   const last = store.contextHash(sessionId)
   if (!card) return last === undefined ? undefined : NO_CARD_CONTEXT
-  const rendered = renderCardContext(card, ancestors(cards, card.id))
+  const rendered = renderCardContext(card, ancestors(store.cards(), card.id))
   return hashOf(rendered) === last ? undefined : rendered
 }
 
@@ -70,7 +70,7 @@ export interface BoardDeps {
  */
 export function boardOps({ store, onChange, chats }: BoardDeps): Op[] {
   const actor = (ctx: OpContext): Actor => ({ source: 'claude', sessionId: ctx.sessionId })
-  const cardOf = (ctx: OpContext) => store.cards().find((c) => c.sessionIds.includes(ctx.sessionId))
+  const cardOf = (ctx: OpContext) => store.cardOf(ctx.sessionId)
   // Claude already knows this state (it wrote or just read it), so don't inject it next turn.
   const markSeen = (card: Card, ctx: OpContext) => {
     if (card.sessionIds.includes(ctx.sessionId)) store.setContextHash(ctx.sessionId, hashOf(renderCardContext(card, ancestors(store.cards(), card.id))))
@@ -194,7 +194,7 @@ export function boardOps({ store, onChange, chats }: BoardDeps): Op[] {
       input: {
         session_id: z
           .string()
-          .regex(/^[0-9a-f-]{36}$/)
+          .regex(UUID)
           .optional()
           .describe('Chat id, as listed by get_card. Omit for this chat'),
         archived: z.boolean().optional().describe('false to unarchive. Defaults to true'),
@@ -226,9 +226,6 @@ export function boardOps({ store, onChange, chats }: BoardDeps): Op[] {
   ]
 }
 
-const fail = (message: string): never => {
-  throw new OpError(message)
-}
 
 function summary(c: Card, mine: boolean, cards: Card[] = []): string {
   const chats = c.sessionIds.length ? `, ${c.sessionIds.length} chat${c.sessionIds.length === 1 ? '' : 's'}` : ''

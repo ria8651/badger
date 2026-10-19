@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance, type SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk'
 import { z, type ZodRawShape } from 'zod'
+import { message } from './errors.ts'
 
 /**
  * Badger's operations, each defined once and reachable two ways: as an MCP
@@ -31,6 +32,17 @@ export interface OpResult {
 
 /** A failure the caller should read, rather than a bug. */
 export class OpError extends Error {}
+
+/** Fails an op, saying why. */
+export const fail = (message: string): never => {
+  throw new OpError(message)
+}
+
+/** Text cut to `max` characters, keeping its start, or its end for output where the latest matters. */
+export function clip(text: string, max: number, keep: 'head' | 'tail' = 'head'): string {
+  if (text.length <= max) return text
+  return keep === 'head' ? `${text.slice(0, max)}\n… (${text.length - max} more characters)` : `[earlier output cut]\n${text.slice(-max)}`
+}
 
 export interface Op<S extends ZodRawShape = ZodRawShape> {
   /** The MCP tool's name, e.g. list_cards. */
@@ -95,11 +107,16 @@ export function mcpServer(
   })
 }
 
-/** Runs one for a script: the input is checked against its schema, and an image is saved to a file. */
-export async function runForScript(o: Op, input: unknown, ctx: OpContext): Promise<unknown> {
+/** An op's input from a script or another machine, checked against its schema. Anything it doesn't take is refused. */
+export function parseInput(o: Op, input: unknown): z.infer<z.ZodObject<ZodRawShape>> {
   const parsed = z.object(o.input).strict().safeParse(input ?? {})
   if (!parsed.success) throw new OpError(`Bad input for ${o.script}: ${z.prettifyError(parsed.error)}`)
-  const r = await o.run(parsed.data, ctx)
+  return parsed.data
+}
+
+/** Runs one for a script: the input is checked against its schema, and an image is saved to a file. */
+export async function runForScript(o: Op, input: unknown, ctx: OpContext): Promise<unknown> {
+  const r = await o.run(parseInput(o, input), ctx)
   if (!r.image) return r.value === undefined ? r.text : r.value
   const dir = join(tmpdir(), 'badger')
   mkdirSync(dir, { recursive: true })
@@ -137,5 +154,3 @@ function typeName(s: Schema | undefined): string {
   if (s.type === 'array') return `${typeName(s.items)}[]`
   return s.type ?? 'any'
 }
-
-export const message = (err: unknown) => (err instanceof Error ? err.message : String(err))

@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type { DatabaseSync, StatementSync } from 'node:sqlite'
 import { LOCAL_MACHINE, type Machine, type TerminalInfo } from '../shared/protocol.ts'
-import { BadRequest } from './db.ts'
+import { BadRequest } from './errors.ts'
 import { Peer, type Link } from './peer.ts'
 import { HUB_ARGS, RUNNER_EVENT, RUNNER_PROTOCOL, RUNNER_REPLIES, isUuid, type HubApi, type LiveInfo, type RunnerApi, type RunnerEvent, type RunnerHello } from './runnerProtocol.ts'
 
@@ -14,8 +14,6 @@ const HELLO_TIMEOUT_MS = 30 * 1000
  */
 const CALL_TIMEOUT_MS = 10 * 60 * 1000
 
-/** The hub's own machine. */
-export const LOCAL = LOCAL_MACHINE
 
 /** A runner that's connected and has said hello. */
 export interface Connection {
@@ -70,18 +68,18 @@ export class Machines {
     private events: MachineEvents,
   ) {
     // Named after its host when its runner says hello, like any other.
-    db.prepare("INSERT INTO machines (id, name, created_at) VALUES (?, 'This hub', ?) ON CONFLICT (id) DO NOTHING").run(LOCAL, Date.now())
+    db.prepare("INSERT INTO machines (id, name, created_at) VALUES (?, 'This hub', ?) ON CONFLICT (id) DO NOTHING").run(LOCAL_MACHINE, Date.now())
   }
 
   list(): Machine[] {
-    const rows = this.db.prepare('SELECT * FROM machines WHERE removed_at IS NULL ORDER BY id != ?, created_at').all(LOCAL) as unknown as MachineRow[]
+    const rows = this.db.prepare('SELECT * FROM machines WHERE removed_at IS NULL ORDER BY id != ?, created_at').all(LOCAL_MACHINE) as unknown as MachineRow[]
     return rows.map((r) => {
       const live = this.connections.get(r.id)
       const info = live?.hello ?? (r.info ? (JSON.parse(r.info) as RunnerHello) : undefined)
       return {
         id: r.id,
         name: r.name,
-        local: r.id === LOCAL,
+        local: r.id === LOCAL_MACHINE,
         online: !!live,
         hostname: info?.hostname,
         platform: info?.platform,
@@ -127,7 +125,7 @@ export class Machines {
   create(): { machine: Machine; token: string } {
     // Removed machines' ids stay taken, so their chats never turn up on a new machine.
     const taken = (id: string) =>
-      id === LOCAL ||
+      id === LOCAL_MACHINE ||
       !!this.db.prepare('SELECT 1 FROM machines WHERE id = ?').get(id) ||
       !!this.db.prepare('SELECT 1 FROM chat_machines WHERE machine = ?').get(id)
     let id = 'runner'
@@ -158,7 +156,7 @@ export class Machines {
    * connected with it is disconnected.
    */
   resetToken(id: string): { machine: Machine; token: string } {
-    if (id === LOCAL) throw new BadRequest("The hub's own runner has no token")
+    if (id === LOCAL_MACHINE) throw new BadRequest("The hub's own runner has no token")
     const token = newToken()
     if (!this.db.prepare('UPDATE machines SET token_hash = ? WHERE id = ? AND removed_at IS NULL').run(hash(token), id).changes) {
       throw new BadRequest('No such runner')
@@ -173,7 +171,7 @@ export class Machines {
    * its id is never used again, so no machine can pick them up.
    */
   remove(id: string): boolean {
-    if (id === LOCAL) throw new BadRequest("The hub's own runner can't be removed")
+    if (id === LOCAL_MACHINE) throw new BadRequest("The hub's own runner can't be removed")
     const removed =
       this.db.prepare('UPDATE machines SET removed_at = ?, token_hash = NULL WHERE id = ? AND removed_at IS NULL').run(Date.now(), id).changes > 0
     this.refusals.delete(id)
@@ -228,7 +226,7 @@ export class Machines {
         this.refused(id, why)
         throw new BadRequest(why)
       }
-      const allowed = token === undefined ? id === LOCAL : this.byToken(token) === id
+      const allowed = token === undefined ? id === LOCAL_MACHINE : this.byToken(token) === id
       if (!allowed) {
         setImmediate(() => peer.close(true))
         throw new Error('This runner was removed or given a new token')
@@ -241,7 +239,7 @@ export class Machines {
       this.connections.set(id, connection)
       this.db.prepare('UPDATE machines SET last_seen = ?, info = ? WHERE id = ?').run(Date.now(), JSON.stringify(hello), id)
       this.events.onChange(connection, id)
-      return { id, name: connection.name, local: id === LOCAL, chats: this.chatsOn(id) }
+      return { id, name: connection.name, local: id === LOCAL_MACHINE, chats: this.chatsOn(id) }
     }
     const methods = Object.fromEntries(
       Object.entries(api(id)).map(([name, fn]) => [

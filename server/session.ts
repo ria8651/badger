@@ -14,6 +14,7 @@ import {
 import type { AnswerDraft, BackgroundTask, ImageAttachment, ModelOption, PendingPermission, PermissionMode, QueuedMessage, ServerEvent, WireMessage } from '../shared/protocol.ts'
 import { wrapPaste } from '../shared/pastes.ts'
 import { BashStreams, streamEnv } from './bashStream.ts'
+import { message } from './errors.ts'
 import type { LiveSnapshot } from './runnerProtocol.ts'
 import { SCRIPT_TOOL } from './scripts.ts'
 import { inaccessible } from './workspace.ts'
@@ -421,7 +422,7 @@ export class LiveSession {
     try {
       for await (const msg of this.agent) this.handle(msg)
     } catch (err) {
-      this.emit({ type: 'error', sessionId: this.id, error: err instanceof Error ? err.message : String(err) })
+      this.emit({ type: 'error', sessionId: this.id, error: message(err) })
     } finally {
       this.queue.close()
       this.makingWorktree = false
@@ -607,7 +608,7 @@ export class LiveSession {
   /** The card context for the next turn. It comes from the hub, which may not answer, and then there's none. */
   private context(): Promise<string | undefined> {
     return (this.tools.turnContext?.() ?? Promise.resolve(undefined)).catch((err) => {
-      console.error(`Card context for ${this.id} failed:`, err instanceof Error ? err.message : err)
+      console.error(`Card context for ${this.id} failed:`, message(err))
       return undefined
     })
   }

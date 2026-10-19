@@ -1,21 +1,15 @@
-import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { promisify } from 'node:util'
 import type { Checkout, FileEntry, Folder, Listing } from '../shared/protocol.ts'
-import { git, gitStatus, inaccessible } from './workspace.ts'
-
-const run = promisify(execFile)
+import { run } from './proc.ts'
+import { git, gitStatus, inaccessible, mainCheckout } from './workspace.ts'
 
 /** A git command's output, or undefined if it failed, e.g. counting commits in a repo with none. */
 const tryGit = (cwd: string, ...args: string[]) => git(cwd, ...args).catch(() => undefined)
 
 /** The main checkout of the repo a directory is in, or undefined outside one. */
-async function repoOf(dir: string): Promise<string | undefined> {
-  const common = await tryGit(dir, 'rev-parse', '--git-common-dir')
-  return common ? dirname(resolve(dir, common)) : undefined
-}
+const repoOf = (dir: string) => mainCheckout(dir).catch(() => undefined)
 
 /** A repo's working trees from `git worktree list`, main first, skipping bare repos and ones whose folder is gone. */
 async function worktrees(main: string): Promise<{ path: string; branch: string; main: boolean }[]> {

@@ -258,7 +258,6 @@ export interface TerminalInfo {
 
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const
 
-/** A pasted or dropped image, base64 encoded, sent to Claude as an image block. */
 /** File extensions for each image type, for picking images off disk. */
 export const IMAGE_EXTENSIONS: Record<(typeof IMAGE_TYPES)[number], string[]> = {
   'image/png': ['.png'],
@@ -267,7 +266,8 @@ export const IMAGE_EXTENSIONS: Record<(typeof IMAGE_TYPES)[number], string[]> = 
   'image/webp': ['.webp'],
 }
 
-export type ImageAttachment ={ mediaType: (typeof IMAGE_TYPES)[number]; data: string }
+/** A pasted or dropped image, base64 encoded, sent to Claude as an image block. */
+export type ImageAttachment = { mediaType: (typeof IMAGE_TYPES)[number]; data: string }
 
 /** Big pastes and images waiting in the composer to be sent. */
 export type DraftAttachments = { pastes: string[]; images: ImageAttachment[] }

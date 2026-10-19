@@ -1,15 +1,14 @@
 import { existsSync } from 'node:fs'
-import { tool, type SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import type { Card } from '../shared/protocol.ts'
-import type { Children } from './children.ts'
+import { childTool, refuse, reply, type Children } from './children.ts'
+import { message } from './errors.ts'
 import type { ChatCard } from './runnerProtocol.ts'
 import type { SessionManager } from './session.ts'
 import type { Terminals } from './terminals.ts'
 import { WORKTREE_PATH, mainCheckout, mergeBlocker, removeWorktree, worktreeStatus } from './workspace.ts'
 
 export const MERGE_TOOL = 'merge_worktree'
-
 
 /** The worktree, its chats and its terminals are all on the machine this runs on; the board is the hub's. */
 export interface MergeDeps {
@@ -41,53 +40,47 @@ function serialised<T>(key: string, fn: () => Promise<T>): Promise<T> {
  * one waits. Once it lands, Badger cleans up after this chat's turn ends: it
  * can't remove the worktree while this chat is still running in it.
  */
-export function mergeTool(deps: MergeDeps, sessionId: string, cwd: () => string, toolName: string): SdkMcpToolDefinition<any> {
-  return tool(
-    MERGE_TOOL,
-    [
-      "Merge this chat's worktree branch into the branch the main checkout is on. Use it when the user asks to merge.",
-      'Commit everything first. Badger starts a chat in the main checkout that merges the branch, resolves any conflicts and runs checks, and waits for it; that chat\'s report is the result.',
-      'Once the merge lands, Badger removes this worktree and its branch and archives this chat after this turn ends, so do nothing more in the worktree: just tell the user what happened.',
-    ].join(' '),
+export function mergeTool(deps: MergeDeps, sessionId: string, cwd: () => string, toolName: string) {
+  return childTool(
     {
-      notes: z
-        .string()
-        .optional()
-        .describe('For the chat doing the merge: what the change does and anything likely to conflict or need care'),
+      name: MERGE_TOOL,
+      kind: 'merge',
+      description: [
+        "Merge this chat's worktree branch into the branch the main checkout is on. Use it when the user asks to merge.",
+        'Commit everything first. Badger starts a chat in the main checkout that merges the branch, resolves any conflicts and runs checks, and waits for it; that chat\'s report is the result.',
+        'Once the merge lands, Badger removes this worktree and its branch and archives this chat after this turn ends, so do nothing more in the worktree: just tell the user what happened.',
+      ].join(' '),
+      input: {
+        notes: z
+          .string()
+          .optional()
+          .describe('For the chat doing the merge: what the change does and anything likely to conflict or need care'),
+      },
     },
-    async ({ notes }, extra) => {
-      const dir = cwd()
-      if (!WORKTREE_PATH.test(dir)) return error(`This chat isn't in a Claude Code worktree (it's in ${dir}), so there's nothing to merge.`)
-      const parent = deps.manager.get(sessionId)
-      const toolUseId = parent?.takeToolUse(toolName)
-      if (!parent || !toolUseId) return error("Badger couldn't find this tool call, so it can't show the merge. Try again.")
-
+    deps,
+    { sessionId, cwd, toolName },
+    async ({ notes }, { parent, dir, child }) => {
+      if (!WORKTREE_PATH.test(dir)) return refuse(`This chat isn't in a Claude Code worktree (it's in ${dir}), so there's nothing to merge.`)
       const status = await worktreeStatus(dir)
       if (status.changes) {
-        return error(`${plural(status.changes, 'file has', 'files have')} uncommitted changes. Commit or discard them, then merge again.`)
+        return refuse(`${plural(status.changes, 'file has', 'files have')} uncommitted changes. Commit or discard them, then merge again.`)
       }
-      if (!status.unmerged) return error(`Nothing to merge: every commit on ${status.branch} is already on ${status.base}.`)
+      if (!status.unmerged) return refuse(`Nothing to merge: every commit on ${status.branch} is already on ${status.base}.`)
       const main = await mainCheckout(dir)
 
       return serialised(main, async () => {
         const blocker = await mergeBlocker(main)
-        if (blocker) return error(`${blocker} Sort that out in the main checkout, then merge again.`)
-        if (deps.manager.busyIn(main)) return error(`Another chat is working in the main checkout (${main}). Wait for it to finish, then merge again.`)
+        if (blocker) return refuse(`${blocker} Sort that out in the main checkout, then merge again.`)
+        if (deps.manager.busyIn(main)) return refuse(`Another chat is working in the main checkout (${main}). Wait for it to finish, then merge again.`)
 
         const card = await deps.cardOf(sessionId)
         const before = await worktreeStatus(dir)
-        const result = await deps.children.run(parent, {
-          toolUseId,
-          kind: 'merge',
-          cwd: main,
-          prompt: mergePrompt({ dir, branch: before.branch, base: before.base, unmerged: before.unmerged, notes, card }),
-          signal: (extra as { signal?: AbortSignal } | undefined)?.signal,
-        })
+        const result = await child(main, mergePrompt({ dir, branch: before.branch, base: before.base, unmerged: before.unmerged, notes, card }))
 
         const after = await worktreeStatus(dir).catch(() => undefined)
         if (!after || after.unmerged) {
           const why = result.ok ? `The merge chat finished but ${before.branch} still isn't on ${before.base}.` : "The merge didn't finish."
-          return error(`${why} Its report:\n\n${result.text}`)
+          return refuse(`${why} Its report:\n\n${result.text}`)
         }
 
         const finished = cardFinished(deps, card, dir)
@@ -95,7 +88,7 @@ export function mergeTool(deps: MergeDeps, sessionId: string, cwd: () => string,
         const then = finished
           ? `moves card #${card!.id} to done, which archives its chats`
           : 'archives this chat' + (card ? ` (card #${card.id} stays where it is: it has other chats still going)` : '')
-        return text(
+        return reply(
           `Merged ${before.branch} into ${before.base}. When this turn ends, Badger removes this worktree and its branch, closes its terminals and ${then}.\n\nThe merge chat's report:\n\n${result.text}`,
         )
       })
@@ -146,12 +139,9 @@ async function cleanUp(deps: MergeDeps, p: { sessionId: string; dir: string; car
     for (const t of deps.terminals.terminals.filter((t) => t.root === p.dir)) await deps.terminals.remove(t.id)
     await removeWorktree(p.dir)
   } catch (err) {
-    console.error(`Merged, but couldn't remove worktree ${p.dir}: ${err instanceof Error ? err.message : err}`)
+    console.error(`Merged, but couldn't remove worktree ${p.dir}: ${message(err)}`)
   }
-  await deps.finish(p.sessionId, p.card).catch((err) => console.error(`Merged, but couldn't put the chat away: ${err instanceof Error ? err.message : err}`))
+  await deps.finish(p.sessionId, p.card).catch((err) => console.error(`Merged, but couldn't put the chat away: ${message(err)}`))
 }
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
-
-const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] })
-const error = (t: string) => ({ content: [{ type: 'text' as const, text: t }], isError: true })

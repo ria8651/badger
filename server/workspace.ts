@@ -1,9 +1,9 @@
-import { execFile, execFileSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { accessSync, constants, existsSync, mkdirSync, writeFileSync, statSync } from 'node:fs'
 import { appendFile, mkdir, open, readFile, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { promisify } from 'node:util'
 import type { ChangesStatus, GitStatus, WorktreeStatus } from '../shared/protocol.ts'
+import { run } from './proc.ts'
 
 /** The git root of a directory (each worktree has its own), or the directory itself outside a repo. */
 export function workspaceRoot(cwd: string): string {
@@ -12,6 +12,14 @@ export function workspaceRoot(cwd: string): string {
   } catch {
     return cwd
   }
+}
+
+const roots = new Map<string, string>()
+
+/** workspaceRoot, looked up once per folder: it's asked about the same few over and over. */
+export function rootOf(cwd: string): string {
+  if (!roots.has(cwd)) roots.set(cwd, workspaceRoot(cwd))
+  return roots.get(cwd)!
 }
 
 /** A folder Claude Code can't run in: removed (like a merged worktree), not a folder, or not readable. */
@@ -25,8 +33,13 @@ export function inaccessible(dir: string): boolean {
   }
 }
 
-const run = promisify(execFile)
 export const git = async (cwd: string, ...args: string[]) => (await run('git', args, { cwd })).stdout.trim()
+
+/** Commits in a range, e.g. `@{upstream}..HEAD`. */
+const count = async (path: string, range: string) => Number(await git(path, 'rev-list', '--count', range))
+
+/** Files with uncommitted changes, from `git status --porcelain`. */
+const changed = (porcelain: string) => (porcelain ? porcelain.split('\n').length : 0)
 
 /** Where Claude Code puts the worktrees it makes (--worktree, EnterWorktree). */
 export const WORKTREE_PATH = /^(.*)\/\.claude\/worktrees\/([^/]+)\/?$/
@@ -59,8 +72,8 @@ export async function worktreeStatus(path: string): Promise<WorktreeStatus> {
     git(path, 'status', '--porcelain'),
     git(main, 'branch', '--show-current'),
   ])
-  const unmerged = Number(await git(path, 'rev-list', '--count', `${await git(main, 'rev-parse', 'HEAD')}..HEAD`))
-  return { path, branch, changes: status ? status.split('\n').length : 0, unmerged, base }
+  const unmerged = await count(path, `${await git(main, 'rev-parse', 'HEAD')}..HEAD`)
+  return { path, branch, changes: changed(status), unmerged, base }
 }
 
 /** Uncommitted changes and commits not yet on the base, for any git checkout. Undefined outside a repo. */
@@ -75,8 +88,8 @@ export async function changesStatus(path: string): Promise<ChangesStatus | undef
     git(path, 'branch', '--show-current'),
     git(path, 'rev-parse', '--abbrev-ref', '@{upstream}').catch(() => ''),
   ])
-  const ahead = upstream ? Number(await git(path, 'rev-list', '--count', '@{upstream}..HEAD')) : 0
-  return { branch, changes: status ? status.split('\n').length : 0, base: upstream || undefined, ahead }
+  const ahead = upstream ? await count(path, '@{upstream}..HEAD') : 0
+  return { branch, changes: changed(status), base: upstream || undefined, ahead }
 }
 
 /**
@@ -118,8 +131,6 @@ async function newLines(file: string): Promise<number> {
   }
 }
 
-const count = async (path: string, range: string) => Number(await git(path, 'rev-list', '--count', range))
-
 /** Where a checkout stands; fetching first, at most once a minute per repo, so "behind" is up to date. Undefined outside a repo. */
 export async function gitStatus(path: string, fetch = false): Promise<GitStatus | undefined> {
   const status = await git(path, 'status', '--porcelain').catch(() => undefined)
@@ -139,7 +150,7 @@ export async function gitStatus(path: string, fetch = false): Promise<GitStatus 
     stat(join(common, 'FETCH_HEAD')).then((s) => s.mtimeMs, () => undefined),
     status ? lineChanges(path) : { added: 0, removed: 0 },
   ])
-  return { branch, changes: status ? status.split('\n').length : 0, ...lines, upstream: upstream || undefined, ahead, behind, remote, base, fetchedAt }
+  return { branch, changes: changed(status), ...lines, upstream: upstream || undefined, ahead, behind, remote, base, fetchedAt }
 }
 
 /** How a linked worktree compares with the main checkout's HEAD. */

@@ -1,9 +1,10 @@
 import { isAbsolute, resolve } from 'node:path'
 import { z } from 'zod'
 import type { TerminalInfo } from '../shared/protocol.ts'
-import { OpError, op, type Op, type OpContext, type OpResult } from './ops.ts'
+import { message } from './errors.ts'
+import { clip, fail, op, type Op, type OpContext, type OpResult } from './ops.ts'
 import type { Terminals } from './terminals.ts'
-import { workspaceRoot } from './workspace.ts'
+import { rootOf } from './workspace.ts'
 
 export const TERMINAL_SERVER = 'terminals'
 
@@ -34,13 +35,8 @@ const ACTED = `{ outcome, terminal?: Terminal, output }. ${TERMINAL}`
  * browser, and they outlive the chat and Badger restarts.
  */
 export function terminalOps(terminals: Terminals): Op[] {
-  // A chat's directory moves if Claude enters a worktree; look its root up again when it does.
-  const roots = new Map<string, string>()
-  const root = (ctx: OpContext) => {
-    const cwd = ctx.cwd()
-    if (!roots.has(cwd)) roots.set(cwd, workspaceRoot(cwd))
-    return roots.get(cwd)!
-  }
+  // A chat's directory moves if Claude enters a worktree, so it's asked for each time.
+  const root = (ctx: OpContext) => rootOf(ctx.cwd())
 
   const find = (tid: string) => terminals.get(tid)
   const need = (tid: string) => find(tid) ?? fail(`No terminal ${tid}. Use list_terminals.`)
@@ -63,7 +59,7 @@ export function terminalOps(terminals: Terminals): Op[] {
     try {
       re = opts.wait_for ? new RegExp(opts.wait_for, 'm') : undefined
     } catch (err) {
-      fail(`Invalid wait_for regex: ${err instanceof Error ? err.message : err}`)
+      fail(`Invalid wait_for regex: ${message(err)}`)
     }
     let tid = typeof target === 'string' ? target : undefined
     const early: { id: string; data: string }[] = []
@@ -119,13 +115,13 @@ export function terminalOps(terminals: Terminals): Op[] {
               re ? (opts.timeout ?? 30) * 1000 : settle,
             )
           },
-          (err) => finish(`Failed: ${err instanceof Error ? err.message : err}`),
+          (err) => finish(`Failed: ${message(err)}`),
         )
     })
     if (!tid) fail(outcome)
     const t = find(tid!)
     if (!t) return { text: [outcome, `Terminal ${tid} is closed.`].filter(Boolean).join('\n'), value: { outcome, output: '' } }
-    const output = clip(await terminals.text(tid!, opts.lines ?? DEFAULT_LINES).catch(() => ''))
+    const output = clip(await terminals.text(tid!, opts.lines ?? DEFAULT_LINES).catch(() => ''), MAX_RESULT_CHARS, 'tail')
     return {
       text: [outcome, describe(t, ctx), '', output || '(no output)'].filter((l, i) => i > 0 || l).join('\n'),
       value: { outcome, terminal: t, output },
@@ -247,15 +243,7 @@ export function terminalOps(terminals: Terminals): Op[] {
   ]
 }
 
-const fail = (message: string): never => {
-  throw new OpError(message)
-}
-
 /** Colours, cursor movement and titles out; what's left reads like the screen. */
 function stripAnsi(s: string): string {
   return s.replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-_]/g, '').replace(/\r(?!\n)/g, '\n')
-}
-
-function clip(s: string): string {
-  return s.length > MAX_RESULT_CHARS ? '[earlier output cut]\n' + s.slice(-MAX_RESULT_CHARS) : s
 }

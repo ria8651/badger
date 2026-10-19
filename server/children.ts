@@ -1,3 +1,4 @@
+import { tool, type AnyZodRawShape, type InferShape, type SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk'
 import type { LiveSession, SessionManager } from './session.ts'
 
 export interface ChildResult {
@@ -51,5 +52,42 @@ export class Children {
       if (!child.send(opts.prompt)) finish(false, 'The chat closed before it could start.')
     })
   }
+}
 
+/** What a tool call shows Claude. */
+export type ToolReply = { content: { type: 'text'; text: string }[]; isError?: boolean }
+
+export const reply = (text: string): ToolReply => ({ content: [{ type: 'text', text }] })
+export const refuse = (text: string): ToolReply => ({ ...reply(text), isError: true })
+
+/** A child tool's call: the chat that made it, where that chat is now, and its child to start. */
+export interface ChildCall {
+  parent: LiveSession
+  dir: string
+  /** Starts the child in `cwd` and waits for its first turn to end. Stopping the call stops it. */
+  child: (cwd: string, prompt: string) => Promise<ChildResult>
+}
+
+/**
+ * A tool, for one chat, whose work a child chat does while that chat waits:
+ * shown inside the call, which is found by `toolName`, Claude Code's full
+ * name for the tool. `kind` says what the child is for, e.g. merge.
+ */
+export function childTool<S extends AnyZodRawShape>(
+  def: { name: string; kind: string; description: string; input: S },
+  deps: { manager: SessionManager; children: Children },
+  chat: { sessionId: string; cwd: () => string; toolName: string },
+  body: (args: InferShape<S>, call: ChildCall) => Promise<ToolReply>,
+): SdkMcpToolDefinition<S> {
+  return tool(def.name, def.description, def.input, async (args, extra) => {
+    const parent = deps.manager.get(chat.sessionId)
+    const toolUseId = parent?.takeToolUse(chat.toolName)
+    if (!parent || !toolUseId) return refuse(`Badger couldn't find this tool call, so it can't show the ${def.kind}. Try again.`)
+    const signal = (extra as { signal?: AbortSignal } | undefined)?.signal
+    return body(args, {
+      parent,
+      dir: chat.cwd(),
+      child: (cwd, prompt) => deps.children.run(parent, { toolUseId, kind: def.kind, cwd, prompt, signal }),
+    })
+  })
 }
