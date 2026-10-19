@@ -8,7 +8,14 @@ import { DiffCount } from './ui.tsx'
  * uncommitted, and then only what isn't in step. Nothing after the branch
  * means there's nothing to do. `hide` leaves out what a button beside it says.
  */
-export function GitSummary(props: { git: GitStatus; branch?: boolean; hide?: 'ahead' | 'behind'; class?: string }) {
+export function GitSummary(props: {
+  git: GitStatus
+  branch?: boolean
+  hide?: 'ahead' | 'behind'
+  class?: string
+  /** On each part after the counts, e.g. to drop them when there's no room. */
+  partClass?: string
+}) {
   const parts = () => {
     const g = props.git
     const out: { text: string; tone: string; title: string }[] = []
@@ -29,10 +36,11 @@ export function GitSummary(props: { git: GitStatus; branch?: boolean; hide?: 'ah
           <span class="truncate">{props.git.branch || 'detached'}</span>
         </span>
       </Show>
-      <DiffCount files={props.git.changes} added={props.git.added} removed={props.git.removed} />
+      <DiffCount files={props.git.changes} added={props.git.added} removed={props.git.removed} class="shrink-0" />
+      {/* Short of room, these truncate along with the branch rather than spill over what's next to them. */}
       <For each={parts()}>
         {(p) => (
-          <span class={p.tone} title={p.title}>
+          <span class={`min-w-0 truncate ${p.tone} ${props.partClass ?? ''}`} title={p.title}>
             {p.text}
           </span>
         )}

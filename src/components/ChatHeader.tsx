@@ -16,28 +16,30 @@ import { Menu, plural, type MenuItem } from './ui.tsx'
  * A checkout's git status, kept current: read as soon as it's shown and again
  * after a fetch, then fetched every few minutes while the tab is in view, and
  * whenever it comes back into view. Fetching is what makes "behind" mean anything.
+ * While `paused`, e.g. with the machine offline for a moment, what was read last stays.
  */
-export function createGitStatus(target: () => { dir: string; machine: string } | undefined) {
+export function createGitStatus(target: () => { dir: string; machine: string } | undefined, paused: () => boolean = () => false) {
   const [status, setStatus] = createSignal<GitStatus>()
   const [fetching, setFetching] = createSignal(false)
   const key = (t?: { dir: string; machine: string }) => (t ? `${t.machine}:${t.dir}` : undefined)
   const refresh = async (fetch = false) => {
     const t = target()
-    if (!t) return
+    if (!t || paused()) return
     if (fetch) setFetching(true)
-    const next = await api.git(t.dir, t.machine, fetch).catch(() => undefined)
+    // One that fails, e.g. while git is busy mid-commit, leaves what's shown rather than blanking it.
+    const next = await api.git(t.dir, t.machine, fetch).catch(() => false as const)
     if (fetch) setFetching(false)
     // Dropped if the chat moved, e.g. into a worktree, while it was on its way.
-    if (key(target()) === key(t)) setStatus(next ?? undefined)
+    if (next !== false && key(target()) === key(t)) setStatus(next ?? undefined)
   }
+  // Cleared only for somewhere else, or nowhere; read again on coming back from a pause.
+  let shown: string | undefined
   createEffect(
-    on(
-      () => key(target()),
-      (k) => {
-        setStatus(undefined)
-        if (k) void refresh().then(() => refresh(true))
-      },
-    ),
+    on([() => key(target()), paused], ([k, p]) => {
+      if (k !== shown) setStatus(undefined)
+      shown = k
+      if (k && !p) void refresh().then(() => refresh(true))
+    }),
   )
   const inView = () => document.visibilityState === 'visible'
   const onVisible = () => inView() && void refresh(true)
@@ -197,7 +199,8 @@ export function ChatHeader(props: {
   const button = 'flex h-7 items-center gap-1 rounded-button-md px-2 text-xs transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9'
 
   return (
-    <div class="bar relative z-10 flex h-10 shrink-0 items-center gap-2 border-b border-line shadow-(--shadow-bar) px-3 text-[13px] md:h-12 md:px-4">
+    // A container, so what gives way goes by the chat's width, not the window's: a preview beside it narrows it too.
+    <div class="bar @container relative z-10 flex h-10 shrink-0 items-center gap-2 border-b border-line shadow-(--shadow-bar) px-3 text-[13px] md:h-12 md:px-4">
       <Show when={props.session}>
         {(s) => (
           <>
@@ -222,11 +225,11 @@ export function ChatHeader(props: {
                     props.onOpenCard(c().id)
                   }}
                   title={`Open #${c().id} ${c().title}`}
-                  class={`${button} min-w-0 max-w-60 shrink text-fg-3`}
+                  class={`${button} max-w-60 shrink-[20] @4xl:min-w-0 text-fg-3`}
                 >
                   <span class="shrink-0 tabular-nums">#{c().id}</span>
-                  {/* Between the two the chat's title is enough. */}
-                  <span class="truncate md:hidden lg:inline">{c().title}</span>
+                  {/* Only with room to spare: it's the first thing to give way, down to its number. */}
+                  <span class="hidden truncate @4xl:inline">{c().title}</span>
                 </a>
               )}
             </Show>
@@ -240,11 +243,12 @@ export function ChatHeader(props: {
           </>
         )}
       </Show>
-      <span class={`shrink-0 text-fg-2 ${props.git ? 'hidden sm:block' : ''}`}>{folder()}</span>
+      {/* With a branch beside it, the next to go. */}
+      <span class={`shrink-0 text-fg-2 ${props.git ? 'hidden @2xl:block' : ''}`}>{folder()}</span>
       <Show when={props.git}>
         {(g) => (
           <>
-            {/* Wrapped so the branch name gives way on narrow screens, rather than the buttons. */}
+            {/* Wrapped so the branch and how it stands give way, rather than the buttons. */}
             <div ref={gitMenu} class="min-w-0">
               <Menu
                 items={gitItems()}
@@ -253,7 +257,8 @@ export function ChatHeader(props: {
                 title={detail()}
                 class="w-80"
                 triggerClass={(open) => `${button} max-w-full min-w-0 gap-2 ${open ? 'bg-surface' : ''}`}
-                trigger={() => <GitSummary git={g()} branch hide={primary() === 'push' ? 'ahead' : primary() === 'pull' ? 'behind' : undefined} />}
+                // Too narrow for them to say anything; hovering and the menu still do.
+                trigger={() => <GitSummary git={g()} branch partClass="hidden @md:inline" hide={primary() === 'push' ? 'ahead' : primary() === 'pull' ? 'behind' : undefined} />}
               />
             </div>
             <Show when={primary()}>
