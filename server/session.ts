@@ -1,36 +1,20 @@
 import { randomUUID } from 'node:crypto'
-import { homedir } from 'node:os'
-import {
-  getSessionInfo,
-  query,
-  type CanUseTool,
-  type McpServerConfig,
-  type Options,
-  type PermissionResult,
-  type PermissionUpdate,
-  type Query,
-  type SDKMessage,
-} from '@anthropic-ai/claude-agent-sdk'
-import type { AnswerDraft, BackgroundTask, ChatStatus, ImageAttachment, ModelOption, PendingPermission, PermissionMode, QueuedMessage, ServerEvent, WireMessage } from '../shared/protocol.ts'
+import { getSessionInfo, query, type McpServerConfig, type Query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { AnswerDraft, BackgroundTask, ChatStatus, ImageAttachment, PermissionMode, QueuedMessage, ServerEvent, WireMessage } from '../shared/protocol.ts'
 import { wrapPaste } from '../shared/pastes.ts'
-import { BashStreams, streamEnv } from './bashStream.ts'
+import { BashStreams } from './bashStream.ts'
+import { readContext, readLimits } from './claudeProbe.ts'
 import { message } from './errors.ts'
-import type { LiveSnapshot } from './runnerProtocol.ts'
-import { SCRIPT_TOOL } from './scripts.ts'
-import { inaccessible } from './workspace.ts'
 import { MessageQueue } from './queue.ts'
-
-/**
- * Claude Code won't start at all with the flag that allows switching to bypass
- * permissions when it runs as root, unless IS_SANDBOX=1 says it's sandboxed.
- * Without the flag it refuses bypass itself, with its own message.
- */
-const CAN_BYPASS = process.getuid?.() !== 0 || process.env.IS_SANDBOX === '1'
+import type { LiveSnapshot } from './runnerProtocol.ts'
+import { AutoChecks } from './session/checks.ts'
+import { sdkOptions } from './session/options.ts'
+import { Outbox, publicQueued } from './session/outbox.ts'
+import { Permissions } from './session/permissions.ts'
+import { inaccessible } from './workspace.ts'
 
 /** Close an idle Claude Code process after this long; the next message resumes it. */
 const IDLE_CLOSE_MS = 15 * 60 * 1000
-/** Allowed in auto mode without asking the classifier. */
-const READ_ONLY_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS', 'NotebookRead', 'TodoWrite', 'ToolSearch', 'TaskOutput'])
 
 type Listener = (event: ServerEvent) => void
 
@@ -44,16 +28,6 @@ export interface SessionTools {
   contextAdded?: (text: string) => void
   /** Environment for Claude Code and the commands it runs, on top of the server's. */
   env?: Record<string, string>
-}
-
-/** A queued message, with what was sent to Claude Code so it can join the transcript once taken in. */
-interface Held extends QueuedMessage {
-  message: WireMessage
-}
-
-interface Pending extends PendingPermission {
-  suggestions?: PermissionUpdate[]
-  resolve: (result: PermissionResult) => void
 }
 
 /**
@@ -72,11 +46,15 @@ export class LiveSession {
   makingWorktree: boolean
   /** When Claude Code started compacting the conversation, while it is. */
   compacting?: number
+  /** Any background work is running, the subagents' own included; closing the process would kill it. */
+  busy = false
 
   private queue = new MessageQueue()
   private agent: Query
   private listeners = new Set<Listener>()
-  private pending = new Map<string, Pending>()
+  private permissions: Permissions
+  private checks: AutoChecks
+  private outbox: Outbox
   /** Non-streaming messages seen since this process started, keyed for dedupe with disk. */
   private live: WireMessage[] = []
   private idleTimer: NodeJS.Timeout | null = null
@@ -87,8 +65,6 @@ export class LiveSession {
   private onTurnEnd: () => void
   /** Tool calls that have started, by tool_use_id, so a tool's handler can find out which call it is. */
   private toolUses = new Map<string, string>()
-  /** Calls auto mode's classifier is still deciding on: tool_use_id to the subagent's call, or null for the chat's own. */
-  private checking = new Map<string, string | null>()
   /** Until the first init: only that one says where --worktree put us. */
   private awaitingInit = true
   private afterTurnCallbacks: (() => void)[] = []
@@ -96,10 +72,6 @@ export class LiveSession {
   private agents = new Map<string, string>()
   /** Started from the chat itself and running now. They outlive the turn that started them. */
   private background: BackgroundTask[] = []
-  /** Sent while Claude was busy and not taken in yet; Claude Code holds them until its next break or turn. */
-  private queued: Held[] = []
-  /** Any background work is running, the subagents' own included; closing the process would kill it. */
-  busy = false
   private tools: SessionTools
   /** Context already shown with a message that Claude Code hasn't taken in yet, so it isn't shown twice. */
   private shownContext?: Promise<string | undefined>
@@ -126,98 +98,47 @@ export class LiveSession {
     this.onClose = opts.onClose
     this.onChange = opts.onChange
     this.onTurnEnd = opts.onTurnEnd
+    this.checks = new AutoChecks((toolUseIds) => this.emit({ type: 'checking', sessionId: this.id, toolUseIds }))
+    this.outbox = new Outbox((messages) => this.emit({ type: 'queued', sessionId: this.id, messages }))
+    this.permissions = new Permissions(this.id, (e) => this.emit(e), {
+      asked: (toolUseId) => this.checks.done(toolUseId),
+      agent: (agentId) => this.agents.get(agentId),
+    })
     this.bash = new BashStreams(
       this.id,
       (toolUseId, chunk) => this.emit({ type: 'bash_output', sessionId: this.id, toolUseId, chunk }),
-      (toolUseId) => this.checked(toolUseId),
+      (toolUseId) => this.checks.done(toolUseId),
     )
 
     this.agent = query({
       prompt: this.queue,
-      options: {
+      options: sdkOptions({
+        id: this.id,
         cwd: this.cwd,
-        ...(opts.resume ? { resume: this.id } : { sessionId: this.id }),
-        permissionMode: this.mode,
-        ...(opts.model && opts.model !== 'default' ? { model: opts.model } : {}),
-        // So the chat can switch to bypass later.
-        allowDangerouslySkipPermissions: CAN_BYPASS,
-        includePartialMessages: true,
-        // Subagents' text and thinking too, not just their tool calls, so they show live as the chat's own do.
-        // Claude Code streams only the chat's own messages token by token; a subagent's arrive a block at a time.
-        forwardSubagentText: true,
-        // A one-line "what it's doing" for each running subagent, every ~30s.
-        agentProgressSummaries: true,
-        // Each task has its own Stop, so stopping the turn leaves background work running.
-        perTaskStopAffordance: true,
-        systemPrompt: { type: 'preset', preset: 'claude_code' },
-        settingSources: ['user', 'project', 'local'],
-        canUseTool: this.canUseTool,
+        mode: this.mode,
+        model: opts.model,
+        resume: opts.resume,
+        worktree: opts.worktree,
         mcpServers: opts.tools.mcpServers,
         allowedTools: opts.tools.allowedTools,
-        // Newer models omit thinking text by default; ask for summaries so it can stream.
-        thinking: { type: 'adaptive', display: 'summarized' },
-        env: { ...streamEnv(), ...opts.tools.env },
-        ...(opts.worktree !== undefined ? { extraArgs: { worktree: opts.worktree || null } } : {}),
+        env: opts.tools.env,
+        canUseTool: this.permissions.canUseTool,
         hooks: {
-          UserPromptSubmit: [
-            {
-              hooks: [
-                async () => {
-                  const additionalContext = await this.context()
-                  const shown = await this.shownContext
-                  this.shownContext = undefined
-                  if (!additionalContext) return { continue: true }
-                  this.tools.contextAdded?.(additionalContext)
-                  if (additionalContext !== shown) this.record({ type: 'hook_context', uuid: randomUUID(), text: additionalContext })
-                  return { continue: true, hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } }
-                },
-              ],
-            },
-          ],
-          PreToolUse: [
-            {
-              hooks: [
-                async (input) => {
-                  if (input.hook_event_name === 'PreToolUse') this.toolUses.set(input.tool_use_id, input.tool_name)
-                  return { continue: true }
-                },
-              ],
-            },
-            {
-              matcher: 'Bash',
-              hooks: [
-                async (input) => {
-                  if (input.hook_event_name === 'PreToolUse') {
-                    const command = (input.tool_input as { command?: unknown })?.command
-                    if (typeof command === 'string') this.bash.track(input.tool_use_id, command)
-                  }
-                  return { continue: true }
-                },
-              ],
-            },
-          ],
-          // Claude can move itself into a worktree mid-chat; follow it so terminals do too.
-          PostToolUse: [
-            {
-              hooks: [
-                async (input) => {
-                  if (input.hook_event_name === 'PostToolUse') this.toolUses.delete(input.tool_use_id)
-                  return { continue: true }
-                },
-              ],
-            },
-            {
-              matcher: 'EnterWorktree|ExitWorktree',
-              hooks: [
-                async (input) => {
-                  this.setCwd(input.cwd)
-                  return { continue: true }
-                },
-              ],
-            },
-          ],
+          promptContext: async () => {
+            const additionalContext = await this.context()
+            const shown = await this.shownContext
+            this.shownContext = undefined
+            if (!additionalContext) return undefined
+            this.tools.contextAdded?.(additionalContext)
+            if (additionalContext !== shown) this.record({ type: 'hook_context', uuid: randomUUID(), text: additionalContext })
+            return additionalContext
+          },
+          toolStarting: (toolUseId, toolName) => this.toolUses.set(toolUseId, toolName),
+          bashStarting: (toolUseId, command) => this.bash.track(toolUseId, command),
+          toolFinished: (toolUseId) => this.toolUses.delete(toolUseId),
+          moved: (cwd) => this.setCwd(cwd),
         },
-      },
+      }),
     })
     void this.pump()
   }
@@ -232,11 +153,11 @@ export class LiveSession {
     return {
       ...this.status(),
       messages: [...this.live],
-      permissions: [...this.pending.values()].map(publicPermission),
+      permissions: this.permissions.list(),
       bashOutput: this.bash.outputs(),
-      checking: [...this.checking.keys()],
+      checking: this.checks.ids(),
       background: this.background,
-      queued: this.queued.map(publicQueued),
+      queued: this.outbox.list(),
     }
   }
 
@@ -256,8 +177,7 @@ export class LiveSession {
     if (!this.queue.push(message)) return false
     if (this.running) {
       // Claude Code holds it until its next break; it joins the transcript once it's taken in, and can be withdrawn until then.
-      this.queued.push({ id: message.uuid, text, pastes, images, message: message as unknown as WireMessage })
-      this.emitQueued()
+      this.outbox.hold({ id: message.uuid, text, pastes, images, message: message as unknown as WireMessage })
     } else {
       // Echo immediately so every tab shows the message before the SDK replays it.
       this.record({ ...message, timestamp: new Date().toISOString() } as unknown as WireMessage)
@@ -275,20 +195,20 @@ export class LiveSession {
   async unqueue(id: string): Promise<QueuedMessage | undefined> {
     // In the SDK but not yet in its types.
     const cancel = (this.agent as Query & { cancelAsyncMessage?: (uuid: string) => Promise<boolean> }).cancelAsyncMessage
-    const queued = this.queued.find((m) => m.id === id)
+    const queued = this.outbox.get(id)
     if (!queued || !cancel || !(await cancel.call(this.agent, id))) return
     // Claude Code also reports it cancelled, usually first; either takes it off the list.
-    this.dequeue(id)
+    this.outbox.take(id)
     return publicQueued(queued)
   }
 
   /** Messages Claude Code is holding mean the turn that's ending isn't the last. */
   get hasQueued(): boolean {
-    return this.queued.length > 0
+    return this.outbox.size > 0
   }
 
   async interrupt(): Promise<void> {
-    for (const p of this.pending.values()) p.resolve({ behavior: 'deny', message: 'Interrupted by user', interrupt: true })
+    this.permissions.interrupt()
     await this.agent.interrupt().catch(() => {})
   }
 
@@ -313,39 +233,18 @@ export class LiveSession {
     this.emitStatus()
   }
 
-  resolvePermission(
-    requestId: string,
-    decision: 'allow' | 'allow_always' | 'deny',
-    message?: string,
-    updatedInput?: Record<string, unknown>,
-  ): void {
-    const p = this.pending.get(requestId)
-    if (!p) return
-    if (decision === 'deny') {
-      p.resolve({ behavior: 'deny', message: message || 'The user denied this action.' })
-    } else {
-      p.resolve({
-        behavior: 'allow',
-        updatedInput: updatedInput ?? p.input,
-        ...(decision === 'allow_always' && p.suggestions ? { updatedPermissions: p.suggestions } : {}),
-      })
-    }
+  resolvePermission(requestId: string, decision: 'allow' | 'allow_always' | 'deny', message?: string, updatedInput?: Record<string, unknown>): void {
+    this.permissions.resolve(requestId, decision, message, updatedInput)
   }
 
   /** Keeps answers picked so far with the pending question. False if it's no longer pending. */
   draftAnswers(requestId: string, answers: AnswerDraft): boolean {
-    const p = this.pending.get(requestId)
-    if (!p) return false
-    p.answers = answers
-    return true
+    return this.permissions.draftAnswers(requestId, answers)
   }
 
   /** Keeps the plan as edited so far with the pending ExitPlanMode. False if it's no longer pending. */
   draftPlan(requestId: string, plan: string): boolean {
-    const p = this.pending.get(requestId)
-    if (!p || p.toolName !== 'ExitPlanMode') return false
-    p.plan = plan
-    return true
+    return this.permissions.draftPlan(requestId, plan)
   }
 
   /**
@@ -359,9 +258,14 @@ export class LiveSession {
     return ids.at(-1)
   }
 
-  /** Asks this chat's Claude Code process something directly, e.g. how full its context is. */
-  ask<T>(fn: (q: Query) => Promise<T>): Promise<T> {
-    return fn(this.agent)
+  /** How full the chat's context is, as Claude Code's /context counts it. */
+  contextUsage() {
+    return readContext(this.agent)
+  }
+
+  /** The account's plan limits, as this process reads them. */
+  planUsage() {
+    return readLimits(this.agent)
   }
 
   /** Taking a turn, or waiting on background work it started: closing it now would cut that off. */
@@ -371,7 +275,7 @@ export class LiveSession {
 
   /** A permission prompt or question is waiting on the user. */
   get waiting(): boolean {
-    return this.pending.size > 0
+    return this.permissions.waiting
   }
 
   /** Run once the current turn ends, e.g. cleanup that can't happen while this chat is still working in its directory. */
@@ -386,32 +290,10 @@ export class LiveSession {
     this.bash.finishAll(true)
   }
 
-  private canUseTool: CanUseTool = (toolName, input, { signal, suggestions: offered, blockedPath, toolUseID, agentID }) =>
-    new Promise<PermissionResult>((resolve) => {
-      this.checked(toolUseID)
-      // A script can do what any of Badger's tools can, so allowing scripts for good would allow all of them, unasked.
-      const suggestions = toolName.endsWith(`__${SCRIPT_TOOL}`) ? undefined : offered
-      const requestId = randomUUID()
-      const done = (result: PermissionResult) => {
-        if (!this.pending.delete(requestId)) return
-        this.emit({ type: 'permission_resolved', sessionId: this.id, requestId })
-        resolve(result)
-      }
-      const pending: Pending = {
-        requestId,
-        toolName,
-        toolUseId: toolUseID,
-        input,
-        blockedPath,
-        suggestions,
-        canAlwaysAllow: !!suggestions?.length,
-        ...(agentID ? { agent: this.agents.get(agentID) ?? 'A subagent' } : {}),
-        resolve: done,
-      }
-      this.pending.set(requestId, pending)
-      signal.addEventListener('abort', () => done({ behavior: 'deny', message: 'Aborted' }), { once: true })
-      this.emit({ type: 'permission_request', sessionId: this.id, permission: publicPermission(pending) })
-    })
+  /** Tells this chat's viewers something from outside the process, e.g. that it started a child chat. */
+  emitEvent(event: ServerEvent): void {
+    this.emit(event)
+  }
 
   private async pump(): Promise<void> {
     try {
@@ -432,7 +314,7 @@ export class LiveSession {
     // Where a queued message stands in Claude Code's queue; not yet in the SDK's types.
     if (wire.type === 'command_lifecycle') {
       const { command_uuid: id, state } = wire as { command_uuid?: string; state?: string }
-      const queued = id && (state === 'started' || state === 'cancelled') ? this.dequeue(id) : undefined
+      const queued = id && (state === 'started' || state === 'cancelled') ? this.outbox.take(id) : undefined
       // Taken in, mid-turn after a tool result or as the next turn: it joins the transcript here.
       if (queued && state === 'started') {
         this.record({ ...queued.message, timestamp: new Date().toISOString() })
@@ -442,12 +324,12 @@ export class LiveSession {
     }
     if (msg.type === 'stream_event') {
       // Auto mode checks a message's calls as they stream in and holds back the message's end until it's decided on all of them.
-      if (msg.event.type === 'message_delta') this.checkedMessage(msg.parent_tool_use_id)
+      if (msg.event.type === 'message_delta') this.checks.messageDone(msg.parent_tool_use_id)
       this.emit({ type: 'message', sessionId: this.id, message: wire })
       return
     }
-    if (msg.type === 'system' && msg.subtype === 'permission_denied') this.checked(msg.tool_use_id)
-    if (msg.type === 'assistant' && this.mode === 'auto') this.startChecking(wire)
+    if (msg.type === 'system' && msg.subtype === 'permission_denied') this.checks.done(msg.tool_use_id)
+    if (msg.type === 'assistant' && this.mode === 'auto') this.checks.start(wire)
     // With --worktree, Claude Code reports where it actually ended up. Later inits (one per
     // turn) report wherever a Bash `cd` left Claude's shell, which isn't the chat moving.
     if (msg.type === 'system' && msg.subtype === 'init') {
@@ -502,13 +384,13 @@ export class LiveSession {
       const taskId = ids.length === 1 ? (wire.tool_use_result as { backgroundTaskId?: string } | undefined)?.backgroundTaskId : undefined
       for (const id of ids) {
         this.bash.result(id, taskId)
-        this.checked(id)
+        this.checks.done(id)
       }
     }
     if (msg.type === 'system' && msg.subtype === 'task_notification') this.bash.taskEnded(msg.task_id)
     if (msg.type === 'result') {
       this.bash.finishAll()
-      this.checked()
+      this.checks.done()
       wire.ended_at = Date.now()
     }
     if (!isTranscriptMessage(msg)) return
@@ -519,19 +401,6 @@ export class LiveSession {
       this.setRunning(false)
       this.onTurnEnd()
     } else if (msg.type === 'assistant') this.setRunning(true)
-  }
-
-  /** Takes a message off the queued list, e.g. once Claude Code has taken it in or dropped it. */
-  private dequeue(id: string): Held | undefined {
-    const queued = this.queued.find((m) => m.id === id)
-    if (!queued) return
-    this.queued = this.queued.filter((m) => m !== queued)
-    this.emitQueued()
-    return queued
-  }
-
-  private emitQueued(): void {
-    this.emit({ type: 'queued', sessionId: this.id, messages: this.queued.map(publicQueued) })
   }
 
   private record(message: WireMessage): void {
@@ -559,43 +428,6 @@ export class LiveSession {
     this.onChange()
   }
 
-  /**
-   * A call Claude has just made goes to auto mode's check. The chat's own
-   * calls are followed until their message ends. A subagent's messages don't
-   * stream here, so only its commands, which say when they start, are.
-   */
-  private startChecking(msg: WireMessage): void {
-    const parent = (msg.parent_tool_use_id as string | null | undefined) ?? null
-    const content = (msg.message as { content?: unknown } | undefined)?.content
-    const uses = Array.isArray(content) ? (content as { type?: string; id?: string; name?: string }[]) : []
-    let added = false
-    for (const u of uses) {
-      if (u.type !== 'tool_use' || !u.id || !u.name || READ_ONLY_TOOLS.has(u.name)) continue
-      if (parent && u.name !== 'Bash') continue
-      this.checking.set(u.id, parent)
-      added = true
-    }
-    if (added) this.emitChecking()
-  }
-
-  /** A call is through auto mode's check, one way or another; without an id, every call. */
-  private checked(toolUseId?: string): void {
-    if (toolUseId ? !this.checking.delete(toolUseId) : !this.checking.size) return
-    if (!toolUseId) this.checking.clear()
-    this.emitChecking()
-  }
-
-  /** A message ended, so auto mode has decided on all of its calls: the chat's own, or a subagent's. */
-  private checkedMessage(parent: string | null): void {
-    const ids = [...this.checking].filter(([, p]) => p === parent).map(([id]) => id)
-    for (const id of ids) this.checking.delete(id)
-    if (ids.length) this.emitChecking()
-  }
-
-  private emitChecking(): void {
-    this.emit({ type: 'checking', sessionId: this.id, toolUseIds: [...this.checking.keys()] })
-  }
-
   private status(): ChatStatus {
     return { running: this.running, makingWorktree: this.makingWorktree, compacting: this.compacting, mode: this.mode, model: this.model, cwd: this.cwd }
   }
@@ -610,11 +442,6 @@ export class LiveSession {
       console.error(`Card context for ${this.id} failed:`, message(err))
       return undefined
     })
-  }
-
-  /** Tells this chat's viewers something from outside the process, e.g. that it started a child chat. */
-  emitEvent(event: ServerEvent): void {
-    this.emit(event)
   }
 
   private emit(event: ServerEvent): void {
@@ -635,42 +462,6 @@ function toolResultIds(m: WireMessage): string[] {
   const content = (m.message as { content?: unknown } | undefined)?.content
   if (!Array.isArray(content)) return []
   return content.filter((b) => b?.type === 'tool_result' && b.tool_use_id).map((b) => b.tool_use_id as string)
-}
-
-/**
- * Starts a Claude Code process just to ask it something, then closes it.
- * Nothing is sent to the model and nothing is saved. Settings aren't loaded
- * unless asked for, so the user's hooks don't run.
- */
-export async function oneOff<T>(options: Options, fn: (q: Query) => Promise<T>): Promise<T> {
-  const idle: AsyncIterable<never> = { [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }) }
-  const q = query({ prompt: idle, options: { settingSources: [], ...options, persistSession: false } })
-  try {
-    return await fn(q)
-  } finally {
-    q.close()
-  }
-}
-
-let models: Promise<ModelOption[]> | undefined
-
-/** The models Claude Code offers this account, asked once. */
-export function listModels(): Promise<ModelOption[]> {
-  models ??= oneOff({ cwd: homedir(), settingSources: ['user'] }, async (q) => {
-    const { models } = await q.initializationResult()
-    return models.map(({ value, resolvedModel, displayName, description }) => ({ value, resolvedModel, displayName, description }))
-  })
-  // Ask again next time rather than keep a failure.
-  models.catch(() => (models = undefined))
-  return models
-}
-
-function publicQueued({ message: _, ...rest }: Held): QueuedMessage {
-  return rest
-}
-
-function publicPermission({ resolve: _r, suggestions: _s, ...rest }: Pending): PendingPermission {
-  return rest
 }
 
 /** Registry of live sessions; starts or resumes Claude Code processes on demand. */
