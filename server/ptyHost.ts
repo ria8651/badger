@@ -10,7 +10,7 @@
  */
 import { randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, statSync, unlinkSync } from 'node:fs'
-import { connect, createServer, type Socket } from 'node:net'
+import { connect, createServer } from 'node:net'
 import { basename } from 'node:path'
 import headless from '@xterm/headless'
 import serialize from '@xterm/addon-serialize'
@@ -18,7 +18,8 @@ import { spawn, type IPty } from '@lydell/node-pty'
 import type { TerminalInfo } from '../shared/protocol.ts'
 import { message } from './errors.ts'
 import { alive, descendants, signal } from './proc.ts'
-import { PTY_HOST_VERSION, type CreateSpec, type HostEvent, type HostRequest } from './ptyProtocol.ts'
+import { Later, Peer, ndjsonLink } from './peer.ts'
+import { PTY_HOST_VERSION, PTY_METHODS, PTY_WIRE, type CreateSpec, type HostCommand, type HostEvent, type PtyHostApi } from './ptyProtocol.ts'
 import { workspaceRoot } from './workspace.ts'
 
 const { Terminal } = headless
@@ -53,14 +54,11 @@ interface Term {
 }
 
 const terms = new Map<string, Term>()
-const clients = new Set<Socket>()
-
-function send(client: Socket, event: HostEvent): void {
-  if (!client.destroyed) client.write(JSON.stringify(event) + '\n')
-}
+/** Connected servers. Usually one; two while a restarting server's old connection is closing. */
+const clients = new Set<Peer<unknown>>()
 
 function broadcast(event: HostEvent): void {
-  for (const c of clients) send(c, event)
+  for (const c of clients) c.emit(event)
 }
 
 const list = () => [...terms.values()].map((t) => t.info)
@@ -278,45 +276,40 @@ function text(t: Term, lines: number): string {
   return out.slice(-lines).join('\n')
 }
 
-/** Runs after everything already written has reached the screen. */
-const flushed = (t: Term) => new Promise<void>((resolve) => t.screen.write('', resolve))
+function need(id: string): Term {
+  const t = terms.get(id)
+  if (!t) throw new Error(`No terminal ${id}`)
+  return t
+}
 
-async function handle(client: Socket, req: HostRequest): Promise<void> {
-  if (req.type === 'shutdown') {
+/** Settles with what `read` makes of the screen once everything already written has reached it, in order with the output sent meanwhile. */
+const flushed = <T>(t: Term, read: () => T) => new Later<T>((settle) => t.screen.write('', () => settle(null, read())))
+
+/** What servers ask of the host. A request it doesn't serve, e.g. from a newer server, is answered with an error. */
+const api: PtyHostApi = {
+  create,
+  stop: (id) => stop(need(id)),
+  restart: (id) => restart(need(id)),
+  rename: (id, name) => rename(need(id), name),
+  remove: (id) => remove(need(id)),
+  snapshot: (id) => {
+    const t = need(id)
+    return flushed(t, () => t.serializer.serialize({ scrollback: SCROLLBACK }))
+  },
+  text: (id, lines) => {
+    const t = need(id)
+    return flushed(t, () => text(t, lines))
+  },
+}
+
+function command(c: HostCommand): void {
+  if (c.type === 'shutdown') {
     if (terms.size === 0) shutdown()
     return
   }
-  const t = terms.get('id' in req ? req.id : '')
-  if (req.type === 'input') return void t?.pty?.write(req.data)
-  if (req.type === 'resize') return void (t && resize(t, req.cols, req.rows))
-
-  const reply = (result?: unknown, error?: string) => send(client, { type: 'reply', reqId: req.reqId, result, error })
-  try {
-    if (req.type === 'create') return reply(create(req.spec))
-    if (!t) return reply(undefined, `No terminal ${req.id}`)
-    switch (req.type) {
-      case 'snapshot':
-        await flushed(t)
-        return reply(t.serializer.serialize({ scrollback: SCROLLBACK }))
-      case 'text':
-        await flushed(t)
-        return reply(text(t, req.lines))
-      case 'stop':
-        return reply(await stop(t))
-      case 'restart':
-        return reply(await restart(t))
-      case 'rename':
-        return reply(rename(t, req.name))
-      case 'remove':
-        await remove(t)
-        return reply()
-      default:
-        // A newer server's request: answered, so it isn't left waiting.
-        return reply(undefined, `Unknown request ${(req as { type: string }).type}`)
-    }
-  } catch (err) {
-    reply(undefined, message(err))
-  }
+  const t = terms.get(c.id)
+  if (c.type === 'input') t?.pty?.write(c.data)
+  else if (c.type === 'resize' && t) resize(t, c.cols, c.rows)
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -340,32 +333,14 @@ function shutdown(): void {
   process.exit(0)
 }
 
-const server = createServer((client) => {
-  clients.add(client)
-  idleCheck()
-  client.setEncoding('utf8')
-  send(client, { type: 'hello', version: PTY_HOST_VERSION, pid: process.pid, terminals: list() })
-  let buf = ''
-  client.on('data', (chunk: string) => {
-    buf += chunk
-    let nl: number
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, nl)
-      buf = buf.slice(nl + 1)
-      let req: HostRequest
-      try {
-        req = JSON.parse(line)
-      } catch {
-        continue
-      }
-      void handle(client, req)
-    }
-  })
-  client.on('error', () => {})
-  client.on('close', () => {
+const server = createServer((socket) => {
+  const client: Peer<unknown> = new Peer(ndjsonLink(socket, PTY_WIRE), api, PTY_METHODS, command, () => {
     clients.delete(client)
     idleCheck()
   })
+  clients.add(client)
+  idleCheck()
+  client.emit({ type: 'hello', version: PTY_HOST_VERSION, pid: process.pid, terminals: list() } satisfies HostEvent)
 })
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, shutdown)

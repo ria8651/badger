@@ -9,7 +9,7 @@ import { BadRequest, absolutePath, badRequest } from './errors.ts'
 import { folderSize, forgetSize, listDir, listFolders } from './folders.ts'
 import { MERGE_TOOL, mergeTool } from './merge.ts'
 import { OpError, forwarded, mcpServer, toolName, type Op } from './ops.ts'
-import { Later, Peer, type Link, type Remote } from './peer.ts'
+import { Later, Peer, remote, type Link, type Remote } from './peer.ts'
 import { bridgeOps, openPreviewOp, previewInstructions } from './previewTools.ts'
 import type { CreateSpec } from './ptyProtocol.ts'
 import { REVIEW_TOOL, reviewTool } from './review.ts'
@@ -78,12 +78,7 @@ export class Runner implements RunnerApi {
   private opList?: Op[]
 
   constructor(private opts: RunnerOptions) {
-    this.hub = new Proxy({} as Remote<HubApi>, {
-      get: (_, method) =>
-        typeof method === 'string'
-          ? (...args: unknown[]) => (this.peer ? this.peer.call(method, args) : Promise.reject(new Error('Not connected to the Badger hub')))
-          : undefined,
-    })
+    this.hub = remote<HubApi>((method, args) => (this.peer ? this.peer.call(method, args) : Promise.reject(new Error('Not connected to the Badger hub'))))
     this.terminals = new Terminals(opts.dataDir, opts.env)
     this.manager = new SessionManager(
       () => this.sendLive(),
