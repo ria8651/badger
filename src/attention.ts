@@ -1,10 +1,19 @@
-import { createSignal } from 'solid-js'
+import { createMemo, createRoot, createSignal } from 'solid-js'
 import type { AttentionState } from '../shared/protocol.ts'
 import { socket } from './api.ts'
+import { sessions } from './stores/sessions.ts'
 
 /** Chats that need the user, by id, as the server last said. */
 const [attention, setAttention] = createSignal<Record<string, AttentionState>>({})
 export { attention }
+
+/** How many chats need the user. Archived ones are put away, so they don't count. */
+export const needsYou = createRoot(() =>
+  createMemo(() => {
+    const archived = new Set(sessions().flatMap((s) => (s.archived ? [s.id] : [])))
+    return Object.keys(attention()).filter((id) => !archived.has(id)).length
+  }),
+)
 
 /** Called for each chat that newly needs the user, but not for what was already pending when the page loaded. */
 type Listener = (sessionId: string, state: AttentionState) => void
