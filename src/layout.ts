@@ -12,10 +12,11 @@ import { wsKey, type Ws } from './terminals.ts'
 
 /**
  * Something a panel shows: a terminal, a port's preview, a subagent or
- * background task of a chat, by the tool call that started it, or a chat's
- * plan. Tasks and plans are their chat's own, so they only show beside it.
+ * background task of a chat, by the tool call that started it, a chat's
+ * plan, or something sent with one of its prompts. Tasks, plans and
+ * attachments are their chat's own, so they only show beside it.
  */
-export type View = { kind: 'terminal'; id: string } | PreviewView | { kind: 'task'; session: string; id: string } | PlanView
+export type View = { kind: 'terminal'; id: string } | PreviewView | { kind: 'task'; session: string; id: string } | PlanView | AttachmentView
 /**
  * What a port serves, in a frame; id is the port. Path is where the page is:
  * where it was opened, then wherever it's gone since. Opening it again
@@ -25,10 +26,21 @@ export type PreviewView = { kind: 'preview'; id: string; name?: string; path?: s
 /** The plan a chat is proposing, or last proposed. One per chat, so a revised plan takes the old one's place. */
 export type PlanView = { kind: 'plan'; session: string }
 export const planView = (session: string): PlanView => ({ kind: 'plan', session })
+/**
+ * Something that went in with a prompt, e.g. a paste or a memory file. By reference: the prompt's message
+ * and which `part` of it (`paste:<n>` or `context:<n>`), so layouts don't keep copies of what can be big.
+ */
+export type AttachmentView = { kind: 'attachment'; session: string; prompt: string; part: string }
 export const viewKey = (v: View) =>
-  v.kind === 'task' ? `task:${v.session}:${v.id}` : v.kind === 'plan' ? `plan:${v.session}` : `${v.kind}:${v.id}`
+  v.kind === 'task'
+    ? `task:${v.session}:${v.id}`
+    : v.kind === 'plan'
+      ? `plan:${v.session}`
+      : v.kind === 'attachment'
+        ? `attachment:${v.session}:${v.prompt}:${v.part}`
+        : `${v.kind}:${v.id}`
 /** The chat a view belongs to, if it only shows beside one. */
-export const sessionOf = (v: View) => (v.kind === 'task' || v.kind === 'plan' ? v.session : undefined)
+export const sessionOf = (v: View) => (v.kind === 'task' || v.kind === 'plan' || v.kind === 'attachment' ? v.session : undefined)
 
 export type Group = { type: 'group'; id: string; views: View[]; active?: string }
 export type Leaf = { type: 'chat' } | Group
@@ -420,7 +432,7 @@ export function openView(ws: Ws, view: View): void {
   setFocusRequest(key)
 }
 
-/** Takes other chats' tasks and plans out of a workspace's panels: they only show beside their own chat. */
+/** Takes other chats' tasks, plans and attachments out of a workspace's panels: they only show beside their own chat. */
 export function dropOtherChats(ws: Ws, session: string): void {
   updateLayout(ws, (l) => {
     let tree = l.tree

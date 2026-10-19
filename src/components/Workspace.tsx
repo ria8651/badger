@@ -1,6 +1,7 @@
 import { For, Index, Match, Show, Switch, children, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
 import { Globe, Minimize2, NotebookPen, Plus, RotateCw, SquareArrowOutUpRight, X } from '../icons'
 import { api } from '../api.ts'
+import type { ContextChip } from './Attachments.tsx'
 import {
   CHAT,
   LEADER,
@@ -37,6 +38,7 @@ import {
   type Edge,
   type Group,
   type Len,
+  type AttachmentView,
   type PreviewView,
   type View,
 } from '../layout.ts'
@@ -69,6 +71,7 @@ const placeIn = (b: Box): JSX.CSSProperties => ({
 })
 
 const taskOf = (v?: View) => (v?.kind === 'task' ? v.id : undefined)
+const attachmentViewOf = (v?: View) => (v?.kind === 'attachment' ? v : undefined)
 const terminalOf = (v?: View) => (v?.kind === 'terminal' ? terminals().find((t) => t.id === v.id) : undefined)
 
 /** What the chat says about its own tasks and plan, for the panels showing them. */
@@ -79,6 +82,9 @@ export interface ChatPanes {
   /** A plan is waiting on the user. */
   planWaiting: () => boolean
   renderPlan: (onReady: (focus: () => void) => void) => JSX.Element
+  /** Something sent with a prompt, if it's still there. */
+  attachment: (v: AttachmentView) => ContextChip | undefined
+  renderAttachment: (v: AttachmentView, onReady: (focus: () => void) => void) => JSX.Element
 }
 
 const BINDINGS: [string, string][] = [
@@ -419,6 +425,7 @@ export function Workspace(props: {
   const tabLabel = (v?: View) => {
     if (v?.kind === 'task') return props.panes.label(v.id)
     if (v?.kind === 'plan') return 'Plan'
+    if (v?.kind === 'attachment') return props.panes.attachment(v)?.label ?? 'Attachment'
     if (v?.kind === 'preview') return v.name ?? `:${v.id}`
     const t = terminalOf(v)
     return t ? terminalLabel(t) : 'Starting…'
@@ -426,7 +433,7 @@ export function Workspace(props: {
   const tabTitle = (v?: View) =>
     v?.kind === 'preview'
       ? `${tabLabel(v)}\n${previewUrl(v.id, v.path, machine()) ?? `Port ${v.id}`}`
-      : v?.kind === 'task' || v?.kind === 'plan'
+      : v?.kind === 'task' || v?.kind === 'plan' || v?.kind === 'attachment'
         ? tabLabel(v)
         : [
             terminalOf(v) ? terminalTooltip(terminalOf(v)!) : tabLabel(v),
@@ -509,6 +516,12 @@ export function Workspace(props: {
                             <Show when={props.panes.planWaiting()}>
                               <span class="size-1.5 shrink-0 rounded-full bg-accent" />
                             </Show>
+                          </Show>
+                          <Show when={attachmentViewOf(v()) && props.panes.attachment(attachmentViewOf(v())!)}>
+                            {(a) => {
+                              const Icon = a().icon
+                              return <Icon class="size-3 shrink-0" />
+                            }}
                           </Show>
                           <span class="truncate">{tabLabel(v())}</span>
                         </button>
@@ -617,6 +630,7 @@ export function Workspace(props: {
                     </Match>
                     <Match when={taskOf(v())}>{(id) => props.panes.render(id(), (focus) => ready(key, focus))}</Match>
                     <Match when={v().kind === 'plan'}>{props.panes.renderPlan((focus) => ready(key, focus))}</Match>
+                    <Match when={attachmentViewOf(v())}>{(a) => props.panes.renderAttachment(a(), (focus) => ready(key, focus))}</Match>
                   </Switch>
                 )}
               </Show>

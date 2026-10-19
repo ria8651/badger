@@ -20,7 +20,7 @@ import { PlanPane, latestPlan } from './Plan.tsx'
 import { ChatHeader, createGitStatus } from './ChatHeader.tsx'
 import { TaskTray, trayItems, waitingOnTask } from './TaskTray.tsx'
 import { reveal, revealed, toolLabel } from './ToolCard.tsx'
-import { TaskPane, Transcript, UserMessage, createIndex, detail, runInBackground, setDetail } from './Transcript.tsx'
+import { AttachmentPane, TaskPane, Transcript, UserMessage, attachmentOf, createIndex, detail, runInBackground, setDetail } from './Transcript.tsx'
 import { ContextMeter } from './Usage.tsx'
 import { Workspace, type ChatPanes } from './Workspace.tsx'
 import { showError } from './Popover.tsx'
@@ -178,6 +178,11 @@ export function Chat(props: {
     const w = ws()
     if (w) openView(w, planView(props.sessionId))
   }
+  /** Open a paste or context sent with a prompt in a panel beside the chat. */
+  const openAttachment = (prompt: string, part: string) => {
+    const w = ws()
+    if (w) openView(w, { kind: 'attachment', session: props.sessionId, prompt, part })
+  }
   const planShown = () => !!ws() && viewShown(ws()!, viewKey(planView(props.sessionId)))
   // A plan arriving while the chat is open gets room beside it, on screens wide enough. Ones
   // already waiting when the chat opened don't, so closing the panel and coming back keeps it closed.
@@ -211,6 +216,8 @@ export function Chat(props: {
     renderPlan: (onReady) => (
       <PlanPane sessionId={props.sessionId} permission={planPrompt()} past={latestPlan(index())} onReady={onReady} />
     ),
+    attachment: (v) => attachmentOf(index(), v.prompt, v.part),
+    renderAttachment: (v, onReady) => <AttachmentPane index={index} prompt={v.prompt} part={v.part} onReady={onReady} />,
   }
 
   createEffect(on(() => state.mode, setMode))
@@ -468,6 +475,7 @@ export function Chat(props: {
                         cwd={cwd()}
                         children={state.children}
                         onFork={setForking}
+                        onOpenAttachment={ws() ? openAttachment : undefined}
                         compacting={state.compacting}
                         onLogin={() => {
                           const w = ws()
