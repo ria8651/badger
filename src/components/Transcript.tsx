@@ -112,7 +112,8 @@ export function Messages(props: TranscriptProps & { nested?: boolean }) {
         return <WorkRow work={item} />
       case 'user': {
         const id = view().promptIds.get(item)
-        const open = !props.nested && id ? props.onOpenAttachment : undefined
+        // Read as it renders, not once: the chat's workspace, which panels need, can be known only after its messages.
+        const open = () => (!props.nested && id ? props.onOpenAttachment : undefined)
         return (
           <UserMessage
             text={item.text}
@@ -121,7 +122,7 @@ export function Messages(props: TranscriptProps & { nested?: boolean }) {
             card={view().extras.get(item)?.card}
             move={view().extras.get(item)?.move}
             context={view().extras.get(item)?.chips.map(contextChip)}
-            onOpenAttachment={open && ((part) => open(id!, part))}
+            onOpenAttachment={open() && ((part) => open()?.(id!, part))}
           />
         )
       }
