@@ -1,5 +1,5 @@
 import { For, Show, createSignal, type Component, type JSX } from 'solid-js'
-import { Columns3, FileText, GitFork, X } from '../icons'
+import { Columns3, FileText, GitFork, PanelRight, X } from '../icons'
 import type { CardContext } from '../../shared/cardContext.ts'
 import type { Move, Place } from '../../shared/forkNote.ts'
 import { basename } from '../folders.ts'
@@ -24,6 +24,8 @@ export function Attachments(props: {
   context?: ContextChip[]
   onRemovePaste?: (index: number) => void
   onRemoveImage?: (index: number) => void
+  /** Given, an open paste or context can be opened in a panel beside the chat: `paste:<n>` or `context:<n>`. */
+  onOpen?: (part: string) => void
   class?: string
 }) {
   const [open, setOpen] = createSignal<number | 'card' | 'move' | { context: number }>()
@@ -38,6 +40,11 @@ export function Attachments(props: {
   const removePaste = (i: number) => {
     setOpen(undefined)
     props.onRemovePaste?.(i)
+  }
+  /** It's shown in the panel instead, so it folds up here. */
+  const openBeside = (part: string) => {
+    setOpen(undefined)
+    props.onOpen!(part)
   }
   return (
     <div class={props.class}>
@@ -85,7 +92,11 @@ export function Attachments(props: {
         </Show>
         <For each={props.context}>
           {(c, i) => {
-            const shown = () => openContext() === c
+            // By index: callers build `context` afresh on each read, so the chips aren't the same objects twice.
+            const shown = () => {
+              const o = open()
+              return typeof o === 'object' && o.context === i()
+            }
             return (
               <button
                 type="button"
@@ -140,13 +151,17 @@ export function Attachments(props: {
       </div>
       <Show when={openText()}>
         {(text) => (
-          <pre class="mt-2 max-h-80 overflow-auto rounded-lg border border-edge px-3 py-2.5 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-fg-2">
-            {text()}
-          </pre>
+          <Opened onOpen={props.onOpen && (() => openBeside(`paste:${open()}`))}>
+            <PasteBody text={text()} />
+          </Opened>
         )}
       </Show>
       <Show when={openContext()}>
-        {(c) => <div class="mt-2 max-h-80 overflow-auto rounded-lg border border-edge px-3 py-2.5 text-[13px] text-fg-2">{c().body()}</div>}
+        {(c) => (
+          <Opened onOpen={props.onOpen && (() => openBeside(`context:${(open() as { context: number }).context}`))}>
+            <div class="text-[13px] text-fg-2">{c().body()}</div>
+          </Opened>
+        )}
       </Show>
       <Show when={open() === 'card' && props.card?.card}>
         {(card) => (
@@ -183,6 +198,30 @@ export function Attachments(props: {
 }
 
 const chip = 'flex h-7 items-center rounded-lg border text-xs transition-colors'
+
+/** What an open chip holds, under the chips. The button to open it beside the chat stays put as it scrolls. */
+function Opened(props: { onOpen?: () => void; children: JSX.Element }) {
+  return (
+    <div class="relative mt-2">
+      <div class={`max-h-80 overflow-auto rounded-lg border border-edge px-3 py-2.5 ${props.onOpen ? 'pr-10' : ''}`}>{props.children}</div>
+      <Show when={props.onOpen}>
+        <button
+          type="button"
+          title="Open beside the chat"
+          onClick={props.onOpen}
+          class="absolute top-1.5 right-1.5 flex size-7 items-center justify-center rounded-button-md text-fg-3 transition-colors hover:bg-surface hover:text-fg-2"
+        >
+          <PanelRight class="size-3.5" />
+        </button>
+      </Show>
+    </div>
+  )
+}
+
+/** A paste as it was sent. */
+export function PasteBody(props: { text: string }) {
+  return <pre class="font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-fg-2">{props.text}</pre>
+}
 
 /** Context that went in with a prompt, as a chip that opens to `body`. */
 export interface ContextChip {

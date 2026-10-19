@@ -12,7 +12,7 @@ import { ChildChats, useChecking, type Partial } from '../useChat.ts'
 import { STATUS_LABELS } from './Board.tsx'
 import { Markdown } from './Markdown.tsx'
 import { Disclosure, Pre, ToolBody, ToolCard, resultText, splitSkill, toolLabel, toolSummary, type ToolContext, type ToolResult } from './ToolCard.tsx'
-import { Attachments, type ContextChip } from './Attachments.tsx'
+import { Attachments, PasteBody, type ContextChip } from './Attachments.tsx'
 import { basename } from '../folders.ts'
 import { LiveDot, compact, plural } from './ui.tsx'
 
@@ -256,9 +256,12 @@ function buildView(messages: WireMessage[], nested: boolean) {
   /** The prompt of the turn each message is in, by uuid. */
   const promptOf = new Map<string, Item>()
   let turnPrompt: Item | undefined
+  /** Each prompt's message, by which it's referred to from outside, e.g. by a panel showing one of its attachments. */
+  const promptIds = new Map<Item, string>()
   for (const m of messages) {
     const user = itemsFor(m).find((i) => i.kind === 'user')
     if (user) turnPrompt = user
+    if (user && m.uuid) promptIds.set(user, m.uuid)
     if (m.uuid && turnPrompt) promptOf.set(m.uuid, turnPrompt)
   }
   let lastUser: Item | undefined
@@ -318,7 +321,50 @@ function buildView(messages: WireMessage[], nested: boolean) {
   items = tidyCompactions(items)
   // A subagent's prompt is shown with the call that started it; only messages sent to it later stay.
   const prompt = nested ? items.find((i) => i.kind === 'user') : undefined
-  return { items: prompt ? items.filter((i) => i !== prompt) : items, idleUntil, extras, forkAt, interrupted, shownError, answeredBy, summaries }
+  return { items: prompt ? items.filter((i) => i !== prompt) : items, idleUntil, extras, promptIds, forkAt, interrupted, shownError, answeredBy, summaries }
+}
+
+/** The chat's own conversation's view, built once per index for the panels that look into it. */
+const ownViews = new WeakMap<Index, ReturnType<typeof buildView>>()
+
+/** Something that went in with a prompt, by the prompt's message and `part`: `paste:<n>` or `context:<n>`. */
+export function attachmentOf(index: Index, prompt: string, part: string): ContextChip | undefined {
+  let view = ownViews.get(index)
+  if (!view) ownViews.set(index, (view = buildView(index.groups.get('') ?? NONE, false)))
+  const item = [...view.promptIds].find(([, id]) => id === prompt)?.[0]
+  if (item?.kind !== 'user') return
+  const [type, n] = part.split(':')
+  if (type === 'paste') {
+    const text = item.pastes?.[Number(n)]
+    return text === undefined ? undefined : pasteChip(text)
+  }
+  const chip = view.extras.get(item)?.chips[Number(n)]
+  return chip && contextChip(chip)
+}
+
+const pasteChip = (text: string): ContextChip => ({
+  icon: FileText,
+  label: 'Pasted text',
+  meta: plural(text.split('\n').length, 'line'),
+  body: () => <PasteBody text={text} />,
+})
+
+/** Something sent with a prompt, in a panel of its own. */
+export function AttachmentPane(props: { index: Accessor<Index>; prompt: string; part: string; onReady: (focus: () => void) => void }) {
+  const attachment = () => attachmentOf(props.index(), props.prompt, props.part)
+  return (
+    <div
+      ref={(el) => props.onReady(() => el.focus({ preventScroll: true }))}
+      tabIndex={-1}
+      class="size-full overflow-y-auto outline-none"
+    >
+      <div class="mx-auto max-w-[46rem] px-6 pt-3 pb-8 text-[13px] text-fg-2">
+        <Show when={attachment()} fallback={<p class="text-xs text-fg-3">This isn’t in the chat any more.</p>}>
+          {(a) => a().body()}
+        </Show>
+      </div>
+    </div>
+  )
 }
 
 /** What went in with a prompt besides what the user typed. */
@@ -450,6 +496,8 @@ type TranscriptProps = {
   onLogin?: () => void
   /** Given, a prompt one model refused and another answered offers to fork from just before it, with its text to edit and send again. */
   onRetry?: (retry: { at: string; text: string }) => void
+  /** Given, what went in with a prompt can be opened in a panel: by the prompt's message, and which part of it. */
+  onOpenAttachment?: (prompt: string, part: string) => void
 }
 
 /** Index a chat's messages. Tracks the array and its length, then walks the raw objects so the cache keys are stable. */
@@ -536,7 +584,9 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
     switch (item.kind) {
       case 'work':
         return <WorkRow work={item} />
-      case 'user':
+      case 'user': {
+        const id = view().promptIds.get(item)
+        const open = !props.nested && id ? props.onOpenAttachment : undefined
         return (
           <UserMessage
             text={item.text}
@@ -545,8 +595,10 @@ function Messages(props: TranscriptProps & { nested?: boolean }) {
             card={view().extras.get(item)?.card}
             move={view().extras.get(item)?.move}
             context={view().extras.get(item)?.chips.map(contextChip)}
+            onOpenAttachment={open && ((part) => open(id!, part))}
           />
         )
+      }
       case 'text':
         return (
           <div class="my-4">
@@ -1219,6 +1271,8 @@ export function UserMessage(props: {
   move?: Move
   /** Other context Claude was given with it. */
   context?: ContextChip[]
+  /** Given, an open paste or context offers to open in a panel. */
+  onOpenAttachment?: (part: string) => void
   /** Replaces the spacing it has in the transcript. */
   class?: string
   /** How tall it gets before it's clamped. */
@@ -1238,6 +1292,7 @@ export function UserMessage(props: {
             card={props.card}
             move={props.move}
             context={props.context}
+            onOpen={props.onOpenAttachment}
             class={props.text ? 'mb-2' : ''}
           />
         </Show>
