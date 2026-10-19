@@ -5,7 +5,7 @@ import { socket } from '../api.ts'
 import { Markdown } from './Markdown.tsx'
 import { MarkdownEditor } from './MarkdownEditor.tsx'
 import { resultText } from './ToolCard.tsx'
-import type { Index } from './Transcript.tsx'
+import type { Index } from '../transcript/model.ts'
 import { Button, inputClass } from './ui.tsx'
 
 /*

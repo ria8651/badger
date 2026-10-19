@@ -4,7 +4,7 @@ import type { BackgroundTask, WireMessage } from '../../shared/protocol.ts'
 import { chatCommands } from '../useChat.ts'
 import { taskLabel, type Task } from '../tasks.ts'
 import { toolLabel, toolSummary } from './ToolCard.tsx'
-import { agentLabel, type Index } from './Transcript.tsx'
+import { agentLabel, type Index } from '../transcript/model.ts'
 import { LiveDot, compact, plural } from './ui.tsx'
 
 /** A subagent, shell or other task the chat started, as the tray lists it. */
