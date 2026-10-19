@@ -245,7 +245,10 @@ export function Chat(props: {
   }
 
   // Read again each time a turn ends too, since that's when commits happen.
-  const git = createGitStatus(() => (state.loaded && !offline() && cwd() && !isScratch(cwd()) ? { dir: cwd()!, machine: machine() } : undefined))
+  const git = createGitStatus(
+    () => (cwd() && !isScratch(cwd()) ? { dir: cwd()!, machine: machine() } : undefined),
+    () => !state.loaded || offline(),
+  )
   createEffect(on(() => state.running, (running) => !running && void git.refresh(), { defer: true }))
   const actions = () => chatActions(git.status(), cwd())
 
