@@ -163,6 +163,50 @@ export interface GitStatus {
   fetchedAt?: number
 }
 
+/**
+ * What a review looks at, as changes between two trees. `base`: everything not on the base yet (the main checkout's
+ * branch in a worktree, else the upstream), committed or not. `uncommitted`: against HEAD. `commit`: one commit.
+ * `since`: against a snapshot taken earlier, e.g. when the last review was sent.
+ */
+export type ReviewScope = { kind: 'base' } | { kind: 'uncommitted' } | { kind: 'commit'; sha: string } | { kind: 'since'; tree: string }
+
+export interface ReviewCommit {
+  sha: string
+  subject: string
+  author: string
+  /** ms since epoch. */
+  date: number
+}
+
+export interface ReviewFile {
+  path: string
+  /** Where a renamed file was. */
+  oldPath?: string
+  status: 'added' | 'modified' | 'deleted' | 'renamed'
+  added: number
+  removed: number
+  binary: boolean
+  /** The file's hunks, from the first @@; empty for a binary file or one too big to show. */
+  patch: string
+  /** Too big to show; added and removed still count. */
+  truncated?: boolean
+  /** A lockfile or the like, folded unless asked for. */
+  generated?: boolean
+  /** The file's blob as it is now, so "viewed" is undone by a later change. Absent if it was deleted. */
+  blob?: string
+}
+
+export interface ReviewDiff {
+  branch: string
+  /** What `base` compares with, e.g. spike or origin/spike; absent with nothing to compare with. */
+  base?: string
+  /** Commits on HEAD that aren't on the base, newest first. */
+  commits: ReviewCommit[]
+  /** The working tree as it was read, untracked files included: pass it back as `since` to see what changed after. */
+  snapshot: string
+  files: ReviewFile[]
+}
+
 /** A folder new chats can start in. A git repo's is its main checkout, with its worktrees alongside. */
 export interface Folder {
   path: string

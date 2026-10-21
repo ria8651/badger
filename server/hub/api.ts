@@ -1,4 +1,4 @@
-import { IMAGE_TYPES, LOCAL_MACHINE } from '../../shared/protocol.ts'
+import { IMAGE_TYPES, LOCAL_MACHINE, type ReviewScope } from '../../shared/protocol.ts'
 import type { Board } from '../board.ts'
 import type { Actor } from '../db.ts'
 import { BadRequest, absolutePath } from '../errors.ts'
@@ -7,6 +7,17 @@ import { IMAGE_PATH, entryImage } from '../transcriptImages.ts'
 import type { Transcripts } from '../transcripts.ts'
 import type { Chats } from './chats.ts'
 import { CHAT_ID, type Reply, type Route } from './http.ts'
+
+const SHA = /^[0-9a-f]{40}$/
+
+/** `base`, `uncommitted`, `commit:<sha>` or `since:<tree>`. */
+function parseScope(s: string): ReviewScope {
+  const [kind, ref = ''] = s.split(':')
+  if (kind === 'base' || kind === 'uncommitted') return { kind }
+  if (kind === 'commit' && SHA.test(ref)) return { kind, sha: ref }
+  if (kind === 'since' && SHA.test(ref)) return { kind, tree: ref }
+  throw new BadRequest(`Unknown review scope: ${s}`)
+}
 
 /** Changes made through the REST API, i.e. by someone in the browser. */
 const UI: Actor = { source: 'ui' }
@@ -115,6 +126,16 @@ function machineFileRoutes({ machines, chats, listChanged }: ApiDeps): Route[] {
       async ({ url }) => {
         const dir = absolutePath(url.searchParams.get('path'))
         return [200, (await query(url).runner.remote.gitStatus(dir, url.searchParams.get('fetch') === '1')) ?? null]
+      },
+    ],
+    [
+      'GET',
+      '/api/review',
+      async ({ url }) => {
+        const dir = absolutePath(url.searchParams.get('path'))
+        const scope = parseScope(url.searchParams.get('scope') ?? 'base')
+        const context = Number(url.searchParams.get('context') ?? 3) || 3
+        return [200, await query(url).runner.remote.reviewDiff(dir, scope, context)]
       },
     ],
     ...(['push', 'pull'] as const).map(

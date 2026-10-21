@@ -4,7 +4,7 @@ import type { DraftAttachments, PermissionMode, QueuedMessage } from '../../shar
 import { chatActions } from '../actions.ts'
 import { api, connected } from '../api.ts'
 import { cardWorktreeName, isScratch, worktreeOf } from '../folders.ts'
-import { openTerminal, openView, planView, viewKey, viewShown, wide } from '../layout.ts'
+import { openTerminal, openView, planView, reviewView, viewKey, viewShown, wide } from '../layout.ts'
 import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
 import { lastModel, modelValue, models, setLastModel } from '../models.ts'
 import { navigate } from '../router.tsx'
@@ -19,6 +19,7 @@ import { FolderPicker } from './FolderPicker.tsx'
 import { ForkDialog } from './ForkDialog.tsx'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
 import { PlanPane, latestPlan } from './Plan.tsx'
+import { ReviewPane, reviewDrafts } from './Review.tsx'
 import { showError } from './Popover.tsx'
 import { TaskTray, trayItems, waitingOnTask } from './TaskTray.tsx'
 import { reveal, revealed, toolLabel } from './ToolCard.tsx'
@@ -184,6 +185,20 @@ export function Chat(props: {
     ),
     attachment: (v) => attachmentOf(index(), v.prompt, v.part),
     renderAttachment: (v, onReady) => <AttachmentPane index={index} prompt={v.prompt} part={v.part} onReady={onReady} />,
+    reviewDrafts: () => reviewDrafts(props.sessionId),
+    renderReview: (onReady) => (
+      <ReviewPane
+        sessionId={props.sessionId}
+        cwd={cwd()}
+        root={ws()?.root}
+        machine={machine()}
+        index={index}
+        running={state.running}
+        onSend={picking() || state.gone || stranded() ? undefined : (text) => send(text)}
+        onJump={jump}
+        onReady={onReady}
+      />
+    ),
   }
 
   // Read again each time a turn ends too, since that's when commits happen.
@@ -248,6 +263,7 @@ export function Chat(props: {
             fetching={git.fetching()}
             onRefresh={git.refresh}
             actions={actions()}
+            onReview={ws() ? () => openView(ws()!, reviewView(props.sessionId)) : undefined}
             onAsk={picking() ? undefined : (prompt) => send(prompt)}
           />
         </Show>

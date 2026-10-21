@@ -1,5 +1,5 @@
 import { createSignal } from 'solid-js'
-import type { Card, CardStatus, ClientEvent, GitStatus, Folder, Listing, Machine, ModelOption, ServerEvent, SessionSummary, TerminalInfo, WorktreeStatus } from '../shared/protocol.ts'
+import type { Card, CardStatus, ClientEvent, GitStatus, Folder, Listing, Machine, ModelOption, ReviewDiff, ServerEvent, SessionSummary, TerminalInfo, WorktreeStatus } from '../shared/protocol.ts'
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -41,6 +41,9 @@ export const api = {
   worktree: (path: string, machine?: string) => get<WorktreeStatus>(`/api/worktree?${on(machine, { path })}`),
   /** Null outside a git repo. Fetching first makes "behind" current, but can take a moment. */
   git: (path: string, machine?: string, fetch = false) => get<GitStatus | null>(`/api/git?${on(machine, { path, ...(fetch ? { fetch: '1' } : {}) })}`),
+  /** `scope` as the server reads it: base, uncommitted, commit:<sha> or since:<tree>. */
+  review: (path: string, scope: string, context: number, machine?: string) =>
+    get<ReviewDiff>(`/api/review?${on(machine, { path, scope, context: String(context) })}`),
   push: (path: string, machine?: string) => request<void>('POST', '/api/git/push', { path, machine }),
   pull: (path: string, machine?: string) => request<void>('POST', '/api/git/pull', { path, machine }),
   removeWorktree: (path: string, machine?: string) => request<void>('DELETE', `/api/worktree?${on(machine, { path })}`),

@@ -2,7 +2,7 @@ import { mkdir, readFile, stat } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { extname, isAbsolute } from 'node:path'
 import { renameSession } from '@anthropic-ai/claude-agent-sdk'
-import { IMAGE_EXTENSIONS, IMAGE_TYPES, type ChatCommand, type ChatCommandReply, type ImageAttachment } from '../shared/protocol.ts'
+import { IMAGE_EXTENSIONS, IMAGE_TYPES, type ChatCommand, type ChatCommandReply, type ImageAttachment, type ReviewScope } from '../shared/protocol.ts'
 import { BOARD_INSTRUCTIONS, BOARD_SERVER, boardOps } from './boardTools.ts'
 import { Children } from './children.ts'
 import { listModels } from './claudeProbe.ts'
@@ -14,6 +14,7 @@ import { Later, Peer, remote, type Link, type Remote } from './peer.ts'
 import { bridgeOps, openPreviewOp, previewInstructions } from './previewTools.ts'
 import type { CreateSpec } from './ptyProtocol.ts'
 import { REVIEW_TOOL, reviewTool } from './review.ts'
+import { reviewDiff } from './reviewDiff.ts'
 import {
   RUNNER_METHODS,
   RUNNER_PROTOCOL,
@@ -294,6 +295,10 @@ export class Runner implements RunnerApi {
 
   gitPush(path: string) {
     return gitPush(path).catch(badRequest)
+  }
+
+  reviewDiff(path: string, scope: ReviewScope, context: number) {
+    return reviewDiff(path, scope, context).catch(badRequest)
   }
 
   async gitPull(path: string) {

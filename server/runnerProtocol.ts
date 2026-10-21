@@ -6,6 +6,8 @@ import type {
   ChatCommandReply,
   ChatStatus,
   GitStatus,
+  ReviewDiff,
+  ReviewScope,
   ContextUsage,
   Folder,
   ImageAttachment,
@@ -153,6 +155,8 @@ export interface RunnerApi {
   /** Undefined outside a git repo. Fetches first if asked, at most once a minute. */
   gitStatus(path: string, fetch: boolean): Promise<GitStatus | undefined>
   gitPush(path: string): Promise<void>
+  /** The changes a review looks at; see ReviewScope. */
+  reviewDiff(path: string, scope: ReviewScope, context: number): Promise<ReviewDiff>
   /** Fast-forward only; refused while a chat is working there. */
   gitPull(path: string): Promise<void>
   /** Refused while a chat is working in it or it has terminals. */
@@ -186,6 +190,7 @@ export const RUNNER_METHODS = [
   'worktreeStatus',
   'gitStatus',
   'gitPush',
+  'reviewDiff',
   'gitPull',
   'removeWorktree',
   'listFolders',
