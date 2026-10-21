@@ -38,6 +38,9 @@ export const git = async (cwd: string, ...args: string[]) => (await run('git', a
 /** Commits in a range, e.g. `@{upstream}..HEAD`. */
 const count = async (path: string, range: string) => Number(await git(path, 'rev-list', '--count', range))
 
+/** The branch checked out or, with HEAD detached, its commit's short hash: something to name it by and merge. */
+const headName = async (path: string) => (await git(path, 'branch', '--show-current')) || git(path, 'rev-parse', '--short', 'HEAD')
+
 /** Files with uncommitted changes, from `git status --porcelain`. */
 const changed = (porcelain: string) => (porcelain ? porcelain.split('\n').length : 0)
 
@@ -67,11 +70,7 @@ export async function mainCheckout(path: string): Promise<string> {
 export async function worktreeStatus(path: string): Promise<WorktreeStatus> {
   if (!WORKTREE_PATH.test(path)) throw new Error('Not a Claude Code worktree')
   const main = await mainCheckout(path)
-  const [branch, status, base] = await Promise.all([
-    git(path, 'branch', '--show-current'),
-    git(path, 'status', '--porcelain'),
-    git(main, 'branch', '--show-current'),
-  ])
+  const [branch, status, base] = await Promise.all([headName(path), git(path, 'status', '--porcelain'), headName(main)])
   const unmerged = await count(path, `${await git(main, 'rev-parse', 'HEAD')}..HEAD`)
   return { path, branch, changes: changed(status), unmerged, base }
 }
@@ -85,7 +84,7 @@ export async function changesStatus(path: string): Promise<ChangesStatus | undef
   const status = await git(path, 'status', '--porcelain').catch(() => undefined)
   if (status === undefined) return undefined
   const [branch, upstream] = await Promise.all([
-    git(path, 'branch', '--show-current'),
+    headName(path),
     git(path, 'rev-parse', '--abbrev-ref', '@{upstream}').catch(() => ''),
   ])
   const ahead = upstream ? await count(path, '@{upstream}..HEAD') : 0
@@ -155,7 +154,7 @@ export async function gitStatus(path: string, fetch = false): Promise<GitStatus 
 
 /** How a linked worktree compares with the main checkout's HEAD. */
 async function baseStatus(path: string, main: string): Promise<GitStatus['base']> {
-  const [branch, head] = await Promise.all([git(main, 'branch', '--show-current'), git(main, 'rev-parse', 'HEAD')])
+  const [branch, head] = await Promise.all([headName(main), git(main, 'rev-parse', 'HEAD')])
   const [ahead, behind] = await Promise.all([count(path, `${head}..HEAD`), count(path, `HEAD..${head}`)])
   return { branch, ahead, behind }
 }
