@@ -60,9 +60,22 @@ export const isLoopback = (host: string) => LOCAL_NAMES.has(host) || host === ':
  * client from `dist`, falling back to index.html for the client's own routes.
  * A BadRequest is a 400 saying why; anything else thrown is a 500.
  */
-export function httpHandler(routes: Route[], opts: { dist: string; checkHost: boolean }) {
+export function httpHandler(
+  routes: Route[],
+  opts: {
+    dist: string
+    checkHost: boolean
+    /** Told of every API request that isn't a GET, once it's answered: what the user did through the API. */
+    onChange?: (r: { method: string; path: string; status: number; ms: number }) => void
+  },
+) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? '/', 'http://x')
+    const { onChange } = opts
+    if (onChange && req.method !== 'GET' && url.pathname.startsWith('/api/')) {
+      const start = Date.now()
+      res.once('finish', () => onChange({ method: req.method ?? '', path: url.pathname, status: res.statusCode, ms: Date.now() - start }))
+    }
     const json = (status: number, body: unknown) => {
       if (status === 204) return void res.writeHead(204).end()
       res.writeHead(status, { 'content-type': 'application/json' })

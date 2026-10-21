@@ -1,5 +1,6 @@
 import { For, Index, Match, Show, Switch, children, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
 import { Globe, Minimize2, NotebookPen, Plus, RotateCw, SquareArrowOutUpRight, X } from '../icons'
+import { setOnScreen } from '../activity.ts'
 import { api } from '../api.ts'
 import type { ContextChip } from './Attachments.tsx'
 import {
@@ -142,6 +143,10 @@ export function Workspace(props: {
   })
 
   createEffect(() => props.ws && untrack(() => openedIn(props.ws!, props.sessionId)))
+
+  // What's on screen, for time tracking.
+  createEffect(() => setOnScreen({ sessionId: props.sessionId, views: groupsOf(tree()).map(activeOf) }))
+  onCleanup(() => setOnScreen(undefined))
 
   // ── Focus ──
 
@@ -585,7 +590,7 @@ export function Workspace(props: {
 
   return (
     <div ref={container} class="relative h-full min-w-0 flex-1">
-      <div class="pane absolute flex flex-col" style={place(boxOf('chat')!)} onFocusIn={() => focusIn('chat')}>
+      <div class="pane absolute flex flex-col" style={place(boxOf('chat')!)} onFocusIn={() => focusIn('chat')} data-pane="chat">
         {chat()}
       </div>
 
@@ -605,6 +610,7 @@ export function Workspace(props: {
               classList={{ hidden: !at() }}
               style={at() ? placeIn(at()!.box) : undefined}
               onFocusIn={() => at() && focusIn(at()!.group)}
+              data-pane={key}
             >
               <Show when={view()}>
                 {(v) => (

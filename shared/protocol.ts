@@ -376,6 +376,58 @@ export type ClientEvent =
   | { type: 'term_resize'; id: string; cols: number; rows: number }
   /** Where this browser reaches previews, with `{port}` for the port, e.g. `https://{port}.badger.example.com`. */
   | { type: 'preview_url'; url: string }
+  /** Who this tab is, first on every connection, for analytics. */
+  | ({ type: 'hello' } & ClientHello)
+  /** Whether this tab is on screen and in use, and what's in it, for time tracking. */
+  | ({ type: 'activity' } & ActivityBeat)
+  /** Something done in the page that the hub wouldn't otherwise hear of, e.g. a notification clicked, for analytics. */
+  | { type: 'ui_event'; name: string; sessionId?: string; data?: Record<string, unknown> }
+
+/** A browser tab: its browser's id (kept in localStorage), its own (new each time the page loads), and the browser's details. */
+export interface ClientHello {
+  client: string
+  tab: string
+  info: {
+    userAgent?: string
+    platform?: string
+    language?: string
+    timeZone?: string
+    screen?: { width: number; height: number; dpr: number }
+    viewport?: { width: number; height: number }
+    touch?: boolean
+    /** Installed as an app, not in a browser tab. */
+    standalone?: boolean
+    /** The page's build, to compare with the hub's. */
+    build?: string
+  }
+}
+
+/**
+ * A tab's state, sent when it changes and every few seconds while it's visible.
+ * Whether that's time worked is decided later, from these.
+ */
+export interface ActivityBeat {
+  /** What prompted it: e.g. open, visibility, focus, route, pane, views, input, tick, closed. */
+  reason: string
+  visible: boolean
+  /** The window has focus (including a preview inside it). */
+  focused: boolean
+  /** How long since the last keypress, click, scroll or pointer move, by the tab's clock. Absent if there's been none. */
+  idleMs?: number
+  /** Inputs since the last beat, and how many of them were keypresses. */
+  inputs: number
+  keys: number
+  /** The page's route: chat, card, board, radar, terminal or home. */
+  route: string
+  /** The chat on screen. */
+  sessionId?: string
+  /** The card on screen, on a card's page. */
+  cardId?: number
+  /** Panels on screen beside the chat, by view key. */
+  views: string[]
+  /** Where the last input or focus was: chat, sidebar, page, or a panel's view key. */
+  pane?: string
+}
 
 export type ServerEvent =
   /** Everything about a chat, for a viewer starting on it. A chat with no live process has the live state of an idle one. */

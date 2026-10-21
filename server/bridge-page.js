@@ -216,6 +216,17 @@
     window.parent.postMessage({ type: 'badger:preview-location', path: location.pathname + location.search + location.hash }, '*')
   const navigated = () => (send(state(false)), moved())
   moved()
+  // Input in the page, for Badger's time tracking, which can't see into another origin's frame. At most once a second.
+  let inputAt = 0
+  const input = (kind) => {
+    const now = Date.now()
+    if (window.parent === window || now - inputAt < 1000) return
+    inputAt = now
+    window.parent.postMessage({ type: 'badger:preview-input', kind }, '*')
+  }
+  for (const [event, kind] of [['keydown', 'key'], ['pointerdown', 'pointer'], ['wheel', 'pointer'], ['touchmove', 'pointer']]) {
+    addEventListener(event, () => input(kind), { capture: true, passive: true })
+  }
 
   async function handle(message) {
     const { id, op } = message

@@ -12,6 +12,8 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY . .
+# The commit it's built from, recorded with analytics; CI passes it in.
+ARG BADGER_VERSION
 RUN pnpm build
 
 # ── Runtime ──
@@ -65,6 +67,9 @@ EXPOSE 3001
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD curl -fsS http://localhost:3001/api/config > /dev/null || exit 1
+
+ARG BADGER_VERSION
+ENV BADGER_VERSION=${BADGER_VERSION}
 
 # tini reaps the many processes Claude Code and the terminals leave behind.
 ENTRYPOINT ["tini", "--"]

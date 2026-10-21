@@ -9,6 +9,10 @@ import { UUID, imageAttachment } from './runnerProtocol.ts'
 
 const sessionId = z.string()
 const mode = z.enum(PERMISSION_MODES)
+/** A browser's or tab's own id. */
+const id = z.string().regex(/^[\w-]{8,64}$/)
+/** Something a browser says about itself: kept if it's a short enough string, dropped otherwise. */
+const text = (max = 128) => z.string().max(max).optional().catch(undefined)
 
 const attachments = z.object({
   pastes: z.array(z.string()).default([]),
@@ -66,6 +70,47 @@ const CLIENT_EVENT = z.discriminatedUnion('type', [
   z.object({ type: z.literal('term_input'), id: z.string(), data: z.string() }),
   z.object({ type: z.literal('term_resize'), id: z.string(), cols: z.number(), rows: z.number() }),
   z.object({ type: z.literal('preview_url'), url: z.string() }),
+  z.object({
+    type: z.literal('hello'),
+    client: id,
+    tab: id,
+    info: z
+      .object({
+        userAgent: text(512),
+        platform: text(),
+        language: text(),
+        timeZone: text(),
+        screen: z.object({ width: z.number(), height: z.number(), dpr: z.number() }).optional().catch(undefined),
+        viewport: z.object({ width: z.number(), height: z.number() }).optional().catch(undefined),
+        touch: z.boolean().optional().catch(undefined),
+        standalone: z.boolean().optional().catch(undefined),
+        build: text(),
+      })
+      .catch({}),
+  }),
+  z.object({
+    type: z.literal('activity'),
+    reason: z.string().max(32),
+    visible: z.boolean(),
+    focused: z.boolean(),
+    idleMs: z.number().nonnegative().optional(),
+    inputs: z.number().int().nonnegative().catch(0),
+    keys: z.number().int().nonnegative().catch(0),
+    route: z.string().max(32),
+    sessionId: z.string().regex(UUID).optional(),
+    cardId: z.number().int().optional(),
+    views: z.array(z.string().max(256)).max(32).catch([]),
+    pane: text(256),
+  }),
+  z.object({
+    type: z.literal('ui_event'),
+    name: z.string().max(64),
+    sessionId: z.string().regex(UUID).optional(),
+    data: z
+      .record(z.string(), z.unknown())
+      .refine((d) => JSON.stringify(d).length <= 4000, 'data is too big')
+      .optional(),
+  }),
 ]) satisfies ZodType<ClientEvent, unknown>
 
 const TYPES = new Set<string>(CLIENT_EVENT.options.map((o) => o.shape.type.value))

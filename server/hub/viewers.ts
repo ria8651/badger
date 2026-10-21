@@ -1,5 +1,6 @@
 import type { WebSocket } from 'ws'
 import type { ServerEvent } from '../../shared/protocol.ts'
+import type { TabIdentity } from '../analytics.ts'
 
 /**
  * The browser tabs connected to the hub, and which chats each is viewing. A
@@ -14,6 +15,8 @@ export class Viewers {
    * anywhere, and the user may be on their phone.
    */
   private previewUrls = new Map<WebSocket, string>()
+  /** Who each tab said it is, and when it connected. */
+  private identities = new Map<WebSocket, TabIdentity & { since: number }>()
 
   /** How many tabs are connected. */
   get count(): number {
@@ -28,6 +31,7 @@ export class Viewers {
   drop(ws: WebSocket): void {
     this.tabs.delete(ws)
     this.previewUrls.delete(ws)
+    this.identities.delete(ws)
     for (const set of this.chats.values()) set.delete(ws)
   }
 
@@ -68,6 +72,15 @@ export class Viewers {
   publish(event: ServerEvent): void {
     if ('sessionId' in event && event.sessionId) this.toChat(event.sessionId, event)
     else this.toAll(event)
+  }
+
+  identify(ws: WebSocket, id: TabIdentity): void {
+    this.identities.set(ws, { ...id, since: Date.now() })
+  }
+
+  /** Who a tab is, once it has said. */
+  identity(ws: WebSocket): (TabIdentity & { since: number }) | undefined {
+    return this.identities.get(ws)
   }
 
   setPreviewUrl(ws: WebSocket, url: string): void {

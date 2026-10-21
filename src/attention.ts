@@ -1,5 +1,6 @@
 import { createMemo, createRoot, createSignal } from 'solid-js'
 import type { AttentionState } from '../shared/protocol.ts'
+import { track } from './activity.ts'
 import { socket } from './api.ts'
 import { sessions } from './stores/sessions.ts'
 
@@ -74,7 +75,9 @@ export async function toggleNotifications(): Promise<void> {
 export function notify(sessionId: string, title: string, body: string, onClick: () => void): void {
   if (notifications() !== 'on' || looking()) return
   const n = new Notification(title, { body, tag: sessionId })
+  track('notification.shown', sessionId)
   n.onclick = () => {
+    track('notification.clicked', sessionId)
     focus()
     onClick()
     n.close()
