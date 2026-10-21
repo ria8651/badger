@@ -125,17 +125,19 @@ export interface AccountUsage {
 /** A git worktree Claude Code made under `<repo>/.claude/worktrees/`. */
 export interface WorktreeStatus {
   path: string
+  /** Its branch, or its commit's short hash when HEAD is detached. */
   branch: string
   /** Files with uncommitted changes. */
   changes: number
   /** Commits on its branch that the main checkout's HEAD doesn't have. */
   unmerged: number
-  /** The main checkout's branch, which `unmerged` is counted against. */
+  /** The main checkout's branch (or short hash, detached), which `unmerged` is counted against. */
   base: string
 }
 
 /** Work in any git checkout that hasn't landed anywhere yet: what a review looks at. */
 export interface ChangesStatus {
+  /** Its branch, or its commit's short hash when HEAD is detached. */
   branch: string
   /** Files with uncommitted changes. */
   changes: number
@@ -161,7 +163,7 @@ export interface GitStatus {
   behind: number
   /** Where a branch with no upstream would be pushed: origin, or the only remote. Absent with no remotes. */
   remote?: string
-  /** In a linked worktree: the main checkout's branch, and the commits each has that the other doesn't. */
+  /** In a linked worktree: the main checkout's branch (or short hash, detached), and the commits each has that the other doesn't. */
   base?: { branch: string; ahead: number; behind: number }
   /** When the repo last fetched, ms since epoch; absent if it never has. */
   fetchedAt?: number
