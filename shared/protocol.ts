@@ -94,6 +94,10 @@ export interface SessionSummary {
   archived: boolean
   /** Its directory no longer exists, e.g. a removed worktree. */
   gone?: boolean
+  /** A side chat (/btw): the chat it's under, shown in a panel beside that rather than in the sidebar. */
+  sideOf?: string
+  /** For a side chat, when it was forked: it knows its parent as it was then. */
+  forkedAt?: number
 }
 
 /** How full a chat's context window is, as Claude Code's /context counts it. */

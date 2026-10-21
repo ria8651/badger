@@ -64,6 +64,36 @@ export async function forkTranscript(
   return { sessionId: fork.sessionId, files }
 }
 
+/**
+ * Where to fork a chat that's mid-turn: the end of the last request Claude
+ * sent, so a fork's first request starts with what's already cached. That's
+ * after a prompt or tool result with no tool call left waiting on its result,
+ * along with the context Claude Code attached to it (its environment, skills
+ * and the like, each an entry of its own), up to the reply. Assistant entries
+ * after it may be part of a reply still coming in, so they're left out.
+ */
+export function busyForkPoint(entries: SessionStoreEntry[]): string | undefined {
+  const open = new Set<string>()
+  let at: string | undefined
+  /** Whether the entries since the last reply would make a request: they end a prompt or the last tool result. */
+  let complete = false
+  for (const e of entries) {
+    const content = (e.message as { content?: unknown } | undefined)?.content
+    const blocks = Array.isArray(content) ? (content as { type?: string; id?: string; tool_use_id?: string }[]) : []
+    if (e.type === 'assistant') {
+      for (const b of blocks) if (b.type === 'tool_use' && b.id) open.add(b.id)
+      complete = false
+      continue
+    }
+    if (e.type === 'user') {
+      for (const b of blocks) if (b.type === 'tool_result' && b.tool_use_id) open.delete(b.tool_use_id)
+      complete = !open.size
+    }
+    if (complete && typeof e.uuid === 'string') at = e.uuid
+  }
+  return at
+}
+
 /** A file's lines in parts small enough to send, the metadata with the last. */
 function batches(subpath: string, lines: string[], meta?: Record<string, unknown>): ImportedFile[] {
   const out: ImportedFile[] = []

@@ -1,13 +1,23 @@
 import type { WebSocket } from 'ws'
-import { renderMoveNote } from '../../shared/forkNote.ts'
-import { LOCAL_MACHINE, type ChatCommand, type ChatCommandReply, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../../shared/protocol.ts'
+import { SIDE_NOTE, renderMoveNote } from '../../shared/forkNote.ts'
+import {
+  LOCAL_MACHINE,
+  type ChatCommand,
+  type ChatCommandReply,
+  type ClientEvent,
+  type DraftAttachments,
+  type ImageAttachment,
+  type PermissionMode,
+  type ServerEvent,
+  type SessionSummary,
+} from '../../shared/protocol.ts'
 import type { Attention } from '../attention.ts'
 import type { ChatInfo } from '../boardTools.ts'
 import type { Board } from '../board.ts'
 import type { ChatMeta, Draft } from '../chatMeta.ts'
 import type { Actor, Database } from '../db.ts'
 import { BadRequest, absolutePath, badRequest, message } from '../errors.ts'
-import { forkTranscript } from '../fork.ts'
+import { busyForkPoint, forkTranscript } from '../fork.ts'
 import type { Connection, Machines } from '../machines.ts'
 import type { ChatPlacement } from '../placement.ts'
 import { IDLE, type LiveSnapshot, type TranscriptLines } from '../runnerProtocol.ts'
@@ -99,6 +109,11 @@ export class Chats {
     const { meta, transcripts, machines, placement } = this.d
     // Children show inside the chat that started them.
     const childIds = meta.childIds()
+    const side = meta.sideChats()
+    const under = (id: string) => {
+      const s = side.get(id)
+      return s ? { sideOf: s.parent, forkedAt: s.at } : {}
+    }
     const listed = await transcripts.list(LIST_LIMIT, childIds)
     const archived = meta.archivedIds()
     const where = placement.machinesOf(listed.map((s) => s.sessionId))
@@ -116,13 +131,23 @@ export class Chats {
         running: !!live?.running,
         archived: archived.has(s.sessionId),
         gone: !live && !!s.cwd && !!gone.get(machine ?? '')?.has(s.cwd),
+        ...under(s.sessionId),
       }
     })
     // A brand-new live session may not have a transcript here yet.
     for (const runner of machines.online()) {
       for (const live of runner.live.values()) {
         if (childIds.has(live.id) || summaries.some((s) => s.id === live.id)) continue
-        summaries.unshift({ id: live.id, title: 'New chat', cwd: live.cwd, machine: runner.id, lastModified: Date.now(), running: live.running, archived: false })
+        summaries.unshift({
+          id: live.id,
+          title: 'New chat',
+          cwd: live.cwd,
+          machine: runner.id,
+          lastModified: Date.now(),
+          running: live.running,
+          archived: false,
+          ...under(live.id),
+        })
       }
     }
     // Sent with the list so a chat's panels are known before it's opened, not looked up after.
@@ -362,33 +387,70 @@ export class Chats {
    * chat's own machine needn't be online, and written on the one it goes to.
    */
   async fork(id: string, body: { at?: unknown; machine?: unknown; cwd?: unknown; worktree?: unknown; draft?: unknown }): Promise<{ sessionId: string }> {
-    const { db, board, meta, transcripts, machines, placement } = this.d
     if (body.at !== undefined && typeof body.at !== 'string') throw new BadRequest('at must be a message id')
     if (body.draft !== undefined && typeof body.draft !== 'string') throw new BadRequest('draft must be a string')
     if (body.worktree !== undefined && typeof body.worktree !== 'string') throw new BadRequest('worktree must be a string')
+    return { sessionId: await this.copy(id, { at: body.at, machine: body.machine, cwd: body.cwd, worktree: body.worktree, draft: body.draft }) }
+  }
+
+  /**
+   * Starts a side chat (/btw): a fork of the chat in its own folder, on its
+   * own machine, kept under it rather than on its card or in the sidebar.
+   * What Claude was sent stays the same, so the side chat's first turn reads
+   * the chat's cached prompt rather than paying for it again. A chat that's
+   * mid-turn is forked where its last request ended. With `text`, that's sent
+   * straight away, in the mode and model asked for: the parent's.
+   */
+  async btw(id: string, body: { text?: unknown; pastes?: unknown; images?: unknown; mode?: unknown; model?: unknown }): Promise<{ sessionId: string }> {
+    const { meta, transcripts, machines, placement } = this.d
+    if (body.text !== undefined && typeof body.text !== 'string') throw new BadRequest('text must be a string')
+    if (meta.sideChats().has(id)) throw new BadRequest("A side chat can't have side chats of its own")
+    const at = machines.live(id)?.running ? busyForkPoint((await transcripts.store.load({ projectKey: '', sessionId: id })) ?? []) : undefined
+    const text = body.text?.trim()
+    // Named for what it asks, so its parent's side chats can be told apart.
+    const title = text ? (text.length > 60 ? `${text.slice(0, 59).trimEnd()}…` : text).replace(/\s+/g, ' ') : 'Side chat'
+    const sessionId = await this.copy(id, { at, side: true, title })
+    if (text) {
+      const pastes = Array.isArray(body.pastes) ? (body.pastes as string[]) : []
+      const images = Array.isArray(body.images) ? (body.images as ImageAttachment[]) : []
+      const opts = { mode: body.mode as PermissionMode | undefined, model: body.model as string | undefined }
+      await machines.require(placement.machineOf(sessionId)!).remote.send(sessionId, opts, text, pastes, images)
+    }
+    return { sessionId }
+  }
+
+  /** Copies a chat as a new one: see fork and btw. */
+  private async copy(
+    id: string,
+    o: { at?: string; machine?: unknown; cwd?: unknown; worktree?: string; draft?: string; side?: boolean; title?: string },
+  ): Promise<string> {
+    const { db, board, meta, transcripts, machines, placement } = this.d
     const info = await transcripts.info(id)
     const fromMachine = placement.machineOf(id)
     const fromCwd = machines.live(id)?.cwd ?? info?.cwd
     if (!info || !fromMachine || !fromCwd) throw new BadRequest("This chat hasn't been saved yet, so it can't be forked")
-    const to = machines.fromRequest(body.machine ?? fromMachine)
-    const cwd = body.cwd === undefined ? fromCwd : absolutePath(body.cwd)
-    const worktree = body.worktree
+    const to = machines.fromRequest(o.machine ?? fromMachine)
+    const cwd = o.cwd === undefined ? fromCwd : absolutePath(o.cwd)
+    const worktree = o.worktree
     const moved = to.id !== fromMachine || cwd !== fromCwd || worktree !== undefined
-    const title = `${(titleOf(info) || 'Untitled').replace(/ \(fork\)$/, '')} (fork)`
-    const fork = await forkTranscript(transcripts.store, transcripts.subagentFiles(id), id, { at: body.at, title, cwd: moved ? cwd : undefined }).catch((err) => {
+    const title = o.title ?? `${(titleOf(info) || 'Untitled').replace(/ \(fork\)$/, '')} (fork)`
+    const fork = await forkTranscript(transcripts.store, transcripts.subagentFiles(id), id, { at: o.at, title, cwd: moved ? cwd : undefined }).catch((err) => {
       // The turn's last messages may not have been copied here yet.
       throw new BadRequest(`Couldn't fork it: ${message(err)}`)
     })
     const note = moved
       ? renderMoveNote({ from: { machine: machines.name(fromMachine), cwd: fromCwd }, to: { machine: to.name, cwd, worktree: worktree !== undefined || undefined } })
-      : undefined
-    const card = board.cardOf(id)
-    const draft = body.draft
+      : o.side
+        ? SIDE_NOTE
+        : undefined
+    // A side chat is found through its parent, so it isn't put on the card.
+    const card = o.side ? undefined : board.cardOf(id)
     db.transaction(() => {
       placement.assign(fork.sessionId, to.id)
       meta.addFork({ sessionId: fork.sessionId, sourceId: id, cwd, worktree, note })
+      if (o.side) meta.addSideChat(fork.sessionId, id)
       // e.g. the message to edit and send again.
-      if (draft) meta.setDraft(fork.sessionId, { text: draft })
+      if (o.draft) meta.setDraft(fork.sessionId, { text: o.draft })
     })
     try {
       for (const file of fork.files) await to.remote.importTranscript(fork.sessionId, cwd, file)
@@ -396,6 +458,7 @@ export class Chats {
       db.transaction(() => {
         placement.unassign(fork.sessionId, to.id)
         meta.removeFork(fork.sessionId)
+        meta.removeSideChat(fork.sessionId)
       })
       throw err
     }
@@ -404,16 +467,17 @@ export class Chats {
       this.d.cardsChanged()
     }
     this.d.listChanged()
-    return { sessionId: fork.sessionId }
+    return fork.sessionId
   }
 
-  /** The list, and archive, title and fork routes. Archiving only hides a chat; its transcript is left alone. */
+  /** The list, and archive, title, fork and side chat routes. Archiving only hides a chat; its transcript is left alone. */
   routes(): Route[] {
     const { board, meta, transcripts, machines, placement } = this.d
     const path = (action: string) => new RegExp(`^/api/sessions/${CHAT_ID}/${action}$`)
     return [
       ['GET', '/api/sessions', async () => [200, await this.list()]],
       ['POST', path('fork'), async ({ params: [id], json }) => [201, await this.fork(id, await json())]],
+      ['POST', path('btw'), async ({ params: [id], json }) => [201, await this.btw(id, await json())]],
       ['POST', path('archive'), ({ params: [id] }) => (meta.setArchived(id, true, UI), [204, null])],
       ['DELETE', path('archive'), ({ params: [id] }) => (meta.setArchived(id, false, UI), [204, null])],
       // The title goes in the transcript, on the chat's machine, where the CLI's /resume sees it too. It comes back with the transcript.

@@ -41,7 +41,7 @@ export function Sidebar(props: {
 
   const unfiledCount = createMemo(() => sessions().filter((s) => !s.archived && !cardOf(s.id)).length)
   /** The chat on screen is listed wherever it is. */
-  const shown = (s: SessionSummary) => s.id === props.current || inFocus(s.id)
+  const shown = (s: SessionSummary) => !s.sideOf && (s.id === props.current || inFocus(s.id))
   const active = createMemo(() => sessions().filter((s) => !s.archived && shown(s)))
   const archived = createMemo(() => sessions().filter((s) => s.archived && shown(s)))
   const [showArchived, setShowArchived] = createSignal(false)
