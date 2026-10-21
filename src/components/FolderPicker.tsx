@@ -1,5 +1,5 @@
 import { For, Show, createMemo, createResource, createSignal, type JSX } from 'solid-js'
-import { Check, Folder as FolderIcon, FolderGit2, FolderPlus, GitBranch, MessageSquare, Plus, Trash2, X } from '../icons'
+import { Check, Folder as FolderIcon, FolderGit2, FolderPlus, GitBranch, Loader2, MessageSquare, Plus, Trash2, X } from '../icons'
 import type { Checkout, Folder } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { basename, scratchDir } from '../folders.ts'
@@ -43,6 +43,9 @@ export function FolderPicker(props: {
   const listError = () => current()?.error
   const [all, setAll] = createSignal(false)
   const [browsing, setBrowsing] = createSignal(false)
+  /** Worktrees being deleted, as `machine path`: it can take a while, with all their dependencies to go too. */
+  const [deleting, setDeleting] = createSignal<ReadonlySet<string>>(new Set())
+  const isDeleting = (path: string) => deleting().has(`${props.machine} ${path}`)
   /** The "No folder" directory, offered first. */
   const scratch = () => scratchDir(props.machine)
   const pick = (cwd: string, worktree: boolean) => props.onPick(cwd, worktree, props.machine)
@@ -85,13 +88,23 @@ export function FolderPicker(props: {
     ].filter((note) => typeof note === 'string')
     if (!(await confirmBy(button, { message: `Delete worktree ${basename(c.path)}?`, notes, action: 'Delete' }))) return
     const machine = props.machine
+    const key = `${machine} ${c.path}`
+    setDeleting((set) => new Set(set).add(key))
+    // Still deleting until the list comes back without it, so it doesn't flash back in between.
     api
       .removeWorktree(c.path, machine)
       .then(() => {
         if (props.selected === c.path && props.machine === machine) pick(folder.path, false)
       })
       .catch((e: Error) => showError("Couldn't delete it", e.message, button))
-      .finally(refetch)
+      .then(refetch)
+      .finally(() =>
+        setDeleting((set) => {
+          const next = new Set(set)
+          next.delete(key)
+          return next
+        }),
+      )
   }
 
   return (
@@ -181,7 +194,12 @@ export function FolderPicker(props: {
                           </Row>
                         }
                       >
-                        <Row indent selected={isSelected(folder, c.path, false)} onClick={() => pick(c.path, false)}>
+                        <Row
+                          indent
+                          selected={isSelected(folder, c.path, false)}
+                          disabled={isDeleting(c.path)}
+                          onClick={() => pick(c.path, false)}
+                        >
                           <GitBranch class="size-3.5 shrink-0 text-fg-3" />
                           <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3">
                             <span class="flex min-w-32 flex-1 items-baseline gap-2" title={c.path}>
@@ -190,27 +208,38 @@ export function FolderPicker(props: {
                                 <span class="min-w-8 truncate font-mono text-meta text-fg-3">{c.git.branch}</span>
                               </Show>
                             </span>
-                            <GitSummary git={c.git} class="shrink-0 text-meta" />
+                            <Show when={!isDeleting(c.path)} fallback={<span class="shrink-0 text-meta text-fg-3">Deleting…</span>}>
+                              <GitSummary git={c.git} class="shrink-0 text-meta" />
+                            </Show>
                           </div>
                           <Size path={c.path} machine={props.machine} />
-                          {/* Faded rather than disabled while it has changes, so a click says why instead of picking the row. */}
-                          <button
-                            type="button"
-                            aria-disabled={c.git.changes > 0}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              if (!c.git.changes) return void removeWorktree(folder, c, e.currentTarget)
-                              showError(
-                                "Can't delete it yet",
-                                `It has ${plural(c.git.changes, 'uncommitted change')}. Commit or discard them first, so nothing is lost.`,
-                                e.currentTarget,
-                              )
-                            }}
-                            title={c.git.changes ? 'Commit or discard its changes before deleting it' : 'Delete worktree (its branch goes too, if merged)'}
-                            class="grid size-6 shrink-0 place-items-center rounded-md text-fg-3 opacity-0 transition group-hover/row:opacity-100 hover:bg-bg hover:text-danger focus-visible:opacity-100 aria-disabled:text-fg-3/40 aria-disabled:hover:bg-transparent aria-disabled:hover:text-fg-3/40 pointer-coarse:size-8 pointer-coarse:opacity-100"
+                          <Show
+                            when={!isDeleting(c.path)}
+                            fallback={
+                              <span class="grid size-6 shrink-0 place-items-center text-fg-3 pointer-coarse:size-8">
+                                <Loader2 class="size-3.5 animate-spin" />
+                              </span>
+                            }
                           >
-                            <Trash2 class="size-3.5" />
-                          </button>
+                            {/* Faded rather than disabled while it has changes, so a click says why instead of picking the row. */}
+                            <button
+                              type="button"
+                              aria-disabled={c.git.changes > 0}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                if (!c.git.changes) return void removeWorktree(folder, c, e.currentTarget)
+                                showError(
+                                  "Can't delete it yet",
+                                  `It has ${plural(c.git.changes, 'uncommitted change')}. Commit or discard them first, so nothing is lost.`,
+                                  e.currentTarget,
+                                )
+                              }}
+                              title={c.git.changes ? 'Commit or discard its changes before deleting it' : 'Delete worktree (its branch goes too, if merged)'}
+                              class="grid size-6 shrink-0 place-items-center rounded-md text-fg-3 opacity-0 transition group-hover/row:opacity-100 hover:bg-bg hover:text-danger focus-visible:opacity-100 aria-disabled:text-fg-3/40 aria-disabled:hover:bg-transparent aria-disabled:hover:text-fg-3/40 pointer-coarse:size-8 pointer-coarse:opacity-100"
+                            >
+                              <Trash2 class="size-3.5" />
+                            </button>
+                          </Show>
                         </Row>
                       </Show>
                     )}
@@ -274,21 +303,22 @@ export function FolderPicker(props: {
 }
 
 /** A pickable line on a folder's card; worktrees sit indented under their repo. */
-function Row(props: { selected: boolean; indent?: boolean; onClick: () => void; children: JSX.Element }) {
+function Row(props: { selected: boolean; indent?: boolean; disabled?: boolean; onClick: () => void; children: JSX.Element }) {
   return (
     <div
       role="button"
-      tabindex={0}
+      tabindex={props.disabled ? -1 : 0}
       aria-pressed={props.selected}
-      onClick={props.onClick}
+      aria-disabled={props.disabled}
+      onClick={() => props.disabled || props.onClick()}
       onKeyDown={(e) => {
-        if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return
+        if (props.disabled || e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return
         e.preventDefault()
         props.onClick()
       }}
       class={`group/row flex min-h-10 cursor-pointer items-center gap-2.5 px-3 py-1.5 outline-none transition-colors first:rounded-t-xl last:rounded-b-xl focus-visible:bg-surface/60 pointer-coarse:min-h-12 ${
         props.indent ? 'border-t border-line pl-9' : ''
-      } ${props.selected ? 'bg-surface' : 'hover:bg-surface/60'}`}
+      } ${props.selected ? 'bg-surface' : 'hover:bg-surface/60'} aria-disabled:cursor-default aria-disabled:opacity-60 aria-disabled:hover:bg-transparent`}
     >
       {props.children}
       <Check class={`size-3.5 shrink-0 text-fg-2 ${props.selected ? '' : 'invisible'}`} />
