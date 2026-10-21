@@ -392,7 +392,10 @@
 .md pre { padding: 0.85em 1em; border-radius: var(--radius-lg); background: var(--color-surface); overflow-x: auto; font-size: 13px; line-height: 1.55; }
 .md pre code { font-size: inherit; }
 .md table { display: block; overflow-x: auto; border-collapse: collapse; font-size: 0.93em; }
-.md :where(th, td) { padding: 0.4em 0.9em 0.4em 0; border-bottom: 1px solid var(--color-line); text-align: left; }
+/* break-word, not .md's anywhere: anywhere shrinks cells' min-content, so the table splits short columns mid-word to widen the long one. */
+.md :where(th, td) { padding: 0.4em 0.9em 0.4em 0; border-bottom: 1px solid var(--color-line); text-align: left; overflow-wrap: break-word; }
+/* Paths, identifiers and URLs still break anywhere, or one would push the table wide and squeeze the prose beside it to a word a line. */
+.md :where(th, td) :where(code, a) { overflow-wrap: anywhere; }
 .md th { font-weight: 500; color: var(--color-fg-2); }
 .md img { max-width: 100%; border-radius: var(--radius-lg); }
 /* Rendered ones open in the image viewer on a click; edited ones on a double click. */
