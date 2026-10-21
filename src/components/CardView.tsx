@@ -1,5 +1,5 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, on, type JSX } from 'solid-js'
-import { ChevronDown, FolderInput, GitBranch, Link, Pencil, Plus, Trash2, X } from '../icons'
+import { ChevronDown, FolderInput, GitBranch, Link, Loader2, Pencil, Plus, Trash2, X } from '../icons'
 import { ancestors, descendants } from '../../shared/cardTree.ts'
 import { CARD_STATUSES, type Card, type SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
@@ -299,7 +299,10 @@ function WorktreeRow(props: { path: string; machine: string }) {
     ([path, machine]) => api.worktree(path, machine),
   )
   const [error, setError] = createSignal<string>()
+  // Stays on once it's gone: the row goes when its chats are marked gone.
+  const [deleting, setDeleting] = createSignal(false)
   const summary = () => {
+    if (deleting()) return 'Removing…'
     const s = status()
     if (!s) return status.error ? 'Unavailable' : ''
     const parts = [
@@ -313,13 +316,15 @@ function WorktreeRow(props: { path: string; machine: string }) {
     const notes = s?.unmerged ? [`Its branch ${s.branch} has unmerged commits, so it will be kept.`] : []
     if (!(await confirmBy(e.currentTarget as Element, { message: `Remove worktree ${folderLabel(props.path)}?`, notes, action: 'Remove' }))) return
     setError(undefined)
+    setDeleting(true)
     api.removeWorktree(props.path, props.machine).catch((err: Error) => {
+      setDeleting(false)
       setError(err.message)
       refetch()
     })
   }
   return (
-    <div class="group -mx-2 rounded-lg px-2 py-2.5 transition-colors hover:bg-surface/60">
+    <div class={`group -mx-2 rounded-lg px-2 py-2.5 transition-colors hover:bg-surface/60 ${deleting() ? 'opacity-60' : ''}`}>
       <div class="flex items-center gap-2 text-ui">
         <GitBranch class="size-3.5 shrink-0 text-fg-3" />
         <span class="min-w-0 truncate font-mono text-xs text-fg-2" title={props.path}>
@@ -327,13 +332,22 @@ function WorktreeRow(props: { path: string; machine: string }) {
         </span>
         <Show when={onMachine(props.machine)}>{(name) => <MachineName machine={props.machine} name={name()} class="text-meta text-fg-3" />}</Show>
         <span class="ml-auto shrink-0 text-meta text-fg-3">{summary()}</span>
-        <button
-          onClick={remove}
-          title="Remove worktree (its branch goes too, if merged)"
-          class="grid size-6 place-items-center rounded-button-md text-fg-3 opacity-0 transition hover:bg-surface hover:text-danger group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:size-9 pointer-coarse:opacity-100"
+        <Show
+          when={!deleting()}
+          fallback={
+            <span class="grid size-6 place-items-center text-fg-3 pointer-coarse:size-9">
+              <Loader2 class="size-3.5 animate-spin" />
+            </span>
+          }
         >
-          <Trash2 class="size-3.5" />
-        </button>
+          <button
+            onClick={remove}
+            title="Remove worktree (its branch goes too, if merged)"
+            class="grid size-6 place-items-center rounded-button-md text-fg-3 opacity-0 transition hover:bg-surface hover:text-danger group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:size-9 pointer-coarse:opacity-100"
+          >
+            <Trash2 class="size-3.5" />
+          </button>
+        </Show>
       </div>
       <Show when={error()}>
         <p class="mt-1 text-xs text-danger">{error()}</p>

@@ -143,7 +143,9 @@ function machineFileRoutes({ machines, chats, listChanged }: ApiDeps): Route[] {
       '/api/worktree',
       async ({ url }) => {
         const dir = absolutePath(url.searchParams.get('path'))
-        await query(url).runner.remote.removeWorktree(dir)
+        const { runner } = query(url)
+        await runner.remote.removeWorktree(dir)
+        chats.forgetFolder(runner.id, dir)
         listChanged()
         return [204, null]
       },

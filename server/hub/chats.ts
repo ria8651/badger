@@ -196,6 +196,12 @@ export class Chats {
     return out
   }
 
+  /** A folder was just removed: asked about again on the next list, rather than shown as there until its answer expires. */
+  forgetFolder(machine: string, dir: string): void {
+    const runner = this.d.machines.get(machine)
+    if (runner) this.goneAnswers.get(runner)?.delete(dir)
+  }
+
   // ── Viewing ──
 
   async subscribe(ws: WebSocket, sessionId: string): Promise<void> {
