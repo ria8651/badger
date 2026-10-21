@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { splitMoveNote } from '../../shared/forkNote.ts'
+import { splitMoveNote, splitSideNote } from '../../shared/forkNote.ts'
 import { LOCAL_MACHINE, type ServerEvent } from '../../shared/protocol.ts'
 import type { Attention } from '../attention.ts'
 import { cardContext, contextSeen } from '../boardTools.ts'
@@ -129,8 +129,9 @@ export class RunnerLink implements MachineEvents {
       // A fork that moved is told so first, then about its card.
       cardContext: (chat) => [meta.forkNote(own(chat)), cardContext(board, meta, chat)].filter(Boolean).join('\n\n') || undefined,
       contextSeen: (chat, text) => {
-        const { move, rest } = splitMoveNote(text)
-        if (move) meta.forkNoteSeen(own(chat))
+        const side = splitSideNote(text)
+        const { move, rest } = splitMoveNote(side.rest)
+        if (move || side.side) meta.forkNoteSeen(own(chat))
         if (rest) contextSeen(meta, own(chat), rest)
       },
       openPreview: (chat, { root, port, name, path }) => {
