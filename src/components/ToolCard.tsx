@@ -1,4 +1,5 @@
-import { For, Match, Show, Switch, createEffect, createSignal, on, type JSX } from 'solid-js'
+import { For, Match, Show, Switch, createEffect, createSignal, on, onCleanup, type JSX } from 'solid-js'
+import { highlightWhenSeen, languageOf } from '../highlight.ts'
 import { Check, ChevronRight, CircleAlert, Loader2, Shield, Webhook } from '../icons'
 import type { Task } from '../tasks.ts'
 import { useChecking } from '../useChat.ts'
@@ -197,15 +198,15 @@ function Answers(props: { questions: Question[]; answers: (string | undefined)[]
 
 export function ToolInput(props: { name: string; input: Input }) {
   return (
-    <Switch fallback={<Pre text={JSON.stringify(props.input, null, 2)} />}>
+    <Switch fallback={<Pre text={JSON.stringify(props.input, null, 2)} lang="json" />}>
       <Match when={props.name === 'Bash'}>
-        <Pre text={str(props.input.command)} />
+        <Pre text={str(props.input.command)} lang="shellscript" />
       </Match>
       <Match when={props.name === 'Edit'}>
         <Diff before={str(props.input.old_string)} after={str(props.input.new_string)} />
       </Match>
       <Match when={props.name === 'Write'}>
-        <Pre text={str(props.input.content)} />
+        <Pre text={str(props.input.content)} lang={languageOf(str(props.input.file_path))} />
       </Match>
       <Match when={props.name === 'SendMessage' && typeof props.input.message === 'string'}>
         <Markdown text={str(props.input.message)} />
@@ -485,10 +486,23 @@ function Plain(props: ToolProps & { fill?: boolean }) {
             {(r) => {
               const images = () => resultImages(r().content)
               const text = () => (images().length ? resultText(r().content).replace(/^\[image\]$/gm, '').trim() : resultText(r().content))
+              const file = () => (props.name === 'Read' && !r().isError ? numbered(text()) : undefined)
               return (
                 <>
-                  <Show when={text() || !images().length}>
-                    <Pre text={text() || '(no output)'} class={r().isError ? 'text-danger' : ''} fill={props.fill} />
+                  <Show
+                    when={file()}
+                    fallback={
+                      <Show when={text() || !images().length}>
+                        <Pre text={text() || '(no output)'} class={r().isError ? 'text-danger' : ''} fill={props.fill} />
+                      </Show>
+                    }
+                  >
+                    {(f) => (
+                      <>
+                        <Pre text={f().code} from={f().from} lang={languageOf(str(props.input.file_path))} fill={props.fill} />
+                        <Show when={f().rest}>{(rest) => <Pre text={rest()} fill={props.fill} />}</Show>
+                      </>
+                    )}
                   </Show>
                   <Show when={images().length}>
                     <ResultImages urls={images()} class="max-h-[32rem] max-w-full" />
@@ -533,13 +547,55 @@ function LiveOutput(props: { text: string; class: string }) {
 
 const LIMIT = 4000
 
-export function Pre(props: { text: string; class?: string; /** No height limit. */ fill?: boolean }) {
+/**
+ * A file as Read returns it, a line number and a tab before each line, split
+ * into its first line's number and the code. Anything after the numbered lines,
+ * such as a reminder, is the rest.
+ */
+function numbered(text: string): { from: number; code: string; rest: string } | undefined {
+  const lines = text.split('\n')
+  let n = 0
+  while (n < lines.length && /^\s*\d+\t/.test(lines[n])) n++
+  if (!n) return
+  return {
+    from: Number(lines[0].split('\t')[0]),
+    code: lines.slice(0, n).map((l) => l.slice(l.indexOf('\t') + 1)).join('\n'),
+    rest: lines.slice(n).join('\n').trim(),
+  }
+}
+
+export function Pre(props: {
+  text: string
+  class?: string
+  /** No height limit. */
+  fill?: boolean
+  /** To highlight it as, e.g. from languageOf(). */
+  lang?: string
+  /** The first line's number, to number the lines in a gutter. Lines then don't wrap. */
+  from?: number
+}) {
   const [full, setFull] = createSignal(false)
   const long = () => props.text.length > LIMIT
+  const shown = () => (full() || !long() ? props.text : props.text.slice(0, LIMIT) + '\n…')
+  let code!: HTMLElement
+  // Filled by hand rather than by Solid, since highlighting replaces what's inside.
+  createEffect(() => {
+    code.textContent = shown()
+    onCleanup(highlightWhenSeen(code, shown(), props.lang))
+  })
+  const numbers = () => {
+    const lines = shown().split('\n').map((_, i) => String(props.from! + i))
+    // The "…" a cut-off file ends with isn't a line of it.
+    if (long() && !full()) lines[lines.length - 1] = ''
+    return lines.join('\n')
+  }
   return (
     <div>
-      <pre class={`${props.fill ? '' : 'max-h-96'} ${preClass} ${props.class ?? ''}`}>
-        {full() || !long() ? props.text : props.text.slice(0, LIMIT) + '\n…'}
+      <pre class={`${props.fill ? '' : 'max-h-96'} ${preClass} ${props.from !== undefined ? 'flex !whitespace-pre !px-0' : ''} ${props.class ?? ''}`}>
+        <Show when={props.from !== undefined}>
+          <span class="sticky left-0 shrink-0 select-none bg-surface pr-3 pl-3 text-right text-fg-3 opacity-70">{numbers()}</span>
+        </Show>
+        <code ref={code} class={props.from !== undefined ? 'pr-3' : ''} />
       </pre>
       <Show when={long()}>
         <button onClick={() => setFull(!full())} class="mt-1.5 text-xs text-fg-3 hover:text-fg-2">
