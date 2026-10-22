@@ -1,8 +1,9 @@
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from 'solid-js'
+import { For, Show, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack } from 'solid-js'
 import { Check, ChevronDown, ChevronRight, MessageSquarePlus, RotateCw, Sparkles, Trash2 } from '../icons'
 import type { ReviewAttention, ReviewDiff, ReviewFile, ReviewGroup, ReviewGuide, ReviewHunk } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { plural } from '../format.ts'
+import { highlight, languageOf } from '../highlight.ts'
 import { itemsFor, type Block, type Index } from '../transcript/model.ts'
 import { Markdown } from './Markdown.tsx'
 import { Button, DiffCount, GhostButton, inputClass } from './ui.tsx'
@@ -652,6 +653,13 @@ function HunkView(props: {
   const [shown, setShown] = createSignal(false)
   const nothing = () => !props.rows.length
   const folded = () => f().generated && !shown()
+  // Highlighted once it's open, so a long review only highlights what's been looked at.
+  const [html] = createResource(
+    () => props.open && !folded() && props.rows.length > 0 && { rows: props.rows, lang: languageOf(f().path) },
+    async ({ rows, lang }) => ({ rows, lines: await highlightRows(rows, lang) }),
+  )
+  /** Only for the rows it was made from: while new rows are highlighted, the last ones' lines would be out of step. */
+  const lineHtml = (i: number) => (html()?.rows === props.rows ? html()!.lines?.[i] : undefined)
 
   return (
     <div class={`overflow-hidden rounded-lg border ${props.viewed ? 'border-line/60' : 'border-line'}`}>
@@ -724,7 +732,7 @@ function HunkView(props: {
                       </button>
                       <span class={`w-4 shrink-0 select-none text-center ${r.kind === 'add' ? 'text-ok' : r.kind === 'del' ? 'text-danger' : 'text-fg-3'}`}>{SIGN[r.kind]}</span>
                       <span class="min-w-0 flex-1 whitespace-pre-wrap break-all pr-3 text-fg">
-                        <Code line={r} />
+                        <Code line={r} html={lineHtml(i())} />
                       </span>
                     </div>
                     <Show when={editing()}>
@@ -760,21 +768,64 @@ function HunkView(props: {
   )
 }
 
-/** A line, with the part that changed against its pair picked out. */
-function Code(props: { line: Line }) {
-  const m = () => props.line.mark
-  const tone = () => (props.line.kind === 'add' ? 'bg-ok/25' : 'bg-danger/25')
-  return (
-    <Show when={m()} fallback={props.line.text || ' '}>
-      {(m) => (
-        <>
-          {props.line.text.slice(0, m()[0])}
-          <span class={`rounded-sm ${tone()}`}>{props.line.text.slice(m()[0], m()[1])}</span>
-          {props.line.text.slice(m()[1])}
-        </>
-      )}
-    </Show>
-  )
+/**
+ * Each row's line highlighted, by index into the rows: removed lines from the old side, the rest from the new. Each side is
+ * highlighted whole, so a string or comment that spans lines is still one. Undefined until it's done, or for a language
+ * there's no grammar for.
+ */
+async function highlightRows(rows: Row[], lang: string | undefined): Promise<(string | undefined)[] | undefined> {
+  const lines = rows.filter((r): r is Line => r.kind !== 'hunk')
+  const side = (kind: Line['kind']) => lines.filter((r) => r.kind === 'ctx' || r.kind === kind).map((r) => r.text).join('\n')
+  const [before, after] = await Promise.all([highlight(side('del'), lang), highlight(side('add'), lang)])
+  if (before === undefined || after === undefined) return
+  const old = before.split('<br>')
+  const now = after.split('<br>')
+  let o = 0
+  let n = 0
+  return rows.map((r) => {
+    if (r.kind === 'hunk') return
+    if (r.kind === 'del') return old[o++]
+    if (r.kind === 'ctx') o++
+    return now[n++]
+  })
+}
+
+/** Wraps characters from..to of an element's text in spans of this class, one per token they're in, rounded at the ends as one. */
+function markText(el: HTMLElement, [from, to]: [number, number], cls: string) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+  const texts: Text[] = []
+  while (walker.nextNode()) texts.push(walker.currentNode as Text)
+  let at = 0
+  const spans: HTMLSpanElement[] = []
+  for (const t of texts) {
+    const start = Math.max(from - at, 0)
+    const end = Math.min(to - at, t.length)
+    at += t.length
+    if (start >= end) continue
+    const part = t.splitText(start)
+    part.splitText(end - start)
+    const span = document.createElement('span')
+    span.className = cls
+    part.replaceWith(span)
+    span.append(part)
+    spans.push(span)
+  }
+  spans[0]?.classList.add('rounded-l-sm')
+  spans.at(-1)?.classList.add('rounded-r-sm')
+}
+
+/** A line, highlighted once that's done, with the part that changed against its pair picked out. */
+function Code(props: { line: Line; html?: string }) {
+  let el!: HTMLSpanElement
+  const tone = () => `${props.line.kind === 'add' ? 'bg-ok/25' : 'bg-danger/25'}`
+  // Filled by hand rather than by Solid, since highlighting replaces what's inside.
+  createEffect(() => {
+    if (props.html !== undefined) el.innerHTML = props.html
+    else el.textContent = props.line.text
+    if (props.line.mark) markText(el, props.line.mark, tone())
+    if (!el.textContent) el.textContent = ' '
+  })
+  return <span ref={el} />
 }
 
 const boxClass = 'mx-3 my-1.5 rounded-lg border px-3 py-2 font-sans text-ui'
