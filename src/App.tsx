@@ -170,6 +170,7 @@ export function App() {
         <div onClick={() => setDrawer(false)} class="fixed inset-0 z-20 animate-[fade-in_150ms_ease-out] bg-black/40 md:hidden" />
       </Show>
       <aside
+        data-pane="sidebar"
         class={`fixed inset-y-0 left-0 z-30 flex w-72 max-w-[85vw] shrink-0 flex-col pane sidebar max-md:rounded-none transition-[translate,visibility] duration-200 ease-out md:relative md:z-10 md:w-(--sidebar-w) md:translate-x-0 md:visible md:transition-none ${
           drawer() ? 'translate-x-0 max-md:shadow-(--shadow-modal)' : 'invisible -translate-x-full'
         }`}
@@ -190,7 +191,7 @@ export function App() {
         </Show>
         <div class="flex min-h-0 flex-1">
           {/* A chat lays out its own panes, with its panels; every other page is one pane. */}
-          <Show when={current()} keyed fallback={<div class="pane flex min-w-0 flex-1">{page()}</div>}>
+          <Show when={current()} keyed fallback={<div class="pane flex min-w-0 flex-1" data-pane="page">{page()}</div>}>
             {(id) => {
               // Same component before and after the first send, so starting a chat doesn't remount it.
               const home = () => route().kind === 'home'

@@ -196,4 +196,4 @@ export class HubTerminals {
   }
 }
 
-const globalId = (machine: string, id: string) => `${machine}.${id}`
+export const globalId = (machine: string, id: string) => `${machine}.${id}`

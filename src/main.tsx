@@ -1,4 +1,5 @@
 import { render } from 'solid-js/web'
+import './activity.ts'
 import { App } from './App.tsx'
 import { Crashes } from './crashes.tsx'
 import './index.css'

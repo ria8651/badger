@@ -11,6 +11,7 @@ import {
   type ServerEvent,
   type SessionSummary,
 } from '../../shared/protocol.ts'
+import type { Analytics, EventFields } from '../analytics.ts'
 import type { Attention } from '../attention.ts'
 import type { ChatInfo } from '../boardTools.ts'
 import type { Board } from '../board.ts'
@@ -60,6 +61,7 @@ export interface ChatDeps {
   placement: ChatPlacement
   viewers: Viewers
   attention: Attention
+  analytics: Analytics
   /** Where one-off model calls, like suggesting a title, run. */
   scratchDir: string
   /** Tells every tab to fetch the chat list again, shortly; each fetch asks every machine about its folders. */
@@ -244,13 +246,14 @@ export class Chats {
     }
   }
 
-  /** Tells one viewer, or all of them, how full the chat's context is. */
-  sendContext(sessionId: string, ws?: WebSocket): void {
+  /** Tells one viewer, or all of them, how full the chat's context is. With `record`, it's kept for analytics too. */
+  sendContext(sessionId: string, ws?: WebSocket, record = false): void {
     this.d.machines
       .runnerFor(sessionId)
       ?.remote.contextUsage(sessionId)
       .then((u) => {
         if (!u) return
+        if (record) this.d.analytics.event('context', { sessionId, data: { ...u } })
         const event: ServerEvent = { type: 'context', sessionId, usage: u }
         if (ws) this.d.viewers.send(ws, event)
         else this.d.viewers.publish(event)
@@ -306,6 +309,7 @@ export class Chats {
 
   async handle(ws: WebSocket, event: ChatEvent): Promise<void> {
     const { meta, viewers } = this.d
+    this.track(ws, event)
     const remote = this.d.machines.runnerFor(event.sessionId)?.remote
     // On the chat's machine. One that's on none has no process to ask.
     const command = <C extends ChatCommand>(sessionId: string, c: C) => remote?.command(sessionId, c) as Promise<ChatCommandReply<C['type']>> | undefined
@@ -342,6 +346,56 @@ export class Chats {
     }
   }
 
+  /** What the user asked of a chat, for analytics. Drafts are left out: they're keystrokes, and a tab's activity counts those. */
+  private track(ws: WebSocket, event: ChatEvent): void {
+    const { analytics, viewers, machines, placement } = this.d
+    const tab = viewers.identity(ws)
+    const from: EventFields = { actor: UI, client: tab?.client, tab: tab?.tab, sessionId: event.sessionId }
+    const live = machines.live(event.sessionId)
+    switch (event.type) {
+      case 'send': {
+        const placed = placement.machineOf(event.sessionId)
+        return analytics.event('chat.send', {
+          ...from,
+          machine: placed ?? (event.machine || LOCAL_MACHINE),
+          data: {
+            chars: event.text.length,
+            lines: event.text ? event.text.split('\n').length : 0,
+            pastes: event.pastes?.length ?? 0,
+            pasteChars: event.pastes?.reduce((n, p) => n + p.length, 0) ?? 0,
+            images: event.images?.length ?? 0,
+            slash: /^\/\S/.test(event.text) ? event.text.split(/\s/, 1)[0] : undefined,
+            new: !placed,
+            live: !!live,
+            running: !!live?.running,
+            waiting: !!live?.waiting,
+            mode: event.mode,
+            model: event.model,
+            cwd: placed ? undefined : event.cwd,
+            worktree: placed ? undefined : event.worktree,
+          },
+        })
+      }
+      case 'interrupt':
+        return analytics.event('chat.interrupt', { ...from, data: { running: !!live?.running, waiting: !!live?.waiting } })
+      case 'unqueue':
+        return analytics.event('chat.unqueue', { ...from, data: { edit: !!event.edit } })
+      case 'stop_task':
+        return analytics.event('chat.stop_task', { ...from, data: { taskId: event.taskId } })
+      case 'background_task':
+        return analytics.event('chat.background_task', { ...from, data: { toolUseId: event.toolUseId } })
+      case 'set_mode':
+        return analytics.event('chat.set_mode', { ...from, data: { mode: event.mode, running: !!live?.running } })
+      case 'set_model':
+        return analytics.event('chat.set_model', { ...from, data: { model: event.model, running: !!live?.running } })
+      case 'permission':
+        return analytics.event('permission.answer', {
+          ...from,
+          data: { requestId: event.requestId, decision: event.decision, messageChars: event.message?.length, edited: !!event.updatedInput },
+        })
+    }
+  }
+
   private async send(ws: WebSocket, event: Extract<ChatEvent, { type: 'send' }>): Promise<void> {
     const { meta, machines, placement, attention } = this.d
     const { sessionId, text, pastes = [], images = [] } = event
@@ -351,7 +405,11 @@ export class Chats {
     const runner = machines.require(machine)
     // Picking an archived chat back up brings it back to the sidebar.
     meta.setArchived(sessionId, false, UI)
-    attention.mark(sessionId, false)
+    // Answering a chat is reading it.
+    if (attention.mark(sessionId, false)) {
+      const tab = this.d.viewers.identity(ws)
+      this.d.analytics.event('chat.seen', { actor: UI, client: tab?.client, tab: tab?.tab, sessionId, data: { by: 'send' } })
+    }
     // Sending empties the composer in every tab, not just the one that sent.
     this.saveDraft(sessionId, { text: '', attachments: { pastes: [], images: [] } }, ws)
     placement.assign(sessionId, machine)
@@ -472,6 +530,12 @@ export class Chats {
       board.linkSession(card.id, fork.sessionId, UI)
       this.d.cardsChanged()
     }
+    this.d.analytics.event('chat.fork', {
+      actor: UI,
+      sessionId: fork.sessionId,
+      machine: to.id,
+      data: { from: id, fromMachine, at: o.at, moved, worktree: worktree !== undefined, draft: !!o.draft, side: !!o.side },
+    })
     this.d.listChanged()
     return fork.sessionId
   }
@@ -496,6 +560,7 @@ export class Chats {
           const machine = placement.machineOf(id)
           if (!machine) return [404, { error: 'No such chat' }]
           await machines.require(machine).remote.rename(id, title.trim())
+          this.d.analytics.event('chat.rename', { actor: UI, sessionId: id, data: { chars: title.trim().length } })
           return [204, null]
         },
       ],
@@ -517,7 +582,7 @@ export class Chats {
   turnEnded(sessionId: string, turns: number, queued: boolean): void {
     this.turnsSeen.set(sessionId, turns)
     this.d.attention.turnEnded(sessionId, queued)
-    this.sendContext(sessionId)
+    this.sendContext(sessionId, undefined, true)
   }
 
   /** A chat's runner says this many of its turns have ended; any the hub missed, e.g. with the runner offline, mark it unread. */

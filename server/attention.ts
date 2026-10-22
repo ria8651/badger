@@ -15,6 +15,8 @@ export class Attention {
     /** Live chats with a prompt or question waiting, on every machine. */
     private waiting: () => string[],
     private broadcast: (event: ServerEvent) => void,
+    /** A chat became unread. */
+    private onUnread: (sessionId: string) => void = () => {},
   ) {}
 
   /** Call with every event a live chat emits. */
@@ -28,8 +30,12 @@ export class Attention {
     if (!queued && !this.meta.parentOf(sessionId)) this.mark(sessionId, true)
   }
 
-  mark(sessionId: string, unread: boolean): void {
-    if (this.meta.setUnread(sessionId, unread)) this.update()
+  /** Whether it changed. */
+  mark(sessionId: string, unread: boolean): boolean {
+    if (!this.meta.setUnread(sessionId, unread)) return false
+    this.update()
+    if (unread) this.onUnread(sessionId)
+    return true
   }
 
   chats(): Record<string, AttentionState> {

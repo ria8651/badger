@@ -4,6 +4,7 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { WebSocketServer } from 'ws'
 import { LOCAL_MACHINE } from '../shared/protocol.ts'
+import { Analytics } from './analytics.ts'
 import { Attention } from './attention.ts'
 import { BRIDGE_PATH, Bridges } from './bridge.ts'
 import { boardOps } from './boardTools.ts'
@@ -17,6 +18,7 @@ import { Chats } from './hub/chats.ts'
 import { httpHandler, isLoopback, sameOrigin } from './hub/http.ts'
 import { RunnerLink } from './hub/runnerLink.ts'
 import { HubTerminals } from './hub/terminals.ts'
+import { HubTracking } from './hub/tracking.ts'
 import { Viewers, debounced } from './hub/viewers.ts'
 import { Machines, mismatch } from './machines.ts'
 import { memoryLinks, wsLink } from './peer.ts'
@@ -33,8 +35,12 @@ import { prepareScratch } from './workspace.ts'
 const startEnv = shellEnv(process.env)
 loadDotEnv()
 
-/** How often plan usage is read again while a tab is open, besides after each turn. */
+/** How often plan usage is read again while a tab is open or a chat is working, besides after each turn. */
 const ACCOUNT_POLL_MS = 5 * 60 * 1000
+/** Otherwise it's read this often anyway, so its history has no gaps. */
+const ACCOUNT_IDLE_POLL_MS = 60 * 60 * 1000
+/** How often counts kept for analytics, like terminal use, are written out. */
+const ANALYTICS_FLUSH_MS = 60 * 1000
 /** Changes to the chat list or runners within this long go out to tabs as one, however often runners send them. */
 const LIST_DEBOUNCE_MS = 200
 /** How often connected runners are pinged; one that hasn't answered the last ping by the next is dropped. */
@@ -66,6 +72,8 @@ const meta = new ChatMeta(db, listChanged)
 const board = new Board(db, meta)
 const transcripts = new Transcripts(db.sql)
 const placement = new ChatPlacement(db)
+const analytics = new Analytics(db, board, placement)
+const tracking = new HubTracking(analytics)
 const bridges = new Bridges()
 const bridge = bridgeOps(bridges)
 
@@ -73,13 +81,27 @@ const machines: Machines = new Machines(db.sql, placement, {
   onChange: (id, runner) => link.onChange(id, runner),
   onEvent: (machine, event) => link.onEvent(machine, event),
 })
-const attention = new Attention(meta, () => machines.allLive().flatMap((s) => (s.waiting ? [s.id] : [])), (e) => viewers.publish(e))
+const attention = new Attention(
+  meta,
+  () => machines.allLive().flatMap((s) => (s.waiting ? [s.id] : [])),
+  (e) => viewers.publish(e),
+  (sessionId) => analytics.event('chat.unread', { actor: 'system', sessionId }),
+)
+/** The machine plan usage was last read from. */
+let accountMachine: string | undefined
 const account = new AccountLimits(
-  () => machines.any()?.remote.accountUsage(),
-  (usage) => viewers.toAll({ type: 'account_usage', usage }),
+  () => {
+    const runner = machines.any()
+    accountMachine = runner?.id
+    return runner?.remote.accountUsage()
+  },
+  (usage) => {
+    analytics.usage(accountMachine, usage)
+    viewers.toAll({ type: 'account_usage', usage })
+  },
 )
 const terminals = new HubTerminals(machines, placement, viewers)
-const chats = new Chats({ db, board, meta, transcripts, machines, placement, viewers, attention, scratchDir: SCRATCH_DIR, listChanged, cardsChanged })
+const chats = new Chats({ db, board, meta, transcripts, machines, placement, viewers, attention, analytics, scratchDir: SCRATCH_DIR, listChanged, cardsChanged })
 const link: RunnerLink = new RunnerLink({
   db,
   board,
@@ -92,14 +114,22 @@ const link: RunnerLink = new RunnerLink({
   viewers,
   attention,
   account,
+  analytics,
+  tracking,
   ops: [...boardOps({ board, meta, onChange: cardsChanged, chats: (ids) => chats.info(ids) }), ...bridge],
   hubOnly: new Set(bridge.map((o) => o.script)),
   listChanged,
   machinesChanged,
 })
 
-// Limits move with use on other machines too, so read them now and then while anyone's looking.
-setInterval(() => viewers.count && void account.refresh(), ACCOUNT_POLL_MS).unref()
+// Limits move with use on other machines too, so read them now and then while anyone's looking or anything's working,
+// and once in a while regardless, for their history.
+setInterval(() => {
+  const working = machines.allLive().some((s) => s.running)
+  const stale = Date.now() - (account.latest()?.at ?? 0) >= ACCOUNT_IDLE_POLL_MS
+  if (viewers.count || working || stale) void account.refresh()
+}, ACCOUNT_POLL_MS).unref()
+setInterval(() => analytics.flush(), ANALYTICS_FLUSH_MS).unref()
 
 // ── HTTP and WebSockets ──
 
@@ -111,7 +141,11 @@ const api = httpHandler(
     ...chats.routes(),
     ...terminals.routes(),
   ],
-  { dist: DIST, checkHost: CHECK_HOST },
+  {
+    dist: DIST,
+    checkHost: CHECK_HOST,
+    onChange: ({ method, path, status, ms }) => analytics.event('api', { actor: { source: 'ui' }, durationMs: ms, data: { method, path, status } }),
+  },
 )
 
 const server = createServer((req, res) => {
@@ -150,7 +184,7 @@ server.on('upgrade', (req, socket, head) => {
   }
   if (url.pathname !== '/ws') return refuse('404 Not Found')
   if (!sameOrigin(req, CHECK_HOST)) return refuse('403 Forbidden')
-  wss.handleUpgrade(req, socket, head, (ws) => serveBrowser(ws, { viewers, chats, terminals, machines, attention, account }))
+  wss.handleUpgrade(req, socket, head, (ws) => serveBrowser(ws, { viewers, chats, terminals, machines, attention, account, analytics }))
 })
 
 // ── The hub's own machine: a runner in this process, over an in-memory link ──
@@ -163,6 +197,10 @@ machines.attach(LOCAL_MACHINE, hubEnd, link.api)
 runner.connect(runnerEnd).catch((err) => console.error('The hub’s own runner failed to start:', err))
 
 server.listen(PORT, HOST, () => {
+  analytics.event('hub.start', {
+    actor: 'system',
+    data: { version: analytics.version, node: process.version, platform: process.platform, arch: process.arch, runnerProtocol: RUNNER_PROTOCOL },
+  })
   console.log(`badger server on http://${HOST}:${PORT} (workspace ${WORKSPACE_DIR})`)
 })
 
@@ -171,6 +209,8 @@ process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', 
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
+    analytics.flush()
+    analytics.event('hub.stop', { actor: 'system', durationMs: Math.round(process.uptime() * 1000), data: { signal: sig } })
     runner.closeAll()
     process.exit(0)
   })

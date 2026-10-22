@@ -67,6 +67,7 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: BADGER_VERSION=${{ github.sha }}
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ matrix.arch }}
           cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}:buildcache-{1},mode=min,image-manifest=true,oci-mediatypes=true', env.IMAGE, matrix.arch) || '' }}
           # Pull requests just check it builds.

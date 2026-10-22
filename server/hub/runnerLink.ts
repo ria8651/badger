@@ -13,8 +13,10 @@ import type { ChatPlacement } from '../placement.ts'
 import { SESSION_EVENTS, isUuid, type HubApi, type RunnerEvent } from '../runnerProtocol.ts'
 import type { Transcripts } from '../transcripts.ts'
 import type { AccountLimits } from '../usage.ts'
+import type { Analytics } from '../analytics.ts'
 import type { Chats } from './chats.ts'
-import type { HubTerminals } from './terminals.ts'
+import { globalId, type HubTerminals } from './terminals.ts'
+import type { HubTracking } from './tracking.ts'
 import type { Viewers } from './viewers.ts'
 
 export interface RunnerLinkDeps {
@@ -29,6 +31,8 @@ export interface RunnerLinkDeps {
   viewers: Viewers
   attention: Attention
   account: AccountLimits
+  analytics: Analytics
+  tracking: HubTracking
   /**
    * The ops that run on the hub rather than beside Claude: the board, and
    * the bridge into previews of the hub's own machine. Runners' tools and
@@ -53,9 +57,11 @@ export class RunnerLink implements MachineEvents {
         if (!e) return
         this.d.viewers.publish(e)
         attention.see(e)
+        this.d.tracking.sessionEvent(e)
         return
       }
       case 'live':
+        this.d.tracking.live(machine.id, event.sessions.filter((s) => placement.owns(machine.id, s.id)))
         // Turns that ended while the hub wasn't listening, e.g. with the runner offline, still want reading.
         for (const s of event.sessions) if (placement.owns(machine.id, s.id)) chats.turnsEnded(s.id, s.turns)
         // A chat started, closed, or started or finished working.
@@ -65,11 +71,15 @@ export class RunnerLink implements MachineEvents {
         return
       case 'turn_end':
         if (!placement.owns(machine.id, event.sessionId)) return
+        this.d.analytics.event('turn.end', { sessionId: event.sessionId, data: { queued: event.queued, turns: event.turns } })
         chats.turnEnded(event.sessionId, event.turns, event.queued)
         void this.d.account.refresh()
         return
       case 'terminals':
+        this.d.tracking.listTerminals(machine.id, event.terminals.map((t) => ({ ...t, id: globalId(machine.id, t.id) })))
+        return this.d.terminals.runnerEvent(machine, event)
       case 'term_output':
+        this.d.analytics.terminalIo(globalId(machine.id, event.id), 'out', event.data.length)
         return this.d.terminals.runnerEvent(machine, event)
     }
   }
@@ -85,6 +95,7 @@ export class RunnerLink implements MachineEvents {
     this.d.machinesChanged()
     this.d.listChanged()
     if (!runner) return
+    this.d.tracking.runner(id, runner, this.d.machines.get(id)?.hello)
     this.d.attention.update()
     this.d.terminals.machineChanged(id, runner === 'connected')
     this.d.chats.machineChanged(id)
@@ -110,10 +121,16 @@ export class RunnerLink implements MachineEvents {
         const o = this.d.ops.find((o) => o.script === script)
         if (!o) throw new BadRequest(`No badger.${script}`)
         if (this.d.hubOnly.has(script) && machine !== LOCAL_MACHINE) throw new BadRequest(`${script} only works for chats on the hub's own machine`)
+        const start = Date.now()
+        const done = (error?: string) =>
+          this.d.analytics.event('op', { actor: { source: 'claude', sessionId: chat }, sessionId: chat, durationMs: Date.now() - start, data: { script, ok: !error, error } })
         try {
           // Claude in one of this machine's chats is who makes the change; runners never act for the UI.
-          return await o.run(parseInput(o, input), { sessionId: chat, cwd: () => machines.live(chat)?.cwd ?? '' })
+          const result = await o.run(parseInput(o, input), { sessionId: chat, cwd: () => machines.live(chat)?.cwd ?? '' })
+          done()
+          return result
         } catch (err) {
+          done(err instanceof Error ? err.message.slice(0, 500) : String(err))
           if (err instanceof OpError) throw new BadRequest(err.message)
           console.error(`badger.${script} failed for ${chat}:`, err)
           throw err
@@ -137,6 +154,7 @@ export class RunnerLink implements MachineEvents {
       openPreview: (chat, { root, port, name, path }) => {
         own(chat)
         viewers.toAll({ type: 'open_preview', root, machine, port, name, path })
+        this.d.analytics.event('preview.open', { actor: { source: 'claude', sessionId: chat }, sessionId: chat, data: { port, path, tabs: viewers.count } })
         // The hub proxies its own machine's ports; another machine's only open where they are.
         const template = machine === LOCAL_MACHINE ? viewers.previewUrl() : 'http://localhost:{port}'
         return { tabs: viewers.count, url: template?.replace('{port}', String(port)).concat(path) }
@@ -149,6 +167,7 @@ export class RunnerLink implements MachineEvents {
           placement.assign(sessionId, machine)
           meta.addChild({ sessionId, parentId, toolUseId, kind })
         })
+        this.d.analytics.event('child.start', { actor: { source: 'claude', sessionId: parentId }, sessionId: parentId, data: { child: sessionId, kind, toolUseId } })
         return sessionId
       },
       // Not refused: a chat removed from this machine since it asked mustn't sink the rest of the batch.
