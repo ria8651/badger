@@ -31,6 +31,8 @@ export const api = {
   /** A copy of the chat up to the end of the turn `at`, here or somewhere else. Returns the new chat's id. */
   fork: (sessionId: string, to: { at?: string; machine?: string; cwd?: string; worktree?: string; draft?: string }) =>
     request<{ sessionId: string }>('POST', `/api/sessions/${sessionId}/fork`, to),
+  /** The review chat for a chat's changes: the open one, or a new one. Returns its id. */
+  startReview: (sessionId: string) => request<{ sessionId: string }>('POST', `/api/sessions/${sessionId}/review`),
   cards: () => get<Card[]>('/api/cards'),
   createCard: (card: { title: string; description?: string; status?: CardStatus; parentId?: number | null }) => request<Card>('POST', '/api/cards', card),
   updateCard: (id: number, patch: CardPatch) => request<Card>('PATCH', `/api/cards/${id}`, patch),

@@ -4,7 +4,7 @@ import type { DraftAttachments, PermissionMode, QueuedMessage } from '../../shar
 import { chatActions } from '../actions.ts'
 import { api, connected } from '../api.ts'
 import { cardWorktreeName, isScratch, worktreeOf } from '../folders.ts'
-import { openTerminal, openView, planView, reviewView, viewKey, viewShown, wide } from '../layout.ts'
+import { openTerminal, openView, planView, viewKey, viewShown, wide } from '../layout.ts'
 import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
 import { lastModel, modelValue, models, setLastModel } from '../models.ts'
 import { navigate } from '../router.tsx'
@@ -19,7 +19,7 @@ import { FolderPicker } from './FolderPicker.tsx'
 import { ForkDialog } from './ForkDialog.tsx'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
 import { PlanPane, latestPlan } from './Plan.tsx'
-import { ReviewPane, reviewDrafts } from './Review.tsx'
+import { ReviewPage } from './Review.tsx'
 import { showError } from './Popover.tsx'
 import { TaskTray, trayItems, waitingOnTask } from './TaskTray.tsx'
 import { reveal, revealed, toolLabel } from './ToolCard.tsx'
@@ -185,20 +185,9 @@ export function Chat(props: {
     ),
     attachment: (v) => attachmentOf(index(), v.prompt, v.part),
     renderAttachment: (v, onReady) => <AttachmentPane index={index} prompt={v.prompt} part={v.part} onReady={onReady} />,
-    reviewDrafts: () => reviewDrafts(props.sessionId),
-    renderReview: (onReady) => (
-      <ReviewPane
-        sessionId={props.sessionId}
-        cwd={cwd()}
-        root={ws()?.root}
-        machine={machine()}
-        index={index}
-        running={state.running}
-        onSend={picking() || state.gone || stranded() ? undefined : (text) => send(text)}
-        onJump={jump}
-        onReady={onReady}
-      />
-    ),
+    // SPIKE: left from the review panel; review chats show theirs as the page instead.
+    reviewDrafts: () => 0,
+    renderReview: () => null,
   }
 
   // Read again each time a turn ends too, since that's when commits happen.
@@ -236,6 +225,16 @@ export function Chat(props: {
     if (edit) composer?.focus()
   }
 
+  /** A review chat shows its review in place of the conversation, until you switch. */
+  const isReview = () => !!session()?.review
+  const [showConversation, setShowConversation] = createSignal(false)
+  const reviewing = () => isReview() && !showConversation()
+  const startReview = () =>
+    void api.startReview(props.sessionId).then(
+      ({ sessionId }) => openChat(sessionId),
+      (err: Error) => showError("Couldn't start a review", err.message),
+    )
+
   /** The end of the turn being forked from, while picking where the fork goes. */
   const [forking, setForking] = createSignal<string>()
   const openChat = (id: string) => navigate({ kind: 'chat', id })
@@ -263,9 +262,48 @@ export function Chat(props: {
             fetching={git.fetching()}
             onRefresh={git.refresh}
             actions={actions()}
-            onReview={ws() ? () => openView(ws()!, reviewView(props.sessionId)) : undefined}
+            onReview={picking() || isReview() ? undefined : startReview}
             onAsk={picking() ? undefined : (prompt) => send(prompt)}
           />
+        </Show>
+        <Show when={isReview()}>
+          <div class="flex shrink-0 items-center gap-1 border-b border-line px-3 py-1 text-xs">
+            <For each={[false, true]}>
+              {(conversation) => (
+                <button
+                  onClick={() => setShowConversation(conversation)}
+                  class={`flex items-center gap-1.5 rounded-md px-2 py-1 ${showConversation() === conversation ? 'bg-surface text-fg' : 'text-fg-3 hover:text-fg-2'}`}
+                >
+                  {conversation ? 'Conversation' : 'Review'}
+                  <Show when={conversation && working()}>
+                    <span class="size-1.5 animate-pulse rounded-full bg-accent" />
+                  </Show>
+                </button>
+              )}
+            </For>
+          </div>
+          <Show when={reviewing()}>
+            <ReviewPage
+              sessionId={props.sessionId}
+              cwd={cwd()}
+              machine={machine()}
+              index={index}
+              running={state.running}
+              onSend={state.gone || stranded() ? undefined : (text) => send(text)}
+            />
+            {/* Claude asking for something can't wait for you to switch to the conversation. */}
+            <Show when={state.permissions.length || state.error}>
+              <div class="flex shrink-0 flex-col gap-2 border-t border-line p-3">
+                <For each={state.permissions}>{(p) => <PermissionPrompt sessionId={props.sessionId} permission={p} cwd={cwd()} from={p.agent} />}</For>
+                <Show when={state.error}>
+                  <Notice tone="danger">
+                    <span class="flex-1">{state.error}</span>
+                    <button onClick={chat.clearError} class="opacity-70 hover:opacity-100">Dismiss</button>
+                  </Notice>
+                </Show>
+              </div>
+            </Show>
+          </Show>
         </Show>
         <div
           ref={(el) => {
@@ -275,7 +313,7 @@ export function Chat(props: {
           onScroll={sticky.onScroll}
           onWheel={sticky.onWheel}
           // A size container, so prompts above the composer can fit this pane rather than the window.
-          class="min-h-0 flex-1 overflow-y-auto [container-type:size] [overflow-anchor:none]"
+          class={`min-h-0 flex-1 overflow-y-auto [container-type:size] [overflow-anchor:none] ${reviewing() ? 'hidden' : ''}`}
         >
           {/* One column for the transcript and the composer. Its padding leaves room for your messages and the
               composer to hang out by their own padding, so the text in them lines up with Claude's. */}

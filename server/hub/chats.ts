@@ -1,6 +1,7 @@
+import { randomUUID } from 'node:crypto'
 import type { WebSocket } from 'ws'
 import { renderMoveNote } from '../../shared/forkNote.ts'
-import { LOCAL_MACHINE, type ChatCommand, type ChatCommandReply, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary } from '../../shared/protocol.ts'
+import { LOCAL_MACHINE, type ChatCommand, type ChatCommandReply, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary, type WireMessage } from '../../shared/protocol.ts'
 import type { Attention } from '../attention.ts'
 import type { ChatInfo } from '../boardTools.ts'
 import type { Board } from '../board.ts'
@@ -10,6 +11,7 @@ import { BadRequest, absolutePath, badRequest, message } from '../errors.ts'
 import { forkTranscript } from '../fork.ts'
 import type { Connection, Machines } from '../machines.ts'
 import type { ChatPlacement } from '../placement.ts'
+import { reviewPrompt } from '../reviewGuide.ts'
 import { IDLE, type LiveSnapshot, type TranscriptLines } from '../runnerProtocol.ts'
 import { suggestTitle } from '../titles.ts'
 import { externalizeImages } from '../transcriptImages.ts'
@@ -101,6 +103,7 @@ export class Chats {
     const childIds = meta.childIds()
     const listed = await transcripts.list(LIST_LIMIT, childIds)
     const archived = meta.archivedIds()
+    const reviews = meta.reviewIds()
     const where = placement.machinesOf(listed.map((s) => s.sessionId))
     const gone = await this.goneFolders(listed.flatMap((s) => (s.cwd && !machines.live(s.sessionId) ? [{ machine: where.get(s.sessionId), cwd: s.cwd }] : [])))
     const summaries: SessionSummary[] = listed.map((s) => {
@@ -116,13 +119,23 @@ export class Chats {
         running: !!live?.running,
         archived: archived.has(s.sessionId),
         gone: !live && !!s.cwd && !!gone.get(machine ?? '')?.has(s.cwd),
+        ...(reviews.has(s.sessionId) ? { review: true } : {}),
       }
     })
     // A brand-new live session may not have a transcript here yet.
     for (const runner of machines.online()) {
       for (const live of runner.live.values()) {
         if (childIds.has(live.id) || summaries.some((s) => s.id === live.id)) continue
-        summaries.unshift({ id: live.id, title: 'New chat', cwd: live.cwd, machine: runner.id, lastModified: Date.now(), running: live.running, archived: false })
+        summaries.unshift({
+          id: live.id,
+          title: reviews.has(live.id) ? 'Review' : 'New chat',
+          cwd: live.cwd,
+          machine: runner.id,
+          lastModified: Date.now(),
+          running: live.running,
+          archived: false,
+          ...(reviews.has(live.id) ? { review: true } : {}),
+        })
       }
     }
     // Sent with the list so a chat's panels are known before it's opened, not looked up after.
@@ -328,7 +341,7 @@ export class Chats {
     const fork = placed ? meta.forkStart(sessionId) : undefined
     const where = placed ? { cwd: fork?.cwd, worktree: fork?.worktree } : { cwd: event.cwd, worktree: event.worktree }
     try {
-      await runner.remote.send(sessionId, { ...where, mode: event.mode, model: event.model }, text, pastes, images)
+      await runner.remote.send(sessionId, { ...where, mode: event.mode, model: event.model, review: meta.isReview(sessionId) || undefined }, text, pastes, images)
       if (fork) meta.forkStarted(sessionId)
     } catch (err) {
       // Turned away, so it never started: it can go elsewhere. Anything else, e.g. the connection dropping, it may have.
@@ -407,6 +420,34 @@ export class Chats {
     return { sessionId: fork.sessionId }
   }
 
+  /**
+   * A review chat for the changes in a chat's checkout: the open one started from it, or a new one, on the
+   * same machine, folder and card. It's told what the chat was asked, so its guide knows what the changes are for.
+   */
+  async review(id: string): Promise<{ sessionId: string }> {
+    const { db, board, meta, transcripts, machines, placement } = this.d
+    const open = meta.reviewOf(id)
+    if (open) return { sessionId: open }
+    const machine = placement.machineOf(id)
+    const cwd = machines.live(id)?.cwd ?? (await transcripts.info(id))?.cwd
+    if (!machine || !cwd) throw new BadRequest("This chat hasn't started yet, so there's nothing to review")
+    const runner = machines.require(machine)
+    const prompt = reviewPrompt(askedIn(await transcripts.transcript(id).catch(() => [])))
+    const sessionId = randomUUID()
+    db.transaction(() => {
+      placement.assign(sessionId, machine)
+      meta.addReview({ sessionId, sourceId: id })
+    })
+    const card = board.cardOf(id)
+    if (card) {
+      board.linkSession(card.id, sessionId, UI)
+      this.d.cardsChanged()
+    }
+    await runner.remote.send(sessionId, { cwd, mode: 'auto', review: true }, prompt, [], [])
+    this.d.listChanged()
+    return { sessionId }
+  }
+
   /** The list, and archive, title and fork routes. Archiving only hides a chat; its transcript is left alone. */
   routes(): Route[] {
     const { board, meta, transcripts, machines, placement } = this.d
@@ -414,6 +455,7 @@ export class Chats {
     return [
       ['GET', '/api/sessions', async () => [200, await this.list()]],
       ['POST', path('fork'), async ({ params: [id], json }) => [201, await this.fork(id, await json())]],
+      ['POST', path('review'), async ({ params: [id] }) => [200, await this.review(id)]],
       ['POST', path('archive'), ({ params: [id] }) => (meta.setArchived(id, true, UI), [204, null])],
       ['DELETE', path('archive'), ({ params: [id] }) => (meta.setArchived(id, false, UI), [204, null])],
       // The title goes in the transcript, on the chat's machine, where the CLI's /resume sees it too. It comes back with the transcript.
@@ -506,3 +548,21 @@ export class Chats {
 }
 
 const hasAttachments = (a: DraftAttachments) => a.pastes.length > 0 || a.images.length > 0
+
+/** How much of what a chat was asked a review chat is told: each message, and all of them. */
+const ASKED_EACH = 1500
+const ASKED_ALL = 8000
+
+/** What the user typed in a chat, in order, cut down to fit: the first message and the latest are kept over the ones between. */
+function askedIn(messages: WireMessage[]): string[] {
+  const asked = messages.flatMap((m) => {
+    if (m.type !== 'user' || m.isMeta || m.isSynthetic || m.isCompactSummary || m.parent_tool_use_id) return []
+    const content = (m.message as { content?: unknown } | undefined)?.content
+    const blocks = typeof content === 'string' ? [content] : Array.isArray(content) ? content.flatMap((b) => (b?.type === 'text' ? [String(b.text ?? '')] : [])) : []
+    // Harness-added text (reminders, command output) is wrapped in tags.
+    const text = blocks.filter((b) => !b.trimStart().startsWith('<')).join('\n').trim()
+    return text ? [text.length > ASKED_EACH ? `${text.slice(0, ASKED_EACH)}…` : text] : []
+  })
+  while (asked.length > 2 && asked.reduce((n, a) => n + a.length, 0) > ASKED_ALL) asked.splice(1, 1)
+  return asked
+}

@@ -1,7 +1,8 @@
+import { createHash } from 'node:crypto'
 import { copyFile, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import type { ReviewCommit, ReviewDiff, ReviewFile, ReviewScope } from '../shared/protocol.ts'
+import type { ReviewCommit, ReviewDiff, ReviewFile, ReviewHunk, ReviewScope } from '../shared/protocol.ts'
 import { run } from './proc.ts'
 import { WORKTREE_PATH, git, mainCheckout } from './workspace.ts'
 
@@ -52,6 +53,26 @@ async function commitsSince(path: string, from: string): Promise<ReviewCommit[]>
     : []
 }
 
+/** From what a hunk says, not where: moving it down the file keeps its id, changing a line in it doesn't. */
+const hunkId = (path: string, content: string) => 'h' + createHash('sha1').update(path).update('\0').update(content).digest('hex').slice(0, 8)
+
+/** A file's patch, from its first @@, as hunks. The same lines twice in one file get -2, -3. */
+function hunksOf(path: string, body: string[]): ReviewHunk[] {
+  const hunks: ReviewHunk[] = []
+  const seen = new Map<string, number>()
+  let start = 0
+  for (let i = 1; i <= body.length; i++) {
+    if (i < body.length && !body[i].startsWith('@@')) continue
+    const lines = body.slice(start, i)
+    const base = hunkId(path, lines.slice(1).join('\n'))
+    const n = (seen.get(base) ?? 0) + 1
+    seen.set(base, n)
+    hunks.push({ id: n === 1 ? base : `${base}-${n}`, patch: lines.join('\n') })
+    start = i
+  }
+  return hunks
+}
+
 /** Splits `git diff` output into its files. */
 function parsePatch(out: string): ReviewFile[] {
   const files: ReviewFile[] = []
@@ -86,9 +107,9 @@ function parsePatch(out: string): ReviewFile[] {
       if (l.startsWith('+')) added++
       else if (l.startsWith('-')) removed++
     }
-    const patch = body.join('\n')
-    const truncated = body.length > FILE_LINES || total + patch.length > TOTAL_BYTES
-    if (!truncated) total += patch.length
+    const size = body.reduce((n, l) => n + l.length + 1, 0)
+    const truncated = body.length > FILE_LINES || total + size > TOTAL_BYTES
+    if (!truncated) total += size
     files.push({
       path,
       ...(status === 'renamed' ? { oldPath } : {}),
@@ -96,7 +117,7 @@ function parsePatch(out: string): ReviewFile[] {
       added,
       removed,
       binary,
-      patch: truncated ? '' : patch,
+      hunks: truncated || !body.length ? [{ id: hunkId(path, [status, oldPath, to ?? ''].join('\0')), patch: '' }] : hunksOf(path, body),
       ...(truncated ? { truncated } : {}),
       ...(GENERATED.test(path) ? { generated: true } : {}),
       ...(status !== 'deleted' && to && !/^0+$/.test(to) ? { blob: to } : {}),

@@ -128,6 +128,29 @@ export class ChatMeta {
     this.db.sql.prepare('DELETE FROM forks WHERE session_id = ?').run(sessionId)
   }
 
+  addReview(review: { sessionId: string; sourceId: string }): void {
+    this.db.sql.prepare('INSERT INTO review_sessions (session_id, source_id, created_at) VALUES (?, ?, ?)').run(review.sessionId, review.sourceId, Date.now())
+  }
+
+  reviewIds(): Set<string> {
+    const rows = this.db.sql.prepare('SELECT session_id FROM review_sessions').all() as { session_id: string }[]
+    return new Set(rows.map((r) => r.session_id))
+  }
+
+  isReview(sessionId: string): boolean {
+    return !!this.db.sql.prepare('SELECT 1 FROM review_sessions WHERE session_id = ?').get(sessionId)
+  }
+
+  /** The latest review started from a chat that isn't archived, if any. */
+  reviewOf(sourceId: string): string | undefined {
+    const row = this.db.sql
+      .prepare(
+        'SELECT session_id FROM review_sessions WHERE source_id = ? AND session_id NOT IN (SELECT session_id FROM archived_sessions) ORDER BY created_at DESC LIMIT 1',
+      )
+      .get(sourceId) as { session_id: string } | undefined
+    return row?.session_id
+  }
+
   /** A hash of the card context Claude was last given, so the same isn't given again after a restart. */
   contextHash(sessionId: string): string | undefined {
     const row = this.db.sql.prepare('SELECT hash FROM session_context WHERE session_id = ?').get(sessionId) as { hash: string } | undefined

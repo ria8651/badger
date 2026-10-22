@@ -94,6 +94,8 @@ export interface SessionSummary {
   archived: boolean
   /** Its directory no longer exists, e.g. a removed worktree. */
   gone?: boolean
+  /** A review chat: it guides you through its checkout's changes, and its page shows them. */
+  review?: boolean
 }
 
 /** How full a chat's context window is, as Claude Code's /context counts it. */
@@ -186,14 +188,25 @@ export interface ReviewFile {
   added: number
   removed: number
   binary: boolean
-  /** The file's hunks, from the first @@; empty for a binary file or one too big to show. */
-  patch: string
+  /**
+   * The file's hunks. A file with nothing to show line by line (binary, too big, a bare rename or mode change)
+   * has one hunk with an empty patch, so every file can be grouped and ticked off like the rest.
+   */
+  hunks: ReviewHunk[]
   /** Too big to show; added and removed still count. */
   truncated?: boolean
   /** A lockfile or the like, folded unless asked for. */
   generated?: boolean
   /** The file's blob as it is now, so "viewed" is undone by a later change. Absent if it was deleted. */
   blob?: string
+}
+
+/** One hunk of a file's diff, by an id that stays the same while its lines do. */
+export interface ReviewHunk {
+  /** e.g. h3f2a91c0: from the file's path and the hunk's lines, not where they are. */
+  id: string
+  /** From its @@ line; empty when there are no lines to show. */
+  patch: string
 }
 
 export interface ReviewDiff {
@@ -205,6 +218,29 @@ export interface ReviewDiff {
   /** The working tree as it was read, untracked files included: pass it back as `since` to see what changed after. */
   snapshot: string
   files: ReviewFile[]
+}
+
+/** How carefully a person should read a group: new logic where a mistake matters, ordinary changes, or mechanical ones. */
+export const REVIEW_ATTENTION = ['high', 'medium', 'low'] as const
+export type ReviewAttention = (typeof REVIEW_ATTENTION)[number]
+
+/** Hunks that are one change, wherever they are, with what a reader needs to follow them. */
+export interface ReviewGroup {
+  /** Claude's, e.g. "settings-field"; the same id in a later guide is the same group. */
+  id: string
+  title: string
+  attention: ReviewAttention
+  /** A word or two, e.g. "new logic", "rename", "tests". */
+  kind?: string
+  /** Markdown: a sentence for something mechanical, plain-language background for something hard. */
+  explanation: string
+  hunks: string[]
+}
+
+/** A review chat's guide to its changes: every hunk in one group, groups in reading order. */
+export interface ReviewGuide {
+  summary: string
+  groups: ReviewGroup[]
 }
 
 /** A folder new chats can start in. A git repo's is its main checkout, with its worktrees alongside. */

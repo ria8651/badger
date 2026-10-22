@@ -105,6 +105,8 @@ export interface OpenOptions {
   model?: string
   /** Start in a new worktree of cwd with this name; empty lets Claude name it. For a new chat, or a fork that hasn't run. */
   worktree?: string
+  /** A review chat, which gets the tools for guiding a review. */
+  review?: boolean
 }
 
 /** Runner to hub, unasked. */

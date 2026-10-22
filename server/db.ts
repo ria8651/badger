@@ -165,6 +165,12 @@ const MIGRATIONS = [
    );`,
   // So a chat's images can be served one at a time, without reading the chat.
   `CREATE INDEX transcript_lines_images ON transcript_lines (session_id, ${IMAGE_LINE_UUID}) WHERE ${IMAGE_LINE};`,
+  // Review chats, and the chat whose changes each was started from.
+  `CREATE TABLE review_sessions (
+     session_id TEXT PRIMARY KEY,
+     source_id TEXT NOT NULL,
+     created_at INTEGER NOT NULL
+   );`,
 ]
 
 /** Who made a change. There are no users yet, so for now it's where the change came from. */
