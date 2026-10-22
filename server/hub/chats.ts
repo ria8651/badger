@@ -1,14 +1,26 @@
 import { randomUUID } from 'node:crypto'
 import type { WebSocket } from 'ws'
-import { renderMoveNote } from '../../shared/forkNote.ts'
-import { LOCAL_MACHINE, type ChatCommand, type ChatCommandReply, type ClientEvent, type DraftAttachments, type ServerEvent, type SessionSummary, type WireMessage } from '../../shared/protocol.ts'
+import { SIDE_NOTE, renderMoveNote } from '../../shared/forkNote.ts'
+import {
+  LOCAL_MACHINE,
+  type ChatCommand,
+  type ChatCommandReply,
+  type ClientEvent,
+  type DraftAttachments,
+  type ImageAttachment,
+  type PermissionMode,
+  type ServerEvent,
+  type SessionSummary,
+  type WireMessage,
+} from '../../shared/protocol.ts'
+import type { Analytics, EventFields } from '../analytics.ts'
 import type { Attention } from '../attention.ts'
 import type { ChatInfo } from '../boardTools.ts'
 import type { Board } from '../board.ts'
 import type { ChatMeta, Draft } from '../chatMeta.ts'
 import type { Actor, Database } from '../db.ts'
 import { BadRequest, absolutePath, badRequest, message } from '../errors.ts'
-import { forkTranscript } from '../fork.ts'
+import { busyForkPoint, forkTranscript } from '../fork.ts'
 import type { Connection, Machines } from '../machines.ts'
 import type { ChatPlacement } from '../placement.ts'
 import { reviewPrompt } from '../reviewGuide.ts'
@@ -52,6 +64,7 @@ export interface ChatDeps {
   placement: ChatPlacement
   viewers: Viewers
   attention: Attention
+  analytics: Analytics
   /** Where one-off model calls, like suggesting a title, run. */
   scratchDir: string
   /** Tells every tab to fetch the chat list again, shortly; each fetch asks every machine about its folders. */
@@ -101,6 +114,11 @@ export class Chats {
     const { meta, transcripts, machines, placement } = this.d
     // Children show inside the chat that started them.
     const childIds = meta.childIds()
+    const side = meta.sideChats()
+    const under = (id: string) => {
+      const s = side.get(id)
+      return s ? { sideOf: s.parent, forkedAt: s.at } : {}
+    }
     const listed = await transcripts.list(LIST_LIMIT, childIds)
     const archived = meta.archivedIds()
     const reviews = meta.reviewIds()
@@ -120,6 +138,7 @@ export class Chats {
         archived: archived.has(s.sessionId),
         gone: !live && !!s.cwd && !!gone.get(machine ?? '')?.has(s.cwd),
         ...(reviews.has(s.sessionId) ? { review: true } : {}),
+        ...under(s.sessionId),
       }
     })
     // A brand-new live session may not have a transcript here yet.
@@ -135,6 +154,7 @@ export class Chats {
           running: live.running,
           archived: false,
           ...(reviews.has(live.id) ? { review: true } : {}),
+          ...under(live.id),
         })
       }
     }
@@ -209,6 +229,12 @@ export class Chats {
     return out
   }
 
+  /** A folder was just removed: asked about again on the next list, rather than shown as there until its answer expires. */
+  forgetFolder(machine: string, dir: string): void {
+    const runner = this.d.machines.get(machine)
+    if (runner) this.goneAnswers.get(runner)?.delete(dir)
+  }
+
   // ── Viewing ──
 
   async subscribe(ws: WebSocket, sessionId: string): Promise<void> {
@@ -226,13 +252,14 @@ export class Chats {
     }
   }
 
-  /** Tells one viewer, or all of them, how full the chat's context is. */
-  sendContext(sessionId: string, ws?: WebSocket): void {
+  /** Tells one viewer, or all of them, how full the chat's context is. With `record`, it's kept for analytics too. */
+  sendContext(sessionId: string, ws?: WebSocket, record = false): void {
     this.d.machines
       .runnerFor(sessionId)
       ?.remote.contextUsage(sessionId)
       .then((u) => {
         if (!u) return
+        if (record) this.d.analytics.event('context', { sessionId, data: { ...u } })
         const event: ServerEvent = { type: 'context', sessionId, usage: u }
         if (ws) this.d.viewers.send(ws, event)
         else this.d.viewers.publish(event)
@@ -288,6 +315,7 @@ export class Chats {
 
   async handle(ws: WebSocket, event: ChatEvent): Promise<void> {
     const { meta, viewers } = this.d
+    this.track(ws, event)
     const remote = this.d.machines.runnerFor(event.sessionId)?.remote
     // On the chat's machine. One that's on none has no process to ask.
     const command = <C extends ChatCommand>(sessionId: string, c: C) => remote?.command(sessionId, c) as Promise<ChatCommandReply<C['type']>> | undefined
@@ -324,6 +352,56 @@ export class Chats {
     }
   }
 
+  /** What the user asked of a chat, for analytics. Drafts are left out: they're keystrokes, and a tab's activity counts those. */
+  private track(ws: WebSocket, event: ChatEvent): void {
+    const { analytics, viewers, machines, placement } = this.d
+    const tab = viewers.identity(ws)
+    const from: EventFields = { actor: UI, client: tab?.client, tab: tab?.tab, sessionId: event.sessionId }
+    const live = machines.live(event.sessionId)
+    switch (event.type) {
+      case 'send': {
+        const placed = placement.machineOf(event.sessionId)
+        return analytics.event('chat.send', {
+          ...from,
+          machine: placed ?? (event.machine || LOCAL_MACHINE),
+          data: {
+            chars: event.text.length,
+            lines: event.text ? event.text.split('\n').length : 0,
+            pastes: event.pastes?.length ?? 0,
+            pasteChars: event.pastes?.reduce((n, p) => n + p.length, 0) ?? 0,
+            images: event.images?.length ?? 0,
+            slash: /^\/\S/.test(event.text) ? event.text.split(/\s/, 1)[0] : undefined,
+            new: !placed,
+            live: !!live,
+            running: !!live?.running,
+            waiting: !!live?.waiting,
+            mode: event.mode,
+            model: event.model,
+            cwd: placed ? undefined : event.cwd,
+            worktree: placed ? undefined : event.worktree,
+          },
+        })
+      }
+      case 'interrupt':
+        return analytics.event('chat.interrupt', { ...from, data: { running: !!live?.running, waiting: !!live?.waiting } })
+      case 'unqueue':
+        return analytics.event('chat.unqueue', { ...from, data: { edit: !!event.edit } })
+      case 'stop_task':
+        return analytics.event('chat.stop_task', { ...from, data: { taskId: event.taskId } })
+      case 'background_task':
+        return analytics.event('chat.background_task', { ...from, data: { toolUseId: event.toolUseId } })
+      case 'set_mode':
+        return analytics.event('chat.set_mode', { ...from, data: { mode: event.mode, running: !!live?.running } })
+      case 'set_model':
+        return analytics.event('chat.set_model', { ...from, data: { model: event.model, running: !!live?.running } })
+      case 'permission':
+        return analytics.event('permission.answer', {
+          ...from,
+          data: { requestId: event.requestId, decision: event.decision, messageChars: event.message?.length, edited: !!event.updatedInput },
+        })
+    }
+  }
+
   private async send(ws: WebSocket, event: Extract<ChatEvent, { type: 'send' }>): Promise<void> {
     const { meta, machines, placement, attention } = this.d
     const { sessionId, text, pastes = [], images = [] } = event
@@ -333,7 +411,11 @@ export class Chats {
     const runner = machines.require(machine)
     // Picking an archived chat back up brings it back to the sidebar.
     meta.setArchived(sessionId, false, UI)
-    attention.mark(sessionId, false)
+    // Answering a chat is reading it.
+    if (attention.mark(sessionId, false)) {
+      const tab = this.d.viewers.identity(ws)
+      this.d.analytics.event('chat.seen', { actor: UI, client: tab?.client, tab: tab?.tab, sessionId, data: { by: 'send' } })
+    }
     // Sending empties the composer in every tab, not just the one that sent.
     this.saveDraft(sessionId, { text: '', attachments: { pastes: [], images: [] } }, ws)
     placement.assign(sessionId, machine)
@@ -375,33 +457,70 @@ export class Chats {
    * chat's own machine needn't be online, and written on the one it goes to.
    */
   async fork(id: string, body: { at?: unknown; machine?: unknown; cwd?: unknown; worktree?: unknown; draft?: unknown }): Promise<{ sessionId: string }> {
-    const { db, board, meta, transcripts, machines, placement } = this.d
     if (body.at !== undefined && typeof body.at !== 'string') throw new BadRequest('at must be a message id')
     if (body.draft !== undefined && typeof body.draft !== 'string') throw new BadRequest('draft must be a string')
     if (body.worktree !== undefined && typeof body.worktree !== 'string') throw new BadRequest('worktree must be a string')
+    return { sessionId: await this.copy(id, { at: body.at, machine: body.machine, cwd: body.cwd, worktree: body.worktree, draft: body.draft }) }
+  }
+
+  /**
+   * Starts a side chat (/btw): a fork of the chat in its own folder, on its
+   * own machine, kept under it rather than on its card or in the sidebar.
+   * What Claude was sent stays the same, so the side chat's first turn reads
+   * the chat's cached prompt rather than paying for it again. A chat that's
+   * mid-turn is forked where its last request ended. With `text`, that's sent
+   * straight away, in the mode and model asked for: the parent's.
+   */
+  async btw(id: string, body: { text?: unknown; pastes?: unknown; images?: unknown; mode?: unknown; model?: unknown }): Promise<{ sessionId: string }> {
+    const { meta, transcripts, machines, placement } = this.d
+    if (body.text !== undefined && typeof body.text !== 'string') throw new BadRequest('text must be a string')
+    if (meta.sideChats().has(id)) throw new BadRequest("A side chat can't have side chats of its own")
+    const at = machines.live(id)?.running ? busyForkPoint((await transcripts.store.load({ projectKey: '', sessionId: id })) ?? []) : undefined
+    const text = body.text?.trim()
+    // Named for what it asks, so its parent's side chats can be told apart.
+    const title = text ? (text.length > 60 ? `${text.slice(0, 59).trimEnd()}…` : text).replace(/\s+/g, ' ') : 'Side chat'
+    const sessionId = await this.copy(id, { at, side: true, title })
+    if (text) {
+      const pastes = Array.isArray(body.pastes) ? (body.pastes as string[]) : []
+      const images = Array.isArray(body.images) ? (body.images as ImageAttachment[]) : []
+      const opts = { mode: body.mode as PermissionMode | undefined, model: body.model as string | undefined }
+      await machines.require(placement.machineOf(sessionId)!).remote.send(sessionId, opts, text, pastes, images)
+    }
+    return { sessionId }
+  }
+
+  /** Copies a chat as a new one: see fork and btw. */
+  private async copy(
+    id: string,
+    o: { at?: string; machine?: unknown; cwd?: unknown; worktree?: string; draft?: string; side?: boolean; title?: string },
+  ): Promise<string> {
+    const { db, board, meta, transcripts, machines, placement } = this.d
     const info = await transcripts.info(id)
     const fromMachine = placement.machineOf(id)
     const fromCwd = machines.live(id)?.cwd ?? info?.cwd
     if (!info || !fromMachine || !fromCwd) throw new BadRequest("This chat hasn't been saved yet, so it can't be forked")
-    const to = machines.fromRequest(body.machine ?? fromMachine)
-    const cwd = body.cwd === undefined ? fromCwd : absolutePath(body.cwd)
-    const worktree = body.worktree
+    const to = machines.fromRequest(o.machine ?? fromMachine)
+    const cwd = o.cwd === undefined ? fromCwd : absolutePath(o.cwd)
+    const worktree = o.worktree
     const moved = to.id !== fromMachine || cwd !== fromCwd || worktree !== undefined
-    const title = `${(titleOf(info) || 'Untitled').replace(/ \(fork\)$/, '')} (fork)`
-    const fork = await forkTranscript(transcripts.store, transcripts.subagentFiles(id), id, { at: body.at, title, cwd: moved ? cwd : undefined }).catch((err) => {
+    const title = o.title ?? `${(titleOf(info) || 'Untitled').replace(/ \(fork\)$/, '')} (fork)`
+    const fork = await forkTranscript(transcripts.store, transcripts.subagentFiles(id), id, { at: o.at, title, cwd: moved ? cwd : undefined }).catch((err) => {
       // The turn's last messages may not have been copied here yet.
       throw new BadRequest(`Couldn't fork it: ${message(err)}`)
     })
     const note = moved
       ? renderMoveNote({ from: { machine: machines.name(fromMachine), cwd: fromCwd }, to: { machine: to.name, cwd, worktree: worktree !== undefined || undefined } })
-      : undefined
-    const card = board.cardOf(id)
-    const draft = body.draft
+      : o.side
+        ? SIDE_NOTE
+        : undefined
+    // A side chat is found through its parent, so it isn't put on the card.
+    const card = o.side ? undefined : board.cardOf(id)
     db.transaction(() => {
       placement.assign(fork.sessionId, to.id)
       meta.addFork({ sessionId: fork.sessionId, sourceId: id, cwd, worktree, note })
+      if (o.side) meta.addSideChat(fork.sessionId, id)
       // e.g. the message to edit and send again.
-      if (draft) meta.setDraft(fork.sessionId, { text: draft })
+      if (o.draft) meta.setDraft(fork.sessionId, { text: o.draft })
     })
     try {
       for (const file of fork.files) await to.remote.importTranscript(fork.sessionId, cwd, file)
@@ -409,6 +528,7 @@ export class Chats {
       db.transaction(() => {
         placement.unassign(fork.sessionId, to.id)
         meta.removeFork(fork.sessionId)
+        meta.removeSideChat(fork.sessionId)
       })
       throw err
     }
@@ -416,8 +536,14 @@ export class Chats {
       board.linkSession(card.id, fork.sessionId, UI)
       this.d.cardsChanged()
     }
+    this.d.analytics.event('chat.fork', {
+      actor: UI,
+      sessionId: fork.sessionId,
+      machine: to.id,
+      data: { from: id, fromMachine, at: o.at, moved, worktree: worktree !== undefined, draft: !!o.draft, side: !!o.side },
+    })
     this.d.listChanged()
-    return { sessionId: fork.sessionId }
+    return fork.sessionId
   }
 
   /**
@@ -448,7 +574,7 @@ export class Chats {
     return { sessionId }
   }
 
-  /** The list, and archive, title and fork routes. Archiving only hides a chat; its transcript is left alone. */
+  /** The list, and archive, title, fork and side chat routes. Archiving only hides a chat; its transcript is left alone. */
   routes(): Route[] {
     const { board, meta, transcripts, machines, placement } = this.d
     const path = (action: string) => new RegExp(`^/api/sessions/${CHAT_ID}/${action}$`)
@@ -456,6 +582,7 @@ export class Chats {
       ['GET', '/api/sessions', async () => [200, await this.list()]],
       ['POST', path('fork'), async ({ params: [id], json }) => [201, await this.fork(id, await json())]],
       ['POST', path('review'), async ({ params: [id] }) => [200, await this.review(id)]],
+      ['POST', path('btw'), async ({ params: [id], json }) => [201, await this.btw(id, await json())]],
       ['POST', path('archive'), ({ params: [id] }) => (meta.setArchived(id, true, UI), [204, null])],
       ['DELETE', path('archive'), ({ params: [id] }) => (meta.setArchived(id, false, UI), [204, null])],
       // The title goes in the transcript, on the chat's machine, where the CLI's /resume sees it too. It comes back with the transcript.
@@ -468,6 +595,7 @@ export class Chats {
           const machine = placement.machineOf(id)
           if (!machine) return [404, { error: 'No such chat' }]
           await machines.require(machine).remote.rename(id, title.trim())
+          this.d.analytics.event('chat.rename', { actor: UI, sessionId: id, data: { chars: title.trim().length } })
           return [204, null]
         },
       ],
@@ -489,7 +617,7 @@ export class Chats {
   turnEnded(sessionId: string, turns: number, queued: boolean): void {
     this.turnsSeen.set(sessionId, turns)
     this.d.attention.turnEnded(sessionId, queued)
-    this.sendContext(sessionId)
+    this.sendContext(sessionId, undefined, true)
   }
 
   /** A chat's runner says this many of its turns have ended; any the hub missed, e.g. with the runner offline, mark it unread. */

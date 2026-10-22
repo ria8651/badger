@@ -1,5 +1,5 @@
 import { parseCardContext, type CardContext } from '../../shared/cardContext.ts'
-import { splitMoveNote, type Move } from '../../shared/forkNote.ts'
+import { splitMoveNote, splitSideNote, type Move } from '../../shared/forkNote.ts'
 import { unwrapPaste } from '../../shared/pastes.ts'
 import type { ImageAttachment, WireMessage } from '../../shared/protocol.ts'
 import type { ShownImage } from '../images.ts'
@@ -111,8 +111,8 @@ export function messageItems(m: WireMessage): Item[] {
   if (m.tool_use_id) return []
   const anchor = typeof m.anchor === 'string' ? m.anchor : undefined
   if (m.type === 'hook_context') {
-    // Badger's own: the card, and where a fork moved to.
-    const { move, rest } = splitMoveNote(String(m.text ?? ''))
+    // Badger's own: the card, where a fork moved to, and that a side chat is one, which its panel says already.
+    const { move, rest } = splitMoveNote(splitSideNote(String(m.text ?? '')).rest)
     const context = rest ? parseCardContext(rest) : undefined
     if (context || move) return [{ kind: 'card', context, move }]
     return rest.trim() ? [{ kind: 'chip', anchor, chip: { type: 'hook', hook: str(m.hook), text: rest } }] : []

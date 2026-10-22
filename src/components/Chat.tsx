@@ -5,6 +5,7 @@ import { chatActions } from '../actions.ts'
 import { api, connected } from '../api.ts'
 import { cardWorktreeName, isScratch, worktreeOf } from '../folders.ts'
 import { openTerminal, openView, planView, viewKey, viewShown, wide } from '../layout.ts'
+import { sideChatsOf, startSideChat } from '../btw.ts'
 import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
 import { lastModel, modelValue, models, setLastModel } from '../models.ts'
 import { navigate } from '../router.tsx'
@@ -26,6 +27,7 @@ import { reveal, revealed, toolLabel } from './ToolCard.tsx'
 import { Transcript } from './Transcript.tsx'
 import { TaskPane } from '../transcript/agents.tsx'
 import { AttachmentPane, attachmentOf } from '../transcript/attachments.tsx'
+import { BtwPane } from './Btw.tsx'
 import { createIndex } from '../transcript/context.ts'
 import { UserMessage } from '../transcript/items.tsx'
 import { Workspace, type ChatPanes } from './Workspace.tsx'
@@ -44,7 +46,11 @@ export function Chat(props: {
   /** Called once, when the first message is sent. */
   onStart?: () => void
   /** The top bar on narrow screens, to go above the chat's header. */
-  bar: JSX.Element
+  bar?: JSX.Element
+  /** Shown in a panel beside another chat, as a side chat is: no header, and no panels of its own. */
+  embedded?: boolean
+  /** Called once, with a way to put the cursor in its composer. */
+  onReady?: (focus: () => void) => void
 }) {
   const chat = createChat(props.sessionId)
   const state = chat.state
@@ -121,7 +127,11 @@ export function Chat(props: {
     // On a phone, focusing would put the keyboard over the chat you came to read.
     if (!touch.matches) composer?.focus()
     sticky.follow(content, bottom, scroller)
+    props.onReady?.(() => composer?.focus())
   })
+
+  /** Where tasks, plans and attachments open beside the chat. An embedded chat has nowhere: they stay in it. */
+  const beside = () => (props.embedded ? undefined : ws())
 
   /** Scroll to a tool call, opening it and whatever it's folded into. */
   const jump = (toolUseId: string) => {
@@ -135,22 +145,22 @@ export function Chat(props: {
 
   /** Open a subagent or background task in a panel beside the chat. */
   const openTask = (toolUseId: string) => {
-    const w = ws()
+    const w = beside()
     if (w) openView(w, { kind: 'task', session: props.sessionId, id: toolUseId })
     else jump(toolUseId)
   }
   /** The plan waiting on the user, if Claude has proposed one. */
   const planPrompt = () => state.permissions.find((p) => p.toolName === 'ExitPlanMode')
   const openPlan = () => {
-    const w = ws()
+    const w = beside()
     if (w) openView(w, planView(props.sessionId))
   }
   /** Open a paste or context sent with a prompt in a panel beside the chat. */
   const openAttachment = (prompt: string, part: string) => {
-    const w = ws()
+    const w = beside()
     if (w) openView(w, { kind: 'attachment', session: props.sessionId, prompt, part })
   }
-  const planShown = () => !!ws() && viewShown(ws()!, props.sessionId, viewKey(planView(props.sessionId)))
+  const planShown = () => !!beside() && viewShown(beside()!, props.sessionId, viewKey(planView(props.sessionId)))
   // A plan arriving while the chat is open gets room beside it, on screens wide enough. Ones
   // already waiting when the chat opened don't, so closing the panel and coming back keeps it closed.
   let known: Set<string> | undefined
@@ -188,6 +198,17 @@ export function Chat(props: {
     // SPIKE: left from the review panel; review chats show theirs as the page instead.
     reviewDrafts: () => 0,
     renderReview: () => null,
+    btwLive: () => sideChatsOf(props.sessionId).some((s) => s.running),
+    renderBtw: (onReady) => <BtwPane parent={props.sessionId} onNew={() => askAside('')} onReady={onReady} />,
+  }
+
+  /** Forks a side chat (/btw) in the panel beside this one, asking it `question` if there is one. */
+  const askAside = (question: string, attachments: DraftAttachments = NO_ATTACHMENTS) => {
+    const w = ws()
+    if (!w) return showError("Couldn't start a side chat", 'This chat has no folder to open it beside yet.')
+    if (!state.messages.length) return showError("Couldn't start a side chat", 'There’s nothing in this chat to ask about yet.')
+    const first = question ? { text: question, ...attachments, mode: mode(), model: model() } : {}
+    void startSideChat(w, props.sessionId, first).catch((err: Error) => showError("Couldn't start a side chat", err.message))
   }
 
   // Read again each time a turn ends too, since that's when commits happen.
@@ -200,6 +221,8 @@ export function Chat(props: {
 
   const send = (text: string, attachments: DraftAttachments = NO_ATTACHMENTS) => {
     if (state.gone || stranded()) return
+    // A side chat's own /btw is just a message: side chats don't have side chats.
+    if (!props.embedded && /^\/btw(\s|$)/.test(text)) return askAside(text.slice(4).trim(), attachments)
     chat.send({
       text,
       ...attachments,
@@ -239,6 +262,258 @@ export function Chat(props: {
   const [forking, setForking] = createSignal<string>()
   const openChat = (id: string) => navigate({ kind: 'chat', id })
 
+  const body = (
+    <div class="flex h-full min-w-0 flex-1 flex-col">
+      {/* One header on narrow screens: the page's bar above the chat's own row, divided only below. */}
+      <Show when={!props.embedded}>
+        <div class={`md:contents ${cwd() ? '' : 'border-b border-line'}`}>{props.bar}</div>
+      </Show>
+      <Show when={cwd() && !props.embedded}>
+        <ChatHeader
+          sessionId={props.sessionId}
+          session={session()}
+          cwd={cwd()}
+          machine={machine()}
+          ws={ws()}
+          git={git.status()}
+          fetching={git.fetching()}
+          onRefresh={git.refresh}
+          actions={actions()}
+          onReview={picking() || isReview() ? undefined : startReview}
+          onAsk={picking() ? undefined : (prompt) => send(prompt)}
+        />
+      </Show>
+      <Show when={isReview() && !props.embedded}>
+        <div class="flex shrink-0 items-center gap-1 border-b border-line px-3 py-1 text-xs">
+          <For each={[false, true]}>
+            {(conversation) => (
+              <button
+                onClick={() => setShowConversation(conversation)}
+                class={`flex items-center gap-1.5 rounded-md px-2 py-1 ${showConversation() === conversation ? 'bg-surface text-fg' : 'text-fg-3 hover:text-fg-2'}`}
+              >
+                {conversation ? 'Conversation' : 'Review'}
+                <Show when={conversation && working()}>
+                  <span class="size-1.5 animate-pulse rounded-full bg-accent" />
+                </Show>
+              </button>
+            )}
+          </For>
+        </div>
+        <Show when={reviewing()}>
+          <ReviewPage
+            sessionId={props.sessionId}
+            cwd={cwd()}
+            machine={machine()}
+            index={index}
+            running={state.running}
+            onSend={state.gone || stranded() ? undefined : (text) => send(text)}
+          />
+          {/* Claude asking for something can't wait for you to switch to the conversation. */}
+          <Show when={state.permissions.length || state.error}>
+            <div class="flex shrink-0 flex-col gap-2 border-t border-line p-3">
+              <For each={state.permissions}>{(p) => <PermissionPrompt sessionId={props.sessionId} permission={p} cwd={cwd()} from={p.agent} />}</For>
+              <Show when={state.error}>
+                <Notice tone="danger">
+                  <span class="flex-1">{state.error}</span>
+                  <button onClick={chat.clearError} class="opacity-70 hover:opacity-100">Dismiss</button>
+                </Notice>
+              </Show>
+            </div>
+          </Show>
+        </Show>
+      </Show>
+      <div
+        ref={(el) => {
+          scroller = el
+          sticky.ref(el)
+        }}
+        onScroll={sticky.onScroll}
+        onWheel={sticky.onWheel}
+        // A size container, so prompts above the composer can fit this pane rather than the window.
+        class={`min-h-0 flex-1 overflow-y-auto [container-type:size] [overflow-anchor:none] ${reviewing() && !props.embedded ? 'hidden' : ''}`}
+      >
+        {/* One column for the transcript and the composer. Its padding leaves room for your messages and the
+            composer to hang out by their own padding, so the text in them lines up with Claude's. */}
+        <div class="mx-auto flex min-h-full max-w-[50rem] flex-col px-6 md:px-9">
+          <div ref={content} class="flex-1 py-8">
+            <Show when={state.loaded} fallback={<Loading class="pt-[22vh]" />}>
+              <Show
+                when={state.messages.length}
+                fallback={
+                  <Show
+                    when={picking()}
+                    fallback={
+                      <div class="pt-[22vh] text-center">
+                        <p class="text-base text-fg-2">What are we working on?</p>
+                        <p class="mt-1.5 font-mono text-xs text-fg-3">
+                          {where()}
+                          <Show when={onMachine(machine())}>{(name) => <span class="font-sans"> on {name()}</span>}</Show>
+                        </p>
+                      </div>
+                    }
+                  >
+                    <div class="pt-[10vh] text-center">
+                      <p class="text-base text-fg-2">What are we working on?</p>
+                      <FolderPicker
+                        machine={machine()}
+                        selected={cwd()}
+                        worktree={inWorktree() && canWorktree()}
+                        worktreeName={worktreeName()}
+                        onPick={(dir, worktree, picked) => {
+                          props.onPickCwd!(dir, picked)
+                          setInWorktree(worktree)
+                          props.onPickWorktree?.(worktree)
+                        }}
+                      />
+                    </div>
+                  </Show>
+                }
+              >
+                <ChildChats.Provider value={children.state}>
+                  <Checking.Provider value={(id) => state.checking.includes(id)}>
+                    <Transcript
+                      sessionId={props.sessionId}
+                      index={index}
+                      messages={state.messages}
+                      partial={state.partial}
+                      bashOutput={state.bashOutput}
+                      running={working()}
+                      working={working() && state.permissions.length === 0 && children.prompts().length === 0}
+                      cwd={cwd()}
+                      children={state.children}
+                      onFork={setForking}
+                      onOpenAttachment={beside() ? openAttachment : undefined}
+                      compacting={state.compacting}
+                      onLogin={() => {
+                        const w = ws()
+                        const dir = cwd()
+                        if (w && dir) void openTerminal(w, props.sessionId, dir, undefined, 'claude auth login').catch((e: Error) => showError("Couldn't open a terminal", e.message))
+                      }}
+                      onRetry={(retry) =>
+                        void api.fork(props.sessionId, { at: retry.at, draft: retry.text }).then(
+                          ({ sessionId }) => openChat(sessionId),
+                          (err: Error) => showError("Couldn't fork the chat", err.message),
+                        )
+                      }
+                    />
+                  </Checking.Provider>
+                </ChildChats.Provider>
+                <Show when={forking()}>
+                  {(at) => (
+                    <ForkDialog
+                      sessionId={props.sessionId}
+                      at={at()}
+                      machine={machine()}
+                      cwd={cwd()}
+                      onForked={(id) => {
+                        setForking()
+                        openChat(id)
+                      }}
+                      onClose={() => setForking()}
+                    />
+                  )}
+                </Show>
+                <Show when={state.makingWorktree}>
+                  <div class="mt-4 flex h-6 items-center gap-2 text-ui text-fg-3">
+                    <GitBranch class="size-3.5 shrink-0 animate-pulse" /> Making worktree
+                    <Show when={worktreeName()}>{(name) => <span class="min-w-0 truncate font-mono text-xs">{name()}</span>}</Show>
+                  </div>
+                </Show>
+              </Show>
+            </Show>
+          </div>
+
+          {/* Stuck to the bottom of the column and as wide as it, padding included, so the transcript fades out as it
+              scrolls under even where the composer hangs into the padding. It leaves room for that fade even when full, and prompts give way first. */}
+          <div
+            ref={bottom}
+            class="sticky bottom-0 flex max-h-[calc(100cqh-2rem)] flex-col -mx-6 bg-bg px-6 pb-5 md:-mx-9 md:px-9 before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-bg"
+          >
+            {/* Laid out like the transcript's own messages, since that's where they're headed. */}
+            <For each={state.queued}>
+              {(m) => <Queued message={m} onEdit={() => unqueue(m.id, true)} onRemove={() => unqueue(m.id)} />}
+            </For>
+            {/* Everything here hangs out as far as the composer, so prompts and notices read as part of it, not the transcript. */}
+            <div class="-mx-[calc(1rem+1px)] flex min-h-0 flex-col gap-2">
+              <For each={state.permissions}>
+                {(p) => (
+                  <PermissionPrompt
+                    sessionId={props.sessionId}
+                    permission={p}
+                    cwd={cwd()}
+                    from={p.agent}
+                    onOpenPlan={beside() ? openPlan : undefined}
+                    planShown={planShown()}
+                  />
+                )}
+              </For>
+              <For each={children.prompts()}>
+                {({ child, tool, permission }) => (
+                  <PermissionPrompt sessionId={child.id} permission={permission} cwd={child.state.cwd} from={toolLabel(tool) || 'Another chat'} />
+                )}
+              </For>
+              <Show when={tasks().length}>
+                <TaskTray sessionId={props.sessionId} items={tasks} onOpen={openTask} />
+              </Show>
+              <Show when={state.error}>
+                <Notice tone="danger">
+                  <span class="flex-1">{state.error}</span>
+                  <button onClick={chat.clearError} class="opacity-70 hover:opacity-100">Dismiss</button>
+                </Notice>
+              </Show>
+              <Show when={state.loaded && !connected()}>
+                <Notice icon={WifiOff}>
+                  <span class="flex-1">Can’t reach the server. Retrying… What you send goes out once it’s back.</span>
+                </Notice>
+              </Show>
+              {/* A folder on a machine that's offline can't be looked at, so it's only gone once the machine's back. */}
+              <Show when={state.gone && !offline()}>
+                <Notice icon={FolderX}>
+                  <span class="flex-1">
+                    This chat's folder is gone or can't be opened, so it can't take messages. <span class="text-fg-3 break-all">{cwd()}</span>
+                  </span>
+                </Notice>
+              </Show>
+              <Show when={state.loaded && stranded()}>
+                <Notice icon={MonitorOff}>
+                  <span class="flex-1">
+                    <Show
+                      when={isRemoved(machine())}
+                      fallback={
+                        picking()
+                          ? `${machineName(machine())} is offline. Pick another runner above, or wait for it to come back.`
+                          : `${machineName(machine())} is offline. This chat runs there, so it can't take messages until it's back.`
+                      }
+                    >
+                      {knownName(machine()) ?? 'The runner this chat was on'} was removed.{' '}
+                      {picking() ? 'Pick another runner above to start this chat.' : 'This chat ran there, so it can only be read now.'}
+                    </Show>
+                  </span>
+                </Notice>
+              </Show>
+              <Composer
+                ref={(c) => (composer = c)}
+                chat={chat}
+                machine={machine()}
+                cwd={cwd()}
+                disabled={state.gone || stranded()}
+                working={working()}
+                mode={mode()}
+                onMode={changeMode}
+                model={models()?.length ? modelValue(model(), models()!) : undefined}
+                models={modelOptions()}
+                onModel={changeModel}
+                pendingCard={pendingCard()}
+                canBackground={() => state.running && waitingOnTask(index())}
+                onSubmit={send}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+  if (props.embedded) return body
   return (
     <Workspace
       ws={ws()}
@@ -248,253 +523,7 @@ export function Chat(props: {
       onFocusChat={() => composer?.focus()}
       onOpenPage={(id) => navigate({ kind: 'terminal', id })}
     >
-      <div class="flex h-full min-w-0 flex-1 flex-col">
-        {/* One header on narrow screens: the page's bar above the chat's own row, divided only below. */}
-        <div class={`md:contents ${cwd() ? '' : 'border-b border-line'}`}>{props.bar}</div>
-        <Show when={cwd()}>
-          <ChatHeader
-            sessionId={props.sessionId}
-            session={session()}
-            cwd={cwd()}
-            machine={machine()}
-            ws={ws()}
-            git={git.status()}
-            fetching={git.fetching()}
-            onRefresh={git.refresh}
-            actions={actions()}
-            onReview={picking() || isReview() ? undefined : startReview}
-            onAsk={picking() ? undefined : (prompt) => send(prompt)}
-          />
-        </Show>
-        <Show when={isReview()}>
-          <div class="flex shrink-0 items-center gap-1 border-b border-line px-3 py-1 text-xs">
-            <For each={[false, true]}>
-              {(conversation) => (
-                <button
-                  onClick={() => setShowConversation(conversation)}
-                  class={`flex items-center gap-1.5 rounded-md px-2 py-1 ${showConversation() === conversation ? 'bg-surface text-fg' : 'text-fg-3 hover:text-fg-2'}`}
-                >
-                  {conversation ? 'Conversation' : 'Review'}
-                  <Show when={conversation && working()}>
-                    <span class="size-1.5 animate-pulse rounded-full bg-accent" />
-                  </Show>
-                </button>
-              )}
-            </For>
-          </div>
-          <Show when={reviewing()}>
-            <ReviewPage
-              sessionId={props.sessionId}
-              cwd={cwd()}
-              machine={machine()}
-              index={index}
-              running={state.running}
-              onSend={state.gone || stranded() ? undefined : (text) => send(text)}
-            />
-            {/* Claude asking for something can't wait for you to switch to the conversation. */}
-            <Show when={state.permissions.length || state.error}>
-              <div class="flex shrink-0 flex-col gap-2 border-t border-line p-3">
-                <For each={state.permissions}>{(p) => <PermissionPrompt sessionId={props.sessionId} permission={p} cwd={cwd()} from={p.agent} />}</For>
-                <Show when={state.error}>
-                  <Notice tone="danger">
-                    <span class="flex-1">{state.error}</span>
-                    <button onClick={chat.clearError} class="opacity-70 hover:opacity-100">Dismiss</button>
-                  </Notice>
-                </Show>
-              </div>
-            </Show>
-          </Show>
-        </Show>
-        <div
-          ref={(el) => {
-            scroller = el
-            sticky.ref(el)
-          }}
-          onScroll={sticky.onScroll}
-          onWheel={sticky.onWheel}
-          // A size container, so prompts above the composer can fit this pane rather than the window.
-          class={`min-h-0 flex-1 overflow-y-auto [container-type:size] [overflow-anchor:none] ${reviewing() ? 'hidden' : ''}`}
-        >
-          {/* One column for the transcript and the composer. Its padding leaves room for your messages and the
-              composer to hang out by their own padding, so the text in them lines up with Claude's. */}
-          <div class="mx-auto flex min-h-full max-w-[50rem] flex-col px-6 md:px-9">
-            <div ref={content} class="flex-1 py-8">
-              <Show when={state.loaded} fallback={<Loading class="pt-[22vh]" />}>
-                <Show
-                  when={state.messages.length}
-                  fallback={
-                    <Show
-                      when={picking()}
-                      fallback={
-                        <div class="pt-[22vh] text-center">
-                          <p class="text-base text-fg-2">What are we working on?</p>
-                          <p class="mt-1.5 font-mono text-xs text-fg-3">
-                            {where()}
-                            <Show when={onMachine(machine())}>{(name) => <span class="font-sans"> on {name()}</span>}</Show>
-                          </p>
-                        </div>
-                      }
-                    >
-                      <div class="pt-[10vh] text-center">
-                        <p class="text-base text-fg-2">What are we working on?</p>
-                        <FolderPicker
-                          machine={machine()}
-                          selected={cwd()}
-                          worktree={inWorktree() && canWorktree()}
-                          worktreeName={worktreeName()}
-                          onPick={(dir, worktree, picked) => {
-                            props.onPickCwd!(dir, picked)
-                            setInWorktree(worktree)
-                            props.onPickWorktree?.(worktree)
-                          }}
-                        />
-                      </div>
-                    </Show>
-                  }
-                >
-                  <ChildChats.Provider value={children.state}>
-                    <Checking.Provider value={(id) => state.checking.includes(id)}>
-                      <Transcript
-                        sessionId={props.sessionId}
-                        index={index}
-                        messages={state.messages}
-                        partial={state.partial}
-                        bashOutput={state.bashOutput}
-                        running={working()}
-                        working={working() && state.permissions.length === 0 && children.prompts().length === 0}
-                        cwd={cwd()}
-                        children={state.children}
-                        onFork={setForking}
-                        onOpenAttachment={ws() ? openAttachment : undefined}
-                        compacting={state.compacting}
-                        onLogin={() => {
-                          const w = ws()
-                          const dir = cwd()
-                          if (w && dir) void openTerminal(w, props.sessionId, dir, undefined, 'claude auth login').catch((e: Error) => showError("Couldn't open a terminal", e.message))
-                        }}
-                        onRetry={(retry) =>
-                          void api.fork(props.sessionId, { at: retry.at, draft: retry.text }).then(
-                            ({ sessionId }) => openChat(sessionId),
-                            (err: Error) => showError("Couldn't fork the chat", err.message),
-                          )
-                        }
-                      />
-                    </Checking.Provider>
-                  </ChildChats.Provider>
-                  <Show when={forking()}>
-                    {(at) => (
-                      <ForkDialog
-                        sessionId={props.sessionId}
-                        at={at()}
-                        machine={machine()}
-                        cwd={cwd()}
-                        onForked={(id) => {
-                          setForking()
-                          openChat(id)
-                        }}
-                        onClose={() => setForking()}
-                      />
-                    )}
-                  </Show>
-                  <Show when={state.makingWorktree}>
-                    <div class="mt-4 flex h-6 items-center gap-2 text-ui text-fg-3">
-                      <GitBranch class="size-3.5 shrink-0 animate-pulse" /> Making worktree
-                      <Show when={worktreeName()}>{(name) => <span class="min-w-0 truncate font-mono text-xs">{name()}</span>}</Show>
-                    </div>
-                  </Show>
-                </Show>
-              </Show>
-            </div>
-
-            {/* Stuck to the bottom of the column and as wide as it, padding included, so the transcript fades out as it
-                scrolls under even where the composer hangs into the padding. It leaves room for that fade even when full, and prompts give way first. */}
-            <div
-              ref={bottom}
-              class="sticky bottom-0 flex max-h-[calc(100cqh-2rem)] flex-col -mx-6 bg-bg px-6 pb-5 md:-mx-9 md:px-9 before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-bg"
-            >
-              {/* Laid out like the transcript's own messages, since that's where they're headed. */}
-              <For each={state.queued}>
-                {(m) => <Queued message={m} onEdit={() => unqueue(m.id, true)} onRemove={() => unqueue(m.id)} />}
-              </For>
-              {/* Everything here hangs out as far as the composer, so prompts and notices read as part of it, not the transcript. */}
-              <div class="-mx-[calc(1rem+1px)] flex min-h-0 flex-col gap-2">
-                <For each={state.permissions}>
-                  {(p) => (
-                    <PermissionPrompt
-                      sessionId={props.sessionId}
-                      permission={p}
-                      cwd={cwd()}
-                      from={p.agent}
-                      onOpenPlan={ws() ? openPlan : undefined}
-                      planShown={planShown()}
-                    />
-                  )}
-                </For>
-                <For each={children.prompts()}>
-                  {({ child, tool, permission }) => (
-                    <PermissionPrompt sessionId={child.id} permission={permission} cwd={child.state.cwd} from={toolLabel(tool) || 'Another chat'} />
-                  )}
-                </For>
-                <Show when={tasks().length}>
-                  <TaskTray sessionId={props.sessionId} items={tasks} onOpen={openTask} />
-                </Show>
-                <Show when={state.error}>
-                  <Notice tone="danger">
-                    <span class="flex-1">{state.error}</span>
-                    <button onClick={chat.clearError} class="opacity-70 hover:opacity-100">Dismiss</button>
-                  </Notice>
-                </Show>
-                <Show when={state.loaded && !connected()}>
-                  <Notice icon={WifiOff}>
-                    <span class="flex-1">Can’t reach the server. Retrying… What you send goes out once it’s back.</span>
-                  </Notice>
-                </Show>
-                {/* A folder on a machine that's offline can't be looked at, so it's only gone once the machine's back. */}
-                <Show when={state.gone && !offline()}>
-                  <Notice icon={FolderX}>
-                    <span class="flex-1">
-                      This chat's folder is gone or can't be opened, so it can't take messages. <span class="text-fg-3 break-all">{cwd()}</span>
-                    </span>
-                  </Notice>
-                </Show>
-                <Show when={state.loaded && stranded()}>
-                  <Notice icon={MonitorOff}>
-                    <span class="flex-1">
-                      <Show
-                        when={isRemoved(machine())}
-                        fallback={
-                          picking()
-                            ? `${machineName(machine())} is offline. Pick another runner above, or wait for it to come back.`
-                            : `${machineName(machine())} is offline. This chat runs there, so it can't take messages until it's back.`
-                        }
-                      >
-                        {knownName(machine()) ?? 'The runner this chat was on'} was removed.{' '}
-                        {picking() ? 'Pick another runner above to start this chat.' : 'This chat ran there, so it can only be read now.'}
-                      </Show>
-                    </span>
-                  </Notice>
-                </Show>
-                <Composer
-                  ref={(c) => (composer = c)}
-                  chat={chat}
-                  machine={machine()}
-                  cwd={cwd()}
-                  disabled={state.gone || stranded()}
-                  working={working()}
-                  mode={mode()}
-                  onMode={changeMode}
-                  model={models()?.length ? modelValue(model(), models()!) : undefined}
-                  models={modelOptions()}
-                  onModel={changeModel}
-                  pendingCard={pendingCard()}
-                  canBackground={() => state.running && waitingOnTask(index())}
-                  onSubmit={send}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      {body}
     </Workspace>
   )
 }

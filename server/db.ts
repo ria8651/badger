@@ -165,6 +165,87 @@ const MIGRATIONS = [
    );`,
   // So a chat's images can be served one at a time, without reading the chat.
   `CREATE INDEX transcript_lines_images ON transcript_lines (session_id, ${IMAGE_LINE_UUID}) WHERE ${IMAGE_LINE};`,
+  // Side chats (/btw): forks of a chat in its own folder, kept under it and shown in a panel beside it rather than in the sidebar.
+  `CREATE TABLE side_chats (
+     session_id TEXT PRIMARY KEY,
+     parent_session TEXT NOT NULL,
+     created_at INTEGER NOT NULL
+   );
+   CREATE INDEX side_chats_parent ON side_chats(parent_session);`,
+  // Analytics (see Analytics): what happened that transcripts and the audit log don't keep, for statistics later.
+  // events: one row per thing that happened. card_id and project_id are where its chat was filed at the time.
+  // client and tab are the browser and tab it came from; data is JSON, by kind.
+  `CREATE TABLE events (
+     id INTEGER PRIMARY KEY,
+     at INTEGER NOT NULL,
+     kind TEXT NOT NULL,
+     actor TEXT,
+     actor_session TEXT,
+     client TEXT,
+     tab TEXT,
+     session_id TEXT,
+     machine TEXT,
+     card_id INTEGER,
+     project_id INTEGER,
+     duration_ms INTEGER,
+     data TEXT
+   );
+   CREATE INDEX events_kind_at ON events (kind, at);
+   CREATE INDEX events_session_at ON events (session_id, at) WHERE session_id IS NOT NULL;
+   -- Browser tabs' heartbeats: sent when what's on screen or whether it's in use changes, and every few seconds while visible.
+   -- Whether time counts as working is decided when reading them, not here. input_at is the last keypress, click, scroll or
+   -- pointer move, on the hub's clock; inputs and keys count those since the tab's last beat, so in that beat's pane. Each
+   -- row's state holds until the tab's next row; 'closed' ends it when the tab goes. views is the panels showing
+   -- beside the chat (JSON view keys) and pane where the last input or focus was. busy: Claude was working in the chat shown.
+   CREATE TABLE activity (
+     id INTEGER PRIMARY KEY,
+     at INTEGER NOT NULL,
+     client TEXT NOT NULL,
+     tab TEXT NOT NULL,
+     reason TEXT NOT NULL,
+     visible INTEGER NOT NULL,
+     focused INTEGER NOT NULL,
+     input_at INTEGER,
+     inputs INTEGER NOT NULL,
+     keys INTEGER NOT NULL,
+     route TEXT NOT NULL,
+     session_id TEXT,
+     card_id INTEGER,
+     project_id INTEGER,
+     views TEXT,
+     pane TEXT,
+     busy INTEGER
+   );
+   CREATE INDEX activity_at ON activity (at);
+   CREATE INDEX activity_tab_at ON activity (tab, at);
+   -- Each browser, by an id it keeps in localStorage, and what it last said about itself (JSON: screen, touch, installed...).
+   CREATE TABLE clients (
+     id TEXT PRIMARY KEY,
+     first_seen INTEGER NOT NULL,
+     last_seen INTEGER NOT NULL,
+     user_agent TEXT,
+     info TEXT
+   );
+   -- Plan limits each time they're read, one row per limit; a plan without limits gets one row with an empty label.
+   CREATE TABLE usage_samples (
+     at INTEGER NOT NULL,
+     machine TEXT,
+     plan TEXT,
+     label TEXT NOT NULL,
+     percent REAL,
+     severity TEXT,
+     resets_at TEXT
+   );
+   CREATE INDEX usage_samples_at ON usage_samples (at);
+   -- Transcript lines a rewritten (shrunk) transcript replaced, kept rather than lost with the old file.
+   CREATE TABLE transcript_lines_replaced (
+     session_id TEXT NOT NULL,
+     subpath TEXT NOT NULL,
+     n INTEGER NOT NULL,
+     entry TEXT NOT NULL,
+     replaced_at INTEGER NOT NULL
+   );
+   CREATE INDEX transcript_lines_replaced_session ON transcript_lines_replaced (session_id, subpath, replaced_at);`,
   // Review chats, and the chat whose changes each was started from.
   `CREATE TABLE review_sessions (
      session_id TEXT PRIMARY KEY,
@@ -183,7 +264,8 @@ type AuditAction = 'create' | 'update' | 'delete' | 'link' | 'unlink' | 'archive
  * Badger's SQLite database, migrated to the latest schema. Each table has one
  * owner, which alone runs SQL on it: the board's are Board's, a chat's
  * draft, archive and the like ChatMeta's, machines' Machines', which machine
- * each chat is on ChatPlacement's, and transcripts Transcripts'.
+ * each chat is on ChatPlacement's, transcripts Transcripts', and analytics
+ * (events, activity, clients, usage_samples) Analytics'.
  */
 export class Database {
   readonly sql: DatabaseSync

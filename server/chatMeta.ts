@@ -151,6 +151,24 @@ export class ChatMeta {
     return row?.session_id
   }
 
+  addSideChat(sessionId: string, parentId: string): void {
+    this.db.sql.prepare('INSERT INTO side_chats (session_id, parent_session, created_at) VALUES (?, ?, ?)').run(sessionId, parentId, Date.now())
+  }
+
+  removeSideChat(sessionId: string): void {
+    this.db.sql.prepare('DELETE FROM side_chats WHERE session_id = ?').run(sessionId)
+  }
+
+  /** Every side chat, by id: the chat it's under, and when it was made. */
+  sideChats(): Map<string, { parent: string; at: number }> {
+    const rows = this.db.sql.prepare('SELECT session_id, parent_session, created_at FROM side_chats').all() as {
+      session_id: string
+      parent_session: string
+      created_at: number
+    }[]
+    return new Map(rows.map((r) => [r.session_id, { parent: r.parent_session, at: r.created_at }]))
+  }
+
   /** A hash of the card context Claude was last given, so the same isn't given again after a restart. */
   contextHash(sessionId: string): string | undefined {
     const row = this.db.sql.prepare('SELECT hash FROM session_context WHERE session_id = ?').get(sessionId) as { hash: string } | undefined

@@ -41,6 +41,7 @@ export { default as ListChevronsUpDown } from 'lucide-solid/icons/list-chevrons-
 export { default as Loader2 } from 'lucide-solid/icons/loader-circle'
 export { default as MessageSquare } from 'lucide-solid/icons/message-square'
 export { default as MessageSquarePlus } from 'lucide-solid/icons/message-square-plus'
+export { default as MessagesSquare } from 'lucide-solid/icons/messages-square'
 export { default as Minimize2 } from 'lucide-solid/icons/minimize-2'
 export { default as MonitorOff } from 'lucide-solid/icons/monitor-off'
 export { default as NotebookPen } from 'lucide-solid/icons/notebook-pen'

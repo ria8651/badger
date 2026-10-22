@@ -98,7 +98,7 @@ export function mergeTool(deps: MergeDeps, sessionId: string, cwd: () => string,
 
 function mergePrompt(p: { dir: string; branch: string; base: string; unmerged: number; notes?: string; card?: Card }): string {
   return [
-    `You're merging another Badger chat's work. That chat worked in the git worktree ${p.dir}, on branch \`${p.branch}\`, which has ${plural(p.unmerged, 'commit', 'commits')} not on \`${p.base}\`. Worktrees can't merge themselves, so it's waiting on you.`,
+    `You're merging another Badger chat's work. That chat worked in the git worktree ${p.dir}, on \`${p.branch}\`, which has ${plural(p.unmerged, 'commit', 'commits')} not on \`${p.base}\`. Worktrees can't merge themselves, so it's waiting on you.`,
     '',
     `Merge it into \`${p.base}\` here in the main checkout:`,
     `- Run \`git merge --no-edit ${p.branch}\`. A merge commit is fine; don't rebase or squash.`,

@@ -96,6 +96,10 @@ export interface SessionSummary {
   gone?: boolean
   /** A review chat: it guides you through its checkout's changes, and its page shows them. */
   review?: boolean
+  /** A side chat (/btw): the chat it's under, shown in a panel beside that rather than in the sidebar. */
+  sideOf?: string
+  /** For a side chat, when it was forked: it knows its parent as it was then. */
+  forkedAt?: number
 }
 
 /** How full a chat's context window is, as Claude Code's /context counts it. */
@@ -123,17 +127,19 @@ export interface AccountUsage {
 /** A git worktree Claude Code made under `<repo>/.claude/worktrees/`. */
 export interface WorktreeStatus {
   path: string
+  /** Its branch, or its commit's short hash when HEAD is detached. */
   branch: string
   /** Files with uncommitted changes. */
   changes: number
   /** Commits on its branch that the main checkout's HEAD doesn't have. */
   unmerged: number
-  /** The main checkout's branch, which `unmerged` is counted against. */
+  /** The main checkout's branch (or short hash, detached), which `unmerged` is counted against. */
   base: string
 }
 
 /** Work in any git checkout that hasn't landed anywhere yet: what a review looks at. */
 export interface ChangesStatus {
+  /** Its branch, or its commit's short hash when HEAD is detached. */
   branch: string
   /** Files with uncommitted changes. */
   changes: number
@@ -159,7 +165,7 @@ export interface GitStatus {
   behind: number
   /** Where a branch with no upstream would be pushed: origin, or the only remote. Absent with no remotes. */
   remote?: string
-  /** In a linked worktree: the main checkout's branch, and the commits each has that the other doesn't. */
+  /** In a linked worktree: the main checkout's branch (or short hash, detached), and the commits each has that the other doesn't. */
   base?: { branch: string; ahead: number; behind: number }
   /** When the repo last fetched, ms since epoch; absent if it never has. */
   fetchedAt?: number
@@ -456,6 +462,58 @@ export type ClientEvent =
   | { type: 'term_resize'; id: string; cols: number; rows: number }
   /** Where this browser reaches previews, with `{port}` for the port, e.g. `https://{port}.badger.example.com`. */
   | { type: 'preview_url'; url: string }
+  /** Who this tab is, first on every connection, for analytics. */
+  | ({ type: 'hello' } & ClientHello)
+  /** Whether this tab is on screen and in use, and what's in it, for time tracking. */
+  | ({ type: 'activity' } & ActivityBeat)
+  /** Something done in the page that the hub wouldn't otherwise hear of, e.g. a notification clicked, for analytics. */
+  | { type: 'ui_event'; name: string; sessionId?: string; data?: Record<string, unknown> }
+
+/** A browser tab: its browser's id (kept in localStorage), its own (new each time the page loads), and the browser's details. */
+export interface ClientHello {
+  client: string
+  tab: string
+  info: {
+    userAgent?: string
+    platform?: string
+    language?: string
+    timeZone?: string
+    screen?: { width: number; height: number; dpr: number }
+    viewport?: { width: number; height: number }
+    touch?: boolean
+    /** Installed as an app, not in a browser tab. */
+    standalone?: boolean
+    /** The page's build, to compare with the hub's. */
+    build?: string
+  }
+}
+
+/**
+ * A tab's state, sent when it changes and every few seconds while it's visible.
+ * Whether that's time worked is decided later, from these.
+ */
+export interface ActivityBeat {
+  /** What prompted it: e.g. open, visibility, focus, route, pane, views, input, tick, closed. */
+  reason: string
+  visible: boolean
+  /** The window has focus (including a preview inside it). */
+  focused: boolean
+  /** How long since the last keypress, click, scroll or pointer move, by the tab's clock. Absent if there's been none. */
+  idleMs?: number
+  /** Inputs since the last beat, and how many of them were keypresses. */
+  inputs: number
+  keys: number
+  /** The page's route: chat, card, board, radar, terminal or home. */
+  route: string
+  /** The chat on screen. */
+  sessionId?: string
+  /** The card on screen, on a card's page. */
+  cardId?: number
+  /** Panels on screen beside the chat, by view key. */
+  views: string[]
+  /** Where the last input or focus was: chat, sidebar, page, or a panel's view key. */
+  pane?: string
+}
 
 export type ServerEvent =
   /** Everything about a chat, for a viewer starting on it. A chat with no live process has the live state of an idle one. */

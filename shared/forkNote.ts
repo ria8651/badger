@@ -24,6 +24,16 @@ export function renderMoveNote(m: Move): string {
   return `${PREFIX}${place(m.from)}. It now runs in ${place(m.to)}. Paths earlier in this conversation point at the old place, and no files were copied over, so check they're here before relying on them.`
 }
 
+/** What a side chat (/btw) is told on its first turn. One paragraph, like a move note. */
+export const SIDE_NOTE =
+  "This is a side chat: a copy of the conversation so far, opened beside it to ask something on the side. The main chat may still be running in the same folder, so its files can change under you. Answer what's asked here; the main chat won't see this one."
+
+/** A turn's context, split into the side chat note at its start, if any, and the rest. */
+export function splitSideNote(text: string): { side: boolean; rest: string } {
+  if (!text.startsWith(SIDE_NOTE)) return { side: false, rest: text }
+  return { side: true, rest: text.slice(SIDE_NOTE.length).replace(/^\n\n/, '') }
+}
+
 const NOTE = /^This chat was forked from one that ran in (a new git worktree of )?(.+) on (.+?)\. It now runs in (a new git worktree of )?(.+) on (.+?)\. Paths earlier in this conversation .*$/
 
 /** A turn's context, split into the move note at its start, if any, and the rest. */

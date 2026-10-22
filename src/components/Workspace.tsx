@@ -1,5 +1,6 @@
 import { For, Index, Match, Show, Switch, children, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
-import { FileDiff, Globe, Minimize2, NotebookPen, Plus, RotateCw, SquareArrowOutUpRight, X } from '../icons'
+import { FileDiff, Globe, Minimize2, MessagesSquare, NotebookPen, Plus, RotateCw, SquareArrowOutUpRight, X } from '../icons'
+import { setOnScreen } from '../activity.ts'
 import { api } from '../api.ts'
 import type { ContextChip } from './Attachments.tsx'
 import {
@@ -88,6 +89,9 @@ export interface ChatPanes {
   /** Something sent with a prompt, if it's still there. */
   attachment: (v: AttachmentView) => ContextChip | undefined
   renderAttachment: (v: AttachmentView, onReady: (focus: () => void) => void) => JSX.Element
+  /** Its side chats: whether one is working, and the panel showing them. */
+  btwLive: () => boolean
+  renderBtw: (onReady: (focus: () => void) => void) => JSX.Element
 }
 
 const BINDINGS: [string, string][] = [
@@ -145,6 +149,10 @@ export function Workspace(props: {
   })
 
   createEffect(() => props.ws && untrack(() => openedIn(props.ws!, props.sessionId)))
+
+  // What's on screen, for time tracking.
+  createEffect(() => setOnScreen({ sessionId: props.sessionId, views: groupsOf(tree()).map(activeOf) }))
+  onCleanup(() => setOnScreen(undefined))
 
   // ── Focus ──
 
@@ -424,6 +432,7 @@ export function Workspace(props: {
     if (v?.kind === 'task') return props.panes.label(v.id)
     if (v?.kind === 'plan') return 'Plan'
     if (v?.kind === 'review') return props.panes.reviewDrafts() ? `Review · ${props.panes.reviewDrafts()}` : 'Review'
+    if (v?.kind === 'btw') return 'Side chats'
     if (v?.kind === 'attachment') return props.panes.attachment(v)?.label ?? 'Attachment'
     if (v?.kind === 'preview') return v.name ?? `:${v.id}`
     const t = terminalOf(v)
@@ -432,7 +441,7 @@ export function Workspace(props: {
   const tabTitle = (v?: View) =>
     v?.kind === 'preview'
       ? `${tabLabel(v)}\n${previewUrl(v.id, v.path, machine()) ?? `Port ${v.id}`}`
-      : v?.kind === 'task' || v?.kind === 'plan' || v?.kind === 'review' || v?.kind === 'attachment'
+      : v?.kind === 'task' || v?.kind === 'plan' || v?.kind === 'review' || v?.kind === 'attachment' || v?.kind === 'btw'
         ? tabLabel(v)
         : [
             terminalOf(v) ? terminalTooltip(terminalOf(v)!) : tabLabel(v),
@@ -519,6 +528,12 @@ export function Workspace(props: {
                           <Show when={v()?.kind === 'review'}>
                             <FileDiff class="size-3 shrink-0" />
                           </Show>
+                          <Show when={v()?.kind === 'btw'}>
+                            <MessagesSquare class="size-3 shrink-0" />
+                            <Show when={props.panes.btwLive()}>
+                              <LiveDot />
+                            </Show>
+                          </Show>
                           <Show when={attachmentViewOf(v()) && props.panes.attachment(attachmentViewOf(v())!)}>
                             {(a) => {
                               const Icon = a().icon
@@ -592,7 +607,7 @@ export function Workspace(props: {
 
   return (
     <div ref={container} class="relative h-full min-w-0 flex-1">
-      <div class="pane absolute flex flex-col" style={place(boxOf('chat')!)} onFocusIn={() => focusIn('chat')}>
+      <div class="pane absolute flex flex-col" style={place(boxOf('chat')!)} onFocusIn={() => focusIn('chat')} data-pane="chat">
         {chat()}
       </div>
 
@@ -612,6 +627,7 @@ export function Workspace(props: {
               classList={{ hidden: !at() }}
               style={at() ? placeIn(at()!.box) : undefined}
               onFocusIn={() => at() && focusIn(at()!.group)}
+              data-pane={key}
             >
               <Show when={view()}>
                 {(v) => (
@@ -634,6 +650,7 @@ export function Workspace(props: {
                     <Match when={v().kind === 'plan'}>{props.panes.renderPlan((focus) => ready(key, focus))}</Match>
                     <Match when={v().kind === 'review'}>{props.panes.renderReview((focus) => ready(key, focus))}</Match>
                     <Match when={attachmentViewOf(v())}>{(a) => props.panes.renderAttachment(a(), (focus) => ready(key, focus))}</Match>
+                    <Match when={v().kind === 'btw'}>{props.panes.renderBtw((focus) => ready(key, focus))}</Match>
                   </Switch>
                 )}
               </Show>

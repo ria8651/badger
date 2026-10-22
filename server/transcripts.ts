@@ -56,6 +56,10 @@ export class Transcripts {
     const { sessionId, subpath } = batch
     const [current] = this.state([batch])
     if (batch.reset) {
+      // Claude Code rewrote the file. What it had is kept: it can't be had again.
+      this.db
+        .prepare('INSERT INTO transcript_lines_replaced (session_id, subpath, n, entry, replaced_at) SELECT session_id, subpath, n, entry, ? FROM transcript_lines WHERE session_id = ? AND subpath = ?')
+        .run(Date.now(), sessionId, subpath)
       this.db.prepare('DELETE FROM transcript_lines WHERE session_id = ? AND subpath = ?').run(sessionId, subpath)
       if (!subpath) this.db.prepare('DELETE FROM transcript_summaries WHERE session_id = ?').run(sessionId)
       current.lines = current.bytes = 0

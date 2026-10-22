@@ -1,5 +1,21 @@
 import { createSignal } from 'solid-js'
-import type { Card, CardStatus, ClientEvent, GitStatus, Folder, Listing, Machine, ModelOption, ReviewDiff, ServerEvent, SessionSummary, TerminalInfo, WorktreeStatus } from '../shared/protocol.ts'
+import type {
+  Card,
+  CardStatus,
+  ClientEvent,
+  GitStatus,
+  Folder,
+  ImageAttachment,
+  Listing,
+  Machine,
+  ModelOption,
+  PermissionMode,
+  ReviewDiff,
+  ServerEvent,
+  SessionSummary,
+  TerminalInfo,
+  WorktreeStatus,
+} from '../shared/protocol.ts'
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -33,6 +49,9 @@ export const api = {
     request<{ sessionId: string }>('POST', `/api/sessions/${sessionId}/fork`, to),
   /** The review chat for a chat's changes: the open one, or a new one. Returns its id. */
   startReview: (sessionId: string) => request<{ sessionId: string }>('POST', `/api/sessions/${sessionId}/review`),
+  /** A side chat under this one, forked in place, sent `text` if given. Returns the side chat's id. */
+  btw: (sessionId: string, first: { text?: string; pastes?: string[]; images?: ImageAttachment[]; mode?: PermissionMode; model?: string }) =>
+    request<{ sessionId: string }>('POST', `/api/sessions/${sessionId}/btw`, first),
   cards: () => get<Card[]>('/api/cards'),
   createCard: (card: { title: string; description?: string; status?: CardStatus; parentId?: number | null }) => request<Card>('POST', '/api/cards', card),
   updateCard: (id: number, patch: CardPatch) => request<Card>('PATCH', `/api/cards/${id}`, patch),

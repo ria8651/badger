@@ -12,10 +12,18 @@ import { wsKey, type Ws } from './terminals.ts'
 /**
  * Something a panel shows: a terminal, a port's preview, a subagent or
  * background task of a chat, by the tool call that started it, a chat's
- * plan, or something sent with one of its prompts. Tasks, plans and
- * attachments are their chat's own, so they only show beside it.
+ * plan, something sent with one of its prompts, or its side chats. Tasks,
+ * plans, attachments and side chats are their chat's own, so they only show
+ * beside it.
  */
-export type View = { kind: 'terminal'; id: string } | PreviewView | { kind: 'task'; session: string; id: string } | PlanView | ReviewView | AttachmentView
+export type View =
+  | { kind: 'terminal'; id: string }
+  | PreviewView
+  | { kind: 'task'; session: string; id: string }
+  | PlanView
+  | ReviewView
+  | AttachmentView
+  | BtwView
 /**
  * What a port serves, in a frame; id is the port. Path is where the page is:
  * where it was opened, then wherever it's gone since. Opening it again
@@ -33,16 +41,19 @@ export const reviewView = (session: string): ReviewView => ({ kind: 'review', se
  * and which `part` of it (`paste:<n>` or `context:<n>`), so layouts don't keep copies of what can be big.
  */
 export type AttachmentView = { kind: 'attachment'; session: string; prompt: string; part: string }
+/** A chat's side chats (/btw), one panel for them all. Which it shows is kept per browser tab, in btw.ts. */
+export type BtwView = { kind: 'btw'; session: string }
+export const btwView = (session: string): BtwView => ({ kind: 'btw', session })
 export const viewKey = (v: View) =>
   v.kind === 'task'
     ? `task:${v.session}:${v.id}`
-    : v.kind === 'plan' || v.kind === 'review'
+    : v.kind === 'plan' || v.kind === 'review' || v.kind === 'btw'
       ? `${v.kind}:${v.session}`
       : v.kind === 'attachment'
         ? `attachment:${v.session}:${v.prompt}:${v.part}`
         : `${v.kind}:${v.id}`
 /** The chat a view belongs to, if it only shows beside one. */
-export const sessionOf = (v: View) => (v.kind === 'task' || v.kind === 'plan' || v.kind === 'review' || v.kind === 'attachment' ? v.session : undefined)
+export const sessionOf = (v: View) => (v.kind === 'task' || v.kind === 'plan' || v.kind === 'review' || v.kind === 'attachment' || v.kind === 'btw' ? v.session : undefined)
 
 export type Group = { type: 'group'; id: string; views: View[]; active?: string }
 export type Leaf = { type: 'chat' } | Group

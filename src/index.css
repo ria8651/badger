@@ -277,6 +277,55 @@
 }
 
 /*
+ * Code's colours, by kind of token, for src/highlight.ts. The light ones are
+ * the default; dark palettes and those with a look of their own set theirs.
+ * Plain text keeps the colour of what it's in.
+ */
+[data-palette] {
+  --code-foreground: currentColor;
+  --code-token-keyword: #a0456e;
+  --code-token-string: #3d7a4a;
+  --code-token-string-expression: #3d7a4a;
+  --code-token-constant: #b35a1f;
+  --code-token-function: #2f5f9e;
+  --code-token-parameter: #7a5a2f;
+  --code-token-comment: var(--color-fg-3);
+  --code-token-punctuation: var(--color-fg-3);
+  --code-token-link: #2f5f9e;
+}
+[data-palette="dark"], [data-palette="black"] {
+  --code-token-keyword: #d58bb4;
+  --code-token-string: #9cc28a;
+  --code-token-string-expression: #9cc28a;
+  --code-token-constant: #e3a36f;
+  --code-token-function: #85aee0;
+  --code-token-parameter: #d9c08a;
+  --code-token-link: #85aee0;
+}
+/* Phosphor stays green: brighter for keywords, amber for literals. */
+[data-palette="terminal"] {
+  --code-token-keyword: #b4ffc6;
+  --code-token-string: #ffcf66;
+  --code-token-string-expression: #ffcf66;
+  --code-token-constant: #ffb000;
+  --code-token-function: #6bff8f;
+  --code-token-parameter: #45c867;
+  --code-token-link: #ffcf66;
+}
+/* As 95's own editors had it: navy keywords, maroon strings, green comments. */
+[data-palette="win95"] {
+  --code-token-keyword: #000080;
+  --code-token-string: #800000;
+  --code-token-string-expression: #800000;
+  --code-token-constant: #808000;
+  --code-token-function: #800080;
+  --code-token-parameter: #000;
+  --code-token-comment: #008000;
+  --code-token-punctuation: #000;
+  --code-token-link: #000080;
+}
+
+/*
  * The frame: how the big panes (sidebar, chat, panels) sit together. Panes
  * are laid out with a gutter between them and a margin around them, and the
  * canvas shows through both. Classic's gutter is a hairline of line colour,
@@ -391,8 +440,17 @@
 .md :not(pre) > code { padding: 0.1em 0.35em; border-radius: var(--radius-sm); background: var(--color-surface); }
 .md pre { padding: 0.85em 1em; border-radius: var(--radius-lg); background: var(--color-surface); overflow-x: auto; font-size: 13px; line-height: 1.55; }
 .md pre code { font-size: inherit; }
+/* A fenced block: a header with its language and a copy button, over the code, which scrolls on its own. */
+.md .code-block { margin: 0.6em 0; border-radius: var(--radius-lg); background: var(--color-surface); overflow: hidden; }
+.md .code-head { display: flex; align-items: center; justify-content: space-between; padding: 0.4em 0.6em 0 1em; font-size: 11px; line-height: 1.6; color: var(--color-fg-3); user-select: none; }
+.md .code-head button { padding: 0.1em 0.45em; border-radius: var(--radius-md); transition: color 0.15s, background 0.15s; }
+.md .code-head button:hover { color: var(--color-fg); background: var(--color-bg); }
+.md .code-block pre { margin: 0; padding-top: 0.3em; border-radius: 0; background: none; }
 .md table { display: block; overflow-x: auto; border-collapse: collapse; font-size: 0.93em; }
-.md :where(th, td) { padding: 0.4em 0.9em 0.4em 0; border-bottom: 1px solid var(--color-line); text-align: left; }
+/* break-word, not .md's anywhere: anywhere shrinks cells' min-content, so the table splits short columns mid-word to widen the long one. */
+.md :where(th, td) { padding: 0.4em 0.9em 0.4em 0; border-bottom: 1px solid var(--color-line); text-align: left; overflow-wrap: break-word; }
+/* Paths, identifiers and URLs still break anywhere, or one would push the table wide and squeeze the prose beside it to a word a line. */
+.md :where(th, td) :where(code, a) { overflow-wrap: anywhere; }
 .md th { font-weight: 500; color: var(--color-fg-2); }
 .md img { max-width: 100%; border-radius: var(--radius-lg); }
 /* Rendered ones open in the image viewer on a click; edited ones on a double click. */
