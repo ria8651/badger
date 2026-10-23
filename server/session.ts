@@ -494,7 +494,7 @@ export class SessionManager {
     return [...this.sessions.values()].filter((s) => s.cwd === cwd)
   }
 
-  /** A chat in this directory is working, background work included: closing it, or pulling under it, would cut that off. */
+  /** A chat in this directory is working, background work included: closing it would cut that off. */
   busyIn(cwd: string): boolean {
     return this.in(cwd).some((s) => s.working)
   }
