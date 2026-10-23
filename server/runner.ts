@@ -296,8 +296,8 @@ export class Runner implements RunnerApi {
     return gitPush(path).catch(badRequest)
   }
 
+  /** Fine while a chat is working: a fast-forward won't touch files with uncommitted changes, and Claude rereads a file that changed under it. */
   async gitPull(path: string) {
-    if (this.manager.busyIn(path)) throw new BadRequest('A chat is working here. Pull once it has finished.')
     await gitPull(path).catch(badRequest)
   }
 
