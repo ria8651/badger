@@ -16,7 +16,10 @@ import { Button, DiffCount, GhostButton, inputClass } from './ui.tsx'
  * hunks, comments, questions) is in localStorage, per review chat.
  */
 
-const GUIDE_TOOL = 'report_review_guide'
+const GROUP_TOOL = 'review_guide_group'
+const DONE_TOOL = 'review_guide_done'
+/** How the whole guide was reported in one call, before groups came one at a time. */
+const OLD_GUIDE_TOOL = 'report_review_guide'
 /** Where a pinned column sits by its start: below its group's header, which is pinned at the top. */
 const PINNED_TOP = 56
 
@@ -123,42 +126,90 @@ function markPairs(rows: Row[]) {
 
 // ── What Claude said: the guide, and answers ──
 
-/**
- * The guide as the chat's report_review_guide calls left it: each call that was shown replaces the last,
- * except what a group leaves out, which it keeps from the group of the same id before. `writing`: a call is out.
- */
-function guideOf(index: Index): { guide?: ReviewGuide; writing: boolean } {
-  let guide: ReviewGuide | undefined
-  let writing = false
+/** The chat's guide calls, by tool name's end: tools are named mcp__<server>__<tool>. */
+const guideCall = (name?: string) => [GROUP_TOOL, DONE_TOOL, OLD_GUIDE_TOOL].find((t) => name?.endsWith(`__${t}`))
+
+/** The guide calls and how each went, as a string: the guide only needs working out again when this changes. */
+function guideCalls(index: Index): string {
+  let key = ''
   for (const m of index.groups.get('') ?? []) {
     if (m.type !== 'assistant') continue
     for (const b of ((m.message as { content?: Block[] })?.content ?? []) as Block[]) {
-      if (b.type !== 'tool_use' || !b.id || !b.name?.endsWith(`__${GUIDE_TOOL}`)) continue
-      const result = index.results.get(b.id)
+      if (b.type !== 'tool_use' || !b.id || !guideCall(b.name)) continue
+      const r = index.results.get(b.id)
+      key += `${b.id}:${r ? (r.isError ? 'x' : 'ok') : '…'} `
+    }
+  }
+  return key
+}
+
+/**
+ * The guide as the chat's guide calls left it, those that were shown, in order. A group call adds a group or changes one,
+ * keeping what it leaves out, and takes its hunks from any other group; a done call sets the summary and the order, and
+ * says it's whole. (A chat from before groups came one at a time reported the whole guide in one call.) `writing`: a call
+ * is out, or groups have come since the last done.
+ */
+function guideOf(index: Index): { guide?: ReviewGuide; writing: boolean } {
+  let order: string[] = []
+  const groups = new Map<string, ReviewGroup>()
+  let summary = ''
+  let done = false
+  let pending = false
+  for (const m of index.groups.get('') ?? []) {
+    if (m.type !== 'assistant') continue
+    for (const b of ((m.message as { content?: Block[] })?.content ?? []) as Block[]) {
+      const call = b.type === 'tool_use' && b.id ? guideCall(b.name) : undefined
+      if (!call) continue
+      const result = index.results.get(b.id!)
       if (!result) {
-        writing = true
+        pending = true
         continue
       }
       if (result.isError) continue
-      const input = b.input as { summary?: string; groups?: Partial<ReviewGroup>[] }
-      const before = new Map((guide?.groups ?? []).map((g) => [g.id, g]))
-      guide = {
-        summary: input.summary ?? guide?.summary ?? '',
-        groups: (input.groups ?? []).map((g) => {
+      const input = (b.input ?? {}) as Partial<ReviewGroup> & { summary?: string; groups?: Partial<ReviewGroup>[]; order?: string[]; remove?: string[] }
+      if (call === GROUP_TOOL && input.id) {
+        const old = groups.get(input.id)
+        if (!old) order.push(input.id)
+        if (input.hunks) {
+          const moving = new Set(input.hunks)
+          for (const g of groups.values()) if (g.id !== input.id) g.hunks = g.hunks.filter((h) => !moving.has(h))
+        }
+        groups.set(input.id, {
+          id: input.id,
+          title: input.title ?? old?.title ?? input.id,
+          attention: input.attention ?? old?.attention ?? 'medium',
+          kind: input.kind ?? old?.kind,
+          explanation: input.explanation ?? old?.explanation ?? '',
+          hunks: input.hunks ?? old?.hunks ?? [],
+        })
+        done = false
+      } else if (call === DONE_TOOL) {
+        for (const id of input.remove ?? []) groups.delete(id)
+        order = [...new Set([...(input.order ?? []), ...order])].filter((id) => groups.has(id))
+        summary = input.summary ?? summary
+        done = true
+      } else if (call === OLD_GUIDE_TOOL) {
+        const before = new Map(groups)
+        groups.clear()
+        for (const g of input.groups ?? []) {
           const old = before.get(g.id ?? '')
-          return {
+          groups.set(g.id ?? '', {
             id: g.id ?? '',
             title: g.title ?? old?.title ?? g.id ?? '',
             attention: g.attention ?? old?.attention ?? 'medium',
             kind: g.kind ?? old?.kind,
             explanation: g.explanation ?? old?.explanation ?? '',
             hunks: g.hunks ?? [],
-          }
-        }),
+          })
+        }
+        order = [...groups.keys()]
+        summary = input.summary ?? summary
+        done = true
       }
     }
   }
-  return { guide, writing }
+  const guide = groups.size ? { summary, groups: order.flatMap((id) => (groups.has(id) ? [groups.get(id)!] : [])) } : undefined
+  return { guide, writing: pending || (!!guide && !done) }
 }
 
 /** Claude's replies to each question, by its id: what it said after the question went in, until the next message. */
@@ -183,7 +234,7 @@ const quote = (n: Note) => `${n.path}, ${n.where}:\n\`\`\`diff\n${n.code}\n\`\`\
 
 function commentsMessage(comments: Note[], general: string): string {
   return [
-    `I left ${plural(comments.length, 'comment')} on the changes. Make the changes they ask for, and say if you disagree with any. Then call ${GUIDE_TOOL} again so the guide covers what changed.`,
+    `I left ${plural(comments.length, 'comment')} on the changes. Make the changes they ask for, and say if you disagree with any. Then update the guide for what changed (${GROUP_TOOL}, then ${DONE_TOOL}).`,
     general.trim(),
     ...comments.map((c) => `${quote(c)}\n${c.text.trim()}`),
   ]
@@ -193,7 +244,7 @@ function commentsMessage(comments: Note[], general: string): string {
 
 const questionMessage = (n: Note) => `A question about ${quote(n)}\n${n.text.trim()}\n\n(Just answer; don't change anything for this.)`
 
-const UPDATE_GUIDE = `The changes have moved on since your last guide. Call review_diff, then ${GUIDE_TOOL} again with every current hunk, keeping the ids of groups that haven't changed.`
+const UPDATE_GUIDE = `The changes have moved on since your last guide. Call review_diff for what's new, put it in groups with ${GROUP_TOOL} (new ones, or ones that changed), then call ${DONE_TOOL}.`
 
 // ── The page ──
 
@@ -257,27 +308,53 @@ export function ReviewPage(props: {
   createEffect(on(() => props.cwd, () => void load()))
   createEffect(on(() => props.running, (r) => !r && void load(), { defer: true }))
 
-  const told = createMemo(() => guideOf(props.index()))
+  // Worked out again only when a guide call comes or finishes, not on every message.
+  const told = createMemo(on(createMemo(() => guideCalls(props.index())), () => guideOf(untrack(props.index))))
   const guide = () => told().guide
   const answers = createMemo(() => answersOf(props.index(), saved().questions))
 
-  const placed = createMemo(() => {
+  // Kept the same where a hunk is, so reading the diff again (each time a turn ends) doesn't redraw what hasn't changed.
+  const placed = createMemo<Map<string, Placed>>((before) => {
     const all = new Map<string, Placed>()
-    for (const file of diff()?.files ?? []) for (const hunk of file.hunks) all.set(hunk.id, { file, hunk })
+    for (const file of diff()?.files ?? []) {
+      for (const hunk of file.hunks) {
+        const was = before?.get(hunk.id)
+        const same = was && was.hunk.patch === hunk.patch && was.file.path === file.path && was.file.status === file.status && was.file.oldPath === file.oldPath
+        all.set(hunk.id, same ? was : { file, hunk })
+      }
+    }
     return all
   })
+  /** Sections by what they hold, so one that hasn't changed stays the same object and isn't drawn again. */
+  let sectionCache = new Map<string, Section>()
+  const keep = (s: Section): Section => {
+    const key = [s.id, s.title, s.attention, s.kind, s.explanation, ...s.hunks.map((p) => p.hunk.id)].join('\0')
+    const was = sectionCache.get(key)
+    const same = was && was.hunks.every((p, i) => p === s.hunks[i])
+    return same ? was : s
+  }
   const sections = createMemo((): Section[] => {
     const all = placed()
     const g = guide()
+    let out: Section[]
     if (!g) {
-      return (diff()?.files ?? []).map((f) => ({ id: `file:${f.path}`, title: f.path, hunks: f.hunks.map((hunk) => ({ file: f, hunk })) }))
+      out = (diff()?.files ?? []).map((f) => ({ id: `file:${f.path}`, title: f.path, hunks: f.hunks.map((hunk) => all.get(hunk.id)!) }))
+    } else {
+      const inGuide = new Set(g.groups.flatMap((x) => x.hunks))
+      const rest = [...all.values()].filter((p) => !inGuide.has(p.hunk.id))
+      const groups = g.groups
+        .map((x) => ({ ...x, hunks: x.hunks.flatMap((id) => (all.has(id) ? [all.get(id)!] : [])) }))
+        .filter((x) => x.hunks.length)
+      // While Claude is still writing the guide, what it hasn't got to yet goes last; once it's done, anything outside it is new.
+      out = !rest.length
+        ? groups
+        : told().writing
+          ? [...groups, { id: 'rest', title: 'Not in the guide yet', hunks: rest }]
+          : [{ id: 'changed', title: 'Changed since the guide', attention: 'changed' as const, hunks: rest }, ...groups]
     }
-    const inGuide = new Set(g.groups.flatMap((x) => x.hunks))
-    const changed = [...all.values()].filter((p) => !inGuide.has(p.hunk.id))
-    const groups = g.groups
-      .map((x) => ({ ...x, hunks: x.hunks.flatMap((id) => (all.has(id) ? [all.get(id)!] : [])) }))
-      .filter((x) => x.hunks.length)
-    return [...(changed.length ? [{ id: 'changed', title: 'Changed since the guide', attention: 'changed' as const, hunks: changed }] : []), ...groups]
+    out = out.map(keep)
+    sectionCache = new Map(out.map((x) => [[x.id, x.title, x.attention, x.kind, x.explanation, ...x.hunks.map((p) => p.hunk.id)].join('\0'), x]))
+    return out
   })
 
   const viewed = createMemo(() => new Set(saved().viewed))
@@ -357,12 +434,14 @@ export function ReviewPage(props: {
     const top = scroller.getBoundingClientRect().top + PINNED_TOP + 8
     let at: string | undefined
     let hunk: string | undefined
+    let last: Section | undefined
     for (const s of sections()) {
       const el = sectionEls.get(s.id)
-      if (!el || el.getBoundingClientRect().top > top) continue
-      at = s.id
-      hunk = s.hunks.find((p) => (hunkEls.get(p.hunk.id)?.getBoundingClientRect().bottom ?? 0) > top)?.hunk.id
+      if (!el || el.getBoundingClientRect().top > top) break
+      last = s
     }
+    at = last?.id
+    hunk = last?.hunks.find((p) => (hunkEls.get(p.hunk.id)?.getBoundingClientRect().bottom ?? 0) > top)?.hunk.id
     setCurrent(at ?? sections()[0]?.id)
     setCurrentHunk(hunk)
   }
@@ -377,29 +456,49 @@ export function ReviewPage(props: {
    * up) comes into view, and stays there. So each moves only while there's more of it to see, and nothing scrolls on its own.
    * Done by moving each one's sticky top with the scroll, kept between pinned by its start and pinned by its end.
    */
-  const pinned = new Map<HTMLElement, number>()
+  // Sizes come from one ResizeObserver rather than being measured on each scroll, so placing them only writes.
+  const pinned = new Map<HTMLElement, { top: number; height: number }>()
+  let viewHeight = 0
   let scrolled = 0
   const place = (el: HTMLElement, top: number) => {
-    const byEnd = Math.min(PINNED_TOP, scroller.clientHeight - el.offsetHeight - 12)
+    const p = pinned.get(el)
+    if (!p) return
+    const byEnd = Math.min(PINNED_TOP, viewHeight - p.height - 12)
     const at = Math.max(byEnd, Math.min(PINNED_TOP, top))
-    pinned.set(el, at)
+    if (at === p.top && el.style.top) return
+    p.top = at
     el.style.top = `${at}px`
   }
+  const sizes = new ResizeObserver((entries) => {
+    for (const e of entries) {
+      const height = e.borderBoxSize[0]?.blockSize ?? e.contentRect.height
+      if (e.target === scroller) viewHeight = height
+      else {
+        const p = pinned.get(e.target as HTMLElement)
+        if (p) p.height = height
+      }
+    }
+    for (const [el, p] of pinned) place(el, p.top)
+  })
+  onMount(() => sizes.observe(scroller))
+  onCleanup(() => sizes.disconnect())
+  // Once a frame however fast the scroll events come: what's being read is measured first, then the columns move.
+  let frame = 0
   const onScroll = () => {
-    const moved = scroller.scrollTop - scrolled
-    scrolled = scroller.scrollTop
-    for (const [el, top] of pinned) place(el, top - moved)
-    track()
+    if (frame) return
+    frame = requestAnimationFrame(() => {
+      frame = 0
+      const moved = scroller.scrollTop - scrolled
+      scrolled = scroller.scrollTop
+      track()
+      for (const [el, p] of pinned) place(el, p.top - moved)
+    })
   }
   const pin = (el: HTMLElement) => {
-    pinned.set(el, PINNED_TOP)
-    const observer = new ResizeObserver(() => place(el, pinned.get(el) ?? PINNED_TOP))
-    requestAnimationFrame(() => {
-      observer.observe(el)
-      observer.observe(scroller)
-    })
+    pinned.set(el, { top: PINNED_TOP, height: 0 })
+    sizes.observe(el)
     onCleanup(() => {
-      observer.disconnect()
+      sizes.unobserve(el)
       pinned.delete(el)
     })
   }
@@ -704,16 +803,30 @@ function HunkView(props: {
   const [shown, setShown] = createSignal(false)
   const nothing = () => !props.rows.length
   const folded = () => f().generated && !shown()
-  // Highlighted once it's open, so a long review only highlights what's been looked at.
+  // Highlighted once it's open and near the screen, so a long review only highlights what's looked at.
+  const [near, setNear] = createSignal(false)
+  let box!: HTMLDivElement
+  onMount(() => {
+    const seen = new IntersectionObserver((entries) => entries.some((e) => e.isIntersecting) && (setNear(true), seen.disconnect()), { rootMargin: '800px' })
+    seen.observe(box)
+    onCleanup(() => seen.disconnect())
+  })
   const [html] = createResource(
-    () => props.open && !folded() && props.rows.length > 0 && { rows: props.rows, lang: languageOf(f().path) },
+    () => near() && props.open && !folded() && props.rows.length > 0 && { rows: props.rows, lang: languageOf(f().path) },
     async ({ rows, lang }) => ({ rows, lines: await highlightRows(rows, lang) }),
   )
   /** Only for the rows it was made from: while new rows are highlighted, the last ones' lines would be out of step. */
   const lineHtml = (i: number) => (html()?.rows === props.rows ? html()!.lines?.[i] : undefined)
 
   return (
-    <div ref={props.ref} class={`scroll-mt-14 overflow-hidden rounded-lg border ${props.viewed ? 'border-line/60' : 'border-line'}`}>
+    // Off-screen hunks skip layout and paint until they come near, with a guess at their height until they've been drawn once.
+    <div
+      ref={(el) => {
+        box = el
+        props.ref(el)
+      }}
+      style={{ 'content-visibility': 'auto', 'contain-intrinsic-size': `auto ${Math.min(props.rows.length, 400) * 20 + 30}px` }}
+      class={`scroll-mt-14 overflow-hidden rounded-lg border ${props.viewed ? 'border-line/60' : 'border-line'}`}>
       <div class="flex items-center gap-2 bg-surface/60 px-2 py-1">
         <button onClick={props.onToggle} class="grid size-5 shrink-0 place-items-center rounded text-fg-3 hover:bg-surface hover:text-fg-2">
           {props.open ? <ChevronDown class="size-3.5" /> : <ChevronRight class="size-3.5" />}
