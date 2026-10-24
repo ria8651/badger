@@ -230,22 +230,15 @@ function answersOf(index: Index, questions: Question[]): Map<string, string> {
 
 // ── The outline ──
 
-/**
- * A row of a group's outline: a folder, a file, or one of a file's hunks when it has several. `line` is where a hunk starts,
- * on the new side; a file with one hunk has its own.
- */
-type OutlineRow =
-  | { kind: 'folder'; name: string; path: string; depth: number }
-  | { kind: 'file'; name: string; path: string; depth: number; hunks: Placed[]; line?: string }
-  | { kind: 'hunk'; path: string; depth: number; hunks: [Placed]; line?: string }
+/** A row of a group's outline: a folder, or a file with the group's hunks in it. */
+type OutlineRow = { kind: 'folder'; name: string; path: string; depth: number } | { kind: 'file'; name: string; path: string; depth: number; hunks: Placed[] }
 
 type Folder = { folders: Map<string, Folder>; files: Map<string, Placed[]> }
 
-const startLine = (p: Placed) => /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(p.hunk.patch)?.[1]
-
 /**
  * A group's hunks as a tree of folders and files, flattened into rows. A folder with only one folder in it shares its row,
- * as a/b/, and everything keeps the order it first comes in the group, which is the order it's read in.
+ * as a/b/, and everything keeps the order it first comes in the group, which is the order it's read in. A file is current, and
+ * ticked, by all its hunks in the group.
  */
 const outlines = new WeakMap<Placed[], OutlineRow[]>()
 function outlineRows(hunks: Placed[]): OutlineRow[] {
@@ -275,11 +268,7 @@ function outlineRows(hunks: Placed[]): OutlineRow[] {
       rows.push({ kind: 'folder', name, path, depth })
       walk(sub, `${path}/`, depth + 1)
     }
-    for (const [name, list] of folder.files) {
-      const path = prefix + name
-      rows.push({ kind: 'file', name, path, depth, hunks: list, line: list.length === 1 ? startLine(list[0]) : undefined })
-      if (list.length > 1) for (const p of list) rows.push({ kind: 'hunk', path, depth: depth + 1, hunks: [p], line: startLine(p) })
-    }
+    for (const [name, list] of folder.files) rows.push({ kind: 'file', name, path: prefix + name, depth, hunks: list })
   }
   walk(root, '', 0)
   outlines.set(hunks, rows)
@@ -631,23 +620,16 @@ export function ReviewPage(props: {
                               {row.name}/
                             </div>
                           )
-                        // A file with one hunk is its row; one with more is a heading, its hunks under it.
-                        const target = row.kind === 'hunk' || row.hunks.length === 1 ? row.hunks[0] : undefined
                         return (
                           <button
-                            ref={(el) => createEffect(() => here() && target && el.scrollIntoView({ block: 'nearest' }))}
-                            onClick={() => jumpTo(hunkEls.get((target ?? row.hunks[0]).hunk.id))}
+                            ref={(el) => createEffect(() => here() && el.scrollIntoView({ block: 'nearest' }))}
+                            onClick={() => jumpTo(hunkEls.get(row.hunks[0].hunk.id))}
                             title={row.path}
                             style={indent}
-                            class={`flex w-full items-center gap-2 py-0.5 pr-3 text-left font-mono text-xs ${here() && target ? 'bg-surface text-fg' : done() ? 'text-fg-3 hover:bg-surface/60' : 'text-fg-2 hover:bg-surface/60'}`}
+                            class={`flex w-full items-center gap-2 py-0.5 pr-3 text-left font-mono text-xs ${here() ? 'bg-surface text-fg' : done() ? 'text-fg-3 hover:bg-surface/60' : 'text-fg-2 hover:bg-surface/60'}`}
                           >
-                            <span class={`h-3.5 w-0.5 shrink-0 rounded-full ${here() && target ? 'bg-primary' : target ? 'bg-line' : 'bg-transparent'}`} />
-                            <span class="min-w-0 flex-1 truncate">
-                              {row.kind === 'file' ? row.name : ''}
-                              <Show when={target && row.line}>
-                                <span class="text-fg-3">:{row.line}</span>
-                              </Show>
-                            </span>
+                            <span class={`h-3.5 w-0.5 shrink-0 rounded-full ${here() ? 'bg-primary' : 'bg-line'}`} />
+                            <span class="min-w-0 flex-1 truncate">{row.name}</span>
                             <Show when={done()}>
                               <Check class="size-3 shrink-0 text-ok" />
                             </Show>
