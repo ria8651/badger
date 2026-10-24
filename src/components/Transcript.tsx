@@ -43,13 +43,17 @@ export function Transcript(props: TranscriptProps & { sessionId?: string; index?
   )
 }
 
-/** One conversation: the chat's own, or a subagent's nested in the call that started it. */
-export function Messages(props: TranscriptProps & { nested?: boolean }) {
+/**
+ * One conversation: the chat's own, or a subagent's nested in the call that started it. `folded`: Claude's work always
+ * folds, whatever the detail setting, e.g. for an answer shown somewhere other than the chat.
+ */
+export function Messages(props: TranscriptProps & { nested?: boolean; folded?: boolean }) {
   const index = useIndex()
   const isChecking = useChecking()
   const view = createMemo(() => buildView(props.messages, !!props.nested))
   const folded = createMemo(() => foldWork(view().items))
-  const rows = (): Row[] => (detail() === 'full' ? view().items : folded().rows)
+  const full = () => detail() === 'full' && !props.folded
+  const rows = (): Row[] => (full() ? view().items : folded().rows)
 
   const partialWork = () => (
     <>
@@ -234,7 +238,7 @@ export function Messages(props: TranscriptProps & { nested?: boolean }) {
     <div>
       <For each={rows()}>{render}</For>
       <Show
-        when={detail() === 'full'}
+        when={full()}
         fallback={
           // Nothing to fold yet: the turn has just started, or it's only thinking so far.
           <Show when={props.running && !props.compacting && !folded().tail && props.partial?.type !== 'text'}>
@@ -249,7 +253,7 @@ export function Messages(props: TranscriptProps & { nested?: boolean }) {
           <Markdown text={props.partial?.text ?? ''} />
         </div>
       </Show>
-      <Show when={props.compacting} fallback={<Show when={detail() === 'full' && props.working && !props.partial}><WorkingLine /></Show>}>
+      <Show when={props.compacting} fallback={<Show when={full() && props.working && !props.partial}><WorkingLine /></Show>}>
         {(since) => <CompactingLine since={since()} tokens={lastContext(props.messages)} />}
       </Show>
     </div>

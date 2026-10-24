@@ -1,8 +1,8 @@
 import { mkdir, readFile, stat } from 'node:fs/promises'
 import { hostname } from 'node:os'
-import { extname, isAbsolute } from 'node:path'
+import { extname, isAbsolute, join } from 'node:path'
 import { renameSession } from '@anthropic-ai/claude-agent-sdk'
-import { IMAGE_EXTENSIONS, IMAGE_TYPES, type ChatCommand, type ChatCommandReply, type ImageAttachment } from '../shared/protocol.ts'
+import { IMAGE_EXTENSIONS, IMAGE_TYPES, type ChatCommand, type ChatCommandReply, type ImageAttachment, type ReviewScope } from '../shared/protocol.ts'
 import { BOARD_INSTRUCTIONS, BOARD_SERVER, boardOps } from './boardTools.ts'
 import { Children } from './children.ts'
 import { listModels } from './claudeProbe.ts'
@@ -14,6 +14,8 @@ import { Later, Peer, remote, type Link, type Remote } from './peer.ts'
 import { bridgeOps, openPreviewOp, previewInstructions } from './previewTools.ts'
 import type { CreateSpec } from './ptyProtocol.ts'
 import { REVIEW_TOOL, reviewTool } from './review.ts'
+import { reviewDiff } from './reviewDiff.ts'
+import { REVIEW_DIFF_TOOL, REVIEW_DONE_TOOL, REVIEW_GROUP_TOOL, reviewGuideTools } from './reviewGuide.ts'
 import {
   RUNNER_METHODS,
   RUNNER_PROTOCOL,
@@ -40,6 +42,8 @@ import { excludeWorktrees, gitPull, gitPush, gitStatus, inaccessible, removeWork
 const MERGE_TOOL_NAME = `mcp__${BOARD_SERVER}__${MERGE_TOOL}`
 // Reviewing only starts a chat that's told to report, not change anything.
 const REVIEW_TOOL_NAME = `mcp__${BOARD_SERVER}__${REVIEW_TOOL}`
+// A review chat's own: reading the diff, and showing its guide.
+const REVIEW_GUIDE_TOOL_NAMES = [REVIEW_DIFF_TOOL, REVIEW_GROUP_TOOL, REVIEW_DONE_TOOL].map((t) => `mcp__${BOARD_SERVER}__${t}`)
 /** The biggest file the browser can fetch from a runner, e.g. an image to attach. */
 const MAX_FILE_BYTES = 20 * 1024 * 1024
 
@@ -69,6 +73,8 @@ export class Runner implements RunnerApi {
   private local = false
   /** The chats the hub has put on this machine. Only these are copied to it. */
   private chats = new Set<string>()
+  /** The review chats among them, as the hub said when it sent them a message. */
+  private reviews = new Set<string>()
   private children: Children
   private sync: TranscriptSync
   private contexts: ContextReader
@@ -106,10 +112,11 @@ export class Runner implements RunnerApi {
                 MERGE_TOOL_NAME,
               ),
               reviewTool({ cardOf: (id) => this.hub.chatCard(id), manager: this.manager, children: this.children }, sessionId, cwd, REVIEW_TOOL_NAME),
+              ...(this.reviews.has(sessionId) ? reviewGuideTools(sessionId, cwd, join(this.opts.dataDir, 'review-guides')) : []),
             ]),
             [TERMINAL_SERVER]: mcpServer(TERMINAL_SERVER, [...TERMINAL_INSTRUCTIONS, ...previewInstructions(this.local)].join('\n'), ops, ctx),
           },
-          allowedTools: [...ops.filter((o) => o.autoAllow).map(toolName), MERGE_TOOL_NAME, REVIEW_TOOL_NAME],
+          allowedTools: [...ops.filter((o) => o.autoAllow).map(toolName), MERGE_TOOL_NAME, REVIEW_TOOL_NAME, ...REVIEW_GUIDE_TOOL_NAMES],
           turnContext: () => this.hub.cardContext(sessionId),
           contextAdded: (text) => void this.hub.contextSeen(sessionId, text).catch(() => {}),
         }
@@ -230,6 +237,7 @@ export class Runner implements RunnerApi {
   async send(sessionId: string, opts: OpenOptions, text: string, pastes: string[], images: ImageAttachment[]): Promise<void> {
     // The hub only sends chats it has put on this machine.
     this.chats.add(sessionId)
+    if (opts.review) this.reviews.add(sessionId)
     const isNew = !this.manager.get(sessionId)
     if (isNew && opts.worktree !== undefined && opts.cwd) {
       await excludeWorktrees(opts.cwd).catch(() => {
@@ -294,6 +302,10 @@ export class Runner implements RunnerApi {
 
   gitPush(path: string) {
     return gitPush(path).catch(badRequest)
+  }
+
+  reviewDiff(path: string, scope: ReviewScope, context: number) {
+    return reviewDiff(path, scope, context).catch(badRequest)
   }
 
   /** Fine while a chat is working: a fast-forward won't touch files with uncommitted changes, and Claude rereads a file that changed under it. */

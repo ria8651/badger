@@ -1,9 +1,10 @@
 import { Show, createEffect, createSignal, on, onCleanup } from 'solid-js'
-import { Archive, ArchiveRestore, FolderInput, Zap } from '../icons'
+import { Archive, ArchiveRestore, FileDiff, FolderInput, Zap } from '../icons'
 import type { GitStatus, SessionSummary } from '../../shared/protocol.ts'
 import type { ChatAction } from '../actions.ts'
 import { api } from '../api.ts'
 import { basename, worktreeOf } from '../folders.ts'
+import { ago } from '../format.ts'
 import type { Ws } from '../terminals.ts'
 import { FileChat } from './FileChat.tsx'
 import { RenameChat } from './RenameChat.tsx'
@@ -58,14 +59,6 @@ export function createGitStatus(target: () => { dir: string; machine: string } |
 /** e.g. "+126 −38 in 4 files". */
 const uncommitted = (g: GitStatus) => `+${g.added} −${g.removed} in ${plural(g.changes, 'file')}`
 
-const ago = (ms: number) => {
-  const s = Math.max(0, (Date.now() - ms) / 1000)
-  if (s < 60) return 'just now'
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
-  return `${Math.floor(s / 86400)}d ago`
-}
-
 /** Something the git menu can do: run git here, or ask Claude to. */
 type GitItem = MenuItem & { run: () => void }
 
@@ -87,6 +80,8 @@ export function ChatHeader(props: {
   actions: ChatAction[]
   /** Sends a prompt to the chat. Absent before it's started, so the header only does what needs no chat. */
   onAsk?: (prompt: string) => void
+  /** Opens the diff review of this folder's changes, starting one if there isn't one. */
+  onReview?: () => void
 }) {
   const [busy, setBusy] = createSignal<'push' | 'pull'>()
   const card = () => props.session && cardOf(props.session.id)
@@ -129,6 +124,10 @@ export function ChatHeader(props: {
     const g = props.git
     if (!g) return []
     const items: GitItem[] = []
+    const review = props.onReview
+    if (review) {
+      items.push({ label: 'Diff review', description: 'Read every change yourself, grouped and explained by Claude, and comment line by line.', run: review })
+    }
     if (canPush(g) && !g.behind) {
       items.push(
         g.upstream
@@ -280,6 +279,11 @@ export function ChatHeader(props: {
         )}
       </Show>
       <div class="ml-auto flex shrink-0 items-center gap-1">
+        <Show when={props.git && props.onReview}>
+          <button type="button" onClick={props.onReview} title="Diff review: read every change, grouped and explained by Claude" class={`${button} text-fg-3`}>
+            <FileDiff class="size-3.5" />
+          </button>
+        </Show>
         <Show when={props.session}>
           {(s) => (
             <>

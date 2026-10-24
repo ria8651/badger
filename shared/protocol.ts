@@ -94,6 +94,8 @@ export interface SessionSummary {
   archived: boolean
   /** Its directory no longer exists, e.g. a removed worktree. */
   gone?: boolean
+  /** A review chat: it guides you through its checkout's changes, and its page shows them. */
+  review?: boolean
   /** A side chat (/btw): the chat it's under, shown in a panel beside that rather than in the sidebar. */
   sideOf?: string
   /** For a side chat, when it was forked: it knows its parent as it was then. */
@@ -167,6 +169,84 @@ export interface GitStatus {
   base?: { branch: string; ahead: number; behind: number }
   /** When the repo last fetched, ms since epoch; absent if it never has. */
   fetchedAt?: number
+}
+
+/**
+ * What a review looks at, as changes between two trees. `base`: everything not on the base yet (the main checkout's
+ * branch in a worktree, else the upstream), committed or not. `uncommitted`: against HEAD. `commit`: one commit.
+ * `since`: against a snapshot taken earlier, e.g. when the last review was sent.
+ */
+export type ReviewScope = { kind: 'base' } | { kind: 'uncommitted' } | { kind: 'commit'; sha: string } | { kind: 'since'; tree: string }
+
+export interface ReviewCommit {
+  sha: string
+  subject: string
+  author: string
+  /** ms since epoch. */
+  date: number
+}
+
+export interface ReviewFile {
+  path: string
+  /** Where a renamed file was. */
+  oldPath?: string
+  status: 'added' | 'modified' | 'deleted' | 'renamed'
+  added: number
+  removed: number
+  binary: boolean
+  /**
+   * The file's hunks. A file with nothing to show line by line (binary, too big, a bare rename or mode change)
+   * has one hunk with an empty patch, so every file can be grouped and ticked off like the rest.
+   */
+  hunks: ReviewHunk[]
+  /** Too big to show; added and removed still count. */
+  truncated?: boolean
+  /** A lockfile or the like, folded unless asked for. */
+  generated?: boolean
+  /** The file's blob as it is now, so "viewed" is undone by a later change. Absent if it was deleted. */
+  blob?: string
+}
+
+/** One hunk of a file's diff, by an id that stays the same while its lines do. */
+export interface ReviewHunk {
+  /** e.g. h3f2a91c0: from the file's path and the hunk's lines, not where they are. */
+  id: string
+  /** From its @@ line; empty when there are no lines to show. */
+  patch: string
+}
+
+export interface ReviewDiff {
+  branch: string
+  /** What `base` compares with, e.g. spike or origin/spike; absent with nothing to compare with. */
+  base?: string
+  /** Commits on HEAD that aren't on the base, newest first. */
+  commits: ReviewCommit[]
+  /** The working tree as it was read, untracked files included: pass it back as `since` to see what changed after. */
+  snapshot: string
+  files: ReviewFile[]
+}
+
+/** How carefully a person should read a group: new logic where a mistake matters, ordinary changes, or mechanical ones. */
+export const REVIEW_ATTENTION = ['high', 'medium', 'low'] as const
+export type ReviewAttention = (typeof REVIEW_ATTENTION)[number]
+
+/** Hunks that are one change, wherever they are, with what a reader needs to follow them. */
+export interface ReviewGroup {
+  /** Claude's, e.g. "settings-field"; the same id in a later guide is the same group. */
+  id: string
+  title: string
+  attention: ReviewAttention
+  /** A word or two, e.g. "new logic", "rename", "tests". */
+  kind?: string
+  /** Markdown: a sentence for something mechanical, plain-language background for something hard. */
+  explanation: string
+  hunks: string[]
+}
+
+/** A review chat's guide to its changes: every hunk in one group, groups in reading order. */
+export interface ReviewGuide {
+  summary: string
+  groups: ReviewGroup[]
 }
 
 /** A folder new chats can start in. A git repo's is its main checkout, with its worktrees alongside. */

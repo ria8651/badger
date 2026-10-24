@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { WebSocket } from 'ws'
 import { SIDE_NOTE, renderMoveNote } from '../../shared/forkNote.ts'
 import {
@@ -10,6 +11,7 @@ import {
   type PermissionMode,
   type ServerEvent,
   type SessionSummary,
+  type WireMessage,
 } from '../../shared/protocol.ts'
 import type { Analytics, EventFields } from '../analytics.ts'
 import type { Attention } from '../attention.ts'
@@ -21,6 +23,7 @@ import { BadRequest, absolutePath, badRequest, message } from '../errors.ts'
 import { busyForkPoint, forkTranscript } from '../fork.ts'
 import type { Connection, Machines } from '../machines.ts'
 import type { ChatPlacement } from '../placement.ts'
+import { reviewPrompt } from '../reviewGuide.ts'
 import { IDLE, type LiveSnapshot, type TranscriptLines } from '../runnerProtocol.ts'
 import { suggestTitle } from '../titles.ts'
 import { externalizeImages } from '../transcriptImages.ts'
@@ -90,6 +93,8 @@ export class Chats {
   private rootAnswers = new Map<string, Map<string, string | Promise<string | undefined>>>()
   /** By machine, folders it didn't answer for lately, and when: not waited on again for GONE_TTL_MS. */
   private rootMisses = new Map<string, Map<string, number>>()
+  /** Diff reviews being started, by machine and folder. */
+  private reviewsStarting = new Map<string, Promise<{ sessionId: string }>>()
   /** Chats whose history grew with no live process, whose viewers get it again. */
   private stale = new Set<string>()
   private readonly soonListChanged: () => void
@@ -118,6 +123,7 @@ export class Chats {
     }
     const listed = await transcripts.list(LIST_LIMIT, childIds)
     const archived = meta.archivedIds()
+    const reviews = meta.reviewIds()
     const where = placement.machinesOf(listed.map((s) => s.sessionId))
     const gone = await this.goneFolders(listed.flatMap((s) => (s.cwd && !machines.live(s.sessionId) ? [{ machine: where.get(s.sessionId), cwd: s.cwd }] : [])))
     const summaries: SessionSummary[] = listed.map((s) => {
@@ -133,6 +139,7 @@ export class Chats {
         running: !!live?.running,
         archived: archived.has(s.sessionId),
         gone: !live && !!s.cwd && !!gone.get(machine ?? '')?.has(s.cwd),
+        ...(reviews.has(s.sessionId) ? { review: true } : {}),
         ...under(s.sessionId),
       }
     })
@@ -142,12 +149,13 @@ export class Chats {
         if (childIds.has(live.id) || summaries.some((s) => s.id === live.id)) continue
         summaries.unshift({
           id: live.id,
-          title: 'New chat',
+          title: reviews.has(live.id) ? 'Diff review' : 'New chat',
           cwd: live.cwd,
           machine: runner.id,
           lastModified: Date.now(),
           running: live.running,
           archived: false,
+          ...(reviews.has(live.id) ? { review: true } : {}),
           ...under(live.id),
         })
       }
@@ -417,7 +425,7 @@ export class Chats {
     const fork = placed ? meta.forkStart(sessionId) : undefined
     const where = placed ? { cwd: fork?.cwd, worktree: fork?.worktree } : { cwd: event.cwd, worktree: event.worktree }
     try {
-      await runner.remote.send(sessionId, { ...where, mode: event.mode, model: event.model }, text, pastes, images)
+      await runner.remote.send(sessionId, { ...where, mode: event.mode, model: event.model, review: meta.isReview(sessionId) || undefined }, text, pastes, images)
       if (fork) meta.forkStarted(sessionId)
     } catch (err) {
       // Turned away, so it never started: it can go elsewhere. Anything else, e.g. the connection dropping, it may have.
@@ -540,6 +548,63 @@ export class Chats {
     return fork.sessionId
   }
 
+  /**
+   * A diff review of a folder's changes: the open one there, or a new review chat in it, on `card` if given and
+   * otherwise the card of the chat it was started `from`. It's told what that chat (or, if it has nothing in it yet,
+   * the folder's latest) was asked, so its guide knows what the changes are for.
+   */
+  review(body: { cwd?: unknown; machine?: unknown; from?: unknown; card?: unknown }): Promise<{ sessionId: string }> {
+    const cwd = absolutePath(body.cwd)
+    const runner = this.d.machines.fromRequest(body.machine)
+    if (body.card !== undefined && typeof body.card !== 'number') throw new BadRequest('card must be a card id')
+    // One start at a time per folder: a second (a double click, another tab) gets the same review chat, not one of its own.
+    const key = `${runner.id}\0${cwd}`
+    let starting = this.reviewsStarting.get(key)
+    if (!starting) {
+      starting = this.startReview(cwd, runner, body).finally(() => this.reviewsStarting.delete(key))
+      this.reviewsStarting.set(key, starting)
+    }
+    return starting
+  }
+
+  private async startReview(cwd: string, runner: Connection, body: { from?: unknown; card?: unknown }): Promise<{ sessionId: string }> {
+    const { db, board, meta, transcripts, placement } = this.d
+    // Newest first.
+    const here = (await this.list()).filter((s) => s.cwd === cwd && (s.machine ?? LOCAL_MACHINE) === runner.id && !s.archived)
+    const open = here.find((s) => s.review)
+    if (open) return { sessionId: open.id }
+    const from = here.find((s) => s.id === body.from && !s.review) ?? here.find((s) => !s.review && !s.sideOf)
+    const prompt = reviewPrompt(from ? askedIn(await transcripts.transcript(from.id).catch(() => [])) : [])
+    const sessionId = randomUUID()
+    db.transaction(() => {
+      placement.assign(sessionId, runner.id)
+      meta.addReview({ sessionId, sourceId: from?.id ?? '' })
+    })
+    const card = typeof body.card === 'number' ? board.card(body.card) : from && board.cardOf(from.id)
+    if (card) {
+      board.linkSession(card.id, sessionId, UI)
+      this.d.cardsChanged()
+    }
+    try {
+      await runner.remote.send(sessionId, { cwd, mode: 'auto', review: true }, prompt, [], [])
+    } catch (err) {
+      // Turned away, so it never started: nothing of it is kept. Anything else, e.g. the connection dropping, it may have.
+      if (err instanceof BadRequest) {
+        db.transaction(() => {
+          placement.unassign(sessionId, runner.id)
+          meta.removeReview(sessionId)
+        })
+        if (card) {
+          board.unlinkSession(card.id, sessionId, UI)
+          this.d.cardsChanged()
+        }
+      }
+      throw err
+    }
+    this.d.listChanged()
+    return { sessionId }
+  }
+
   /** The list, and archive, title, fork and side chat routes. Archiving only hides a chat; its transcript is left alone. */
   routes(): Route[] {
     const { board, meta, transcripts, machines, placement } = this.d
@@ -547,6 +612,7 @@ export class Chats {
     return [
       ['GET', '/api/sessions', async () => [200, await this.list()]],
       ['POST', path('fork'), async ({ params: [id], json }) => [201, await this.fork(id, await json())]],
+      ['POST', '/api/reviews', async ({ json }) => [200, await this.review(await json())]],
       ['POST', path('btw'), async ({ params: [id], json }) => [201, await this.btw(id, await json())]],
       ['POST', path('archive'), ({ params: [id] }) => (meta.setArchived(id, true, UI), [204, null])],
       ['DELETE', path('archive'), ({ params: [id] }) => (meta.setArchived(id, false, UI), [204, null])],
@@ -641,3 +707,21 @@ export class Chats {
 }
 
 const hasAttachments = (a: DraftAttachments) => a.pastes.length > 0 || a.images.length > 0
+
+/** How much of what a chat was asked a review chat is told: each message, and all of them. */
+const ASKED_EACH = 1500
+const ASKED_ALL = 8000
+
+/** What the user typed in a chat, in order, cut down to fit: the first message and the latest are kept over the ones between. */
+function askedIn(messages: WireMessage[]): string[] {
+  const asked = messages.flatMap((m) => {
+    if (m.type !== 'user' || m.isMeta || m.isSynthetic || m.isCompactSummary || m.parent_tool_use_id) return []
+    const content = (m.message as { content?: unknown } | undefined)?.content
+    const blocks = typeof content === 'string' ? [content] : Array.isArray(content) ? content.flatMap((b) => (b?.type === 'text' ? [String(b.text ?? '')] : [])) : []
+    // Harness-added text (reminders, command output) is wrapped in tags.
+    const text = blocks.filter((b) => !b.trimStart().startsWith('<')).join('\n').trim()
+    return text ? [text.length > ASKED_EACH ? `${text.slice(0, ASKED_EACH)}…` : text] : []
+  })
+  while (asked.length > 2 && asked.reduce((n, a) => n + a.length, 0) > ASKED_ALL) asked.splice(1, 1)
+  return asked
+}

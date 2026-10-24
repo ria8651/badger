@@ -128,6 +128,24 @@ export class ChatMeta {
     this.db.sql.prepare('DELETE FROM forks WHERE session_id = ?').run(sessionId)
   }
 
+  /** `sourceId` is the chat it was started from, or empty if there was none with anything in it. */
+  removeReview(sessionId: string): void {
+    this.db.sql.prepare('DELETE FROM review_sessions WHERE session_id = ?').run(sessionId)
+  }
+
+  addReview(review: { sessionId: string; sourceId: string }): void {
+    this.db.sql.prepare('INSERT INTO review_sessions (session_id, source_id, created_at) VALUES (?, ?, ?)').run(review.sessionId, review.sourceId, Date.now())
+  }
+
+  reviewIds(): Set<string> {
+    const rows = this.db.sql.prepare('SELECT session_id FROM review_sessions').all() as { session_id: string }[]
+    return new Set(rows.map((r) => r.session_id))
+  }
+
+  isReview(sessionId: string): boolean {
+    return !!this.db.sql.prepare('SELECT 1 FROM review_sessions WHERE session_id = ?').get(sessionId)
+  }
+
   addSideChat(sessionId: string, parentId: string): void {
     this.db.sql.prepare('INSERT INTO side_chats (session_id, parent_session, created_at) VALUES (?, ?, ?)').run(sessionId, parentId, Date.now())
   }

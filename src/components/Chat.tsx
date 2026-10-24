@@ -20,6 +20,7 @@ import { FolderPicker } from './FolderPicker.tsx'
 import { ForkDialog } from './ForkDialog.tsx'
 import { PermissionPrompt } from './PermissionPrompt.tsx'
 import { PlanPane, latestPlan } from './Plan.tsx'
+import { ReviewPage } from './Review.tsx'
 import { showError } from './Popover.tsx'
 import { TaskTray, trayItems, waitingOnTask } from './TaskTray.tsx'
 import { reveal, revealed, toolLabel } from './ToolCard.tsx'
@@ -118,7 +119,7 @@ export function Chat(props: {
   const tasks = createMemo(() => trayItems(index(), state.running, state.background, cwd()))
   const children = createChildChats(state)
 
-  const sticky = createStickyScroll()
+  const sticky = createStickyScroll(`chat:${untrack(() => props.sessionId)}`)
   let content!: HTMLDivElement
   let bottom!: HTMLDivElement
   let scroller!: HTMLDivElement
@@ -127,6 +128,14 @@ export function Chat(props: {
     if (!touch.matches) composer?.focus()
     sticky.follow(content, bottom, scroller)
     props.onReady?.(() => composer?.focus())
+  })
+  // Back where it was left, once there's a transcript to scroll; one left at the bottom just stays stuck there.
+  let restored = false
+  createEffect(() => {
+    // A review chat's conversation can't be scrolled while the review is showing in its place.
+    if (restored || !state.loaded || !state.messages.length || reviewing()) return
+    restored = true
+    requestAnimationFrame(() => sticky.restore(content))
   })
 
   /** Where tasks, plans and attachments open beside the chat. An embedded chat has nowhere: they stay in it. */
@@ -244,6 +253,16 @@ export function Chat(props: {
     if (edit) composer?.focus()
   }
 
+  /** A diff review chat shows the review in place of the conversation, until you switch. */
+  const isReview = () => !!session()?.review
+  const [showConversation, setShowConversation] = createSignal(false)
+  const reviewing = () => isReview() && !showConversation()
+  const startReview = () =>
+    void api.startReview({ cwd: cwd()!, machine: machine(), from: props.sessionId, card: card()?.id }).then(
+      ({ sessionId }) => openChat(sessionId),
+      (err: Error) => showError("Couldn't start a diff review", err.message),
+    )
+
   /** The end of the turn being forked from, while picking where the fork goes. */
   const [forking, setForking] = createSignal<string>()
   const openChat = (id: string) => navigate({ kind: 'chat', id })
@@ -265,8 +284,55 @@ export function Chat(props: {
           fetching={git.fetching()}
           onRefresh={git.refresh}
           actions={actions()}
+          onReview={isReview() || !cwd() || isScratch(cwd()) ? undefined : startReview}
           onAsk={picking() ? undefined : (prompt) => send(prompt)}
         />
+      </Show>
+      <Show when={isReview() && !props.embedded}>
+        <div class="flex shrink-0 items-center gap-1 border-b border-line px-3 py-1 text-xs">
+          <For each={[false, true]}>
+            {(conversation) => (
+              <button
+                onClick={() => setShowConversation(conversation)}
+                class={`flex items-center gap-1.5 rounded-md px-2 py-1 ${showConversation() === conversation ? 'bg-surface text-fg' : 'text-fg-3 hover:text-fg-2'}`}
+              >
+                {conversation ? 'Conversation' : 'Diff review'}
+                <Show when={conversation && working()}>
+                  <span class="size-1.5 animate-pulse rounded-full bg-accent" />
+                </Show>
+              </button>
+            )}
+          </For>
+        </div>
+        <Show when={reviewing()}>
+          <ChildChats.Provider value={children.state}>
+            <Checking.Provider value={(id) => state.checking.includes(id)}>
+              <ReviewPage
+                sessionId={props.sessionId}
+                cwd={cwd()}
+                machine={machine()}
+                index={index}
+                running={state.running}
+                partial={state.partial}
+                bashOutput={state.bashOutput}
+                children={state.children}
+                onSend={state.gone || stranded() ? undefined : (text) => send(text)}
+              />
+            </Checking.Provider>
+          </ChildChats.Provider>
+          {/* Claude asking for something can't wait for you to switch to the conversation. */}
+          <Show when={state.permissions.length || state.error}>
+            <div class="flex shrink-0 flex-col gap-2 border-t border-line p-3">
+              <For each={state.permissions}>{(p) => <PermissionPrompt sessionId={props.sessionId} permission={p} cwd={cwd()} from={p.agent} />}</For>
+              <Show when={state.error}>
+                <Notice tone="danger">
+                  <span class="flex-1">{state.error}</span>
+                  <button onClick={chat.clearError} class="opacity-70 hover:opacity-100">Dismiss</button>
+                </Notice>
+              </Show>
+            </div>
+          </Show>
+        </Show>
       </Show>
       <div
         ref={(el) => {
@@ -276,7 +342,7 @@ export function Chat(props: {
         onScroll={sticky.onScroll}
         onWheel={sticky.onWheel}
         // A size container, so prompts above the composer can fit this pane rather than the window.
-        class="min-h-0 flex-1 overflow-y-auto [container-type:size] [overflow-anchor:none]"
+        class={`min-h-0 flex-1 overflow-y-auto [container-type:size] [overflow-anchor:none] ${reviewing() && !props.embedded ? 'hidden' : ''}`}
       >
         {/* One column for the transcript and the composer. Its padding leaves room for your messages and the
             composer to hang out by their own padding, so the text in them lines up with Claude's. */}

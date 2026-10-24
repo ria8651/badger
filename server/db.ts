@@ -246,6 +246,12 @@ const MIGRATIONS = [
      replaced_at INTEGER NOT NULL
    );
    CREATE INDEX transcript_lines_replaced_session ON transcript_lines_replaced (session_id, subpath, replaced_at);`,
+  // Diff review chats, and the chat each was started from (empty if none had anything in it).
+  `CREATE TABLE review_sessions (
+     session_id TEXT PRIMARY KEY,
+     source_id TEXT NOT NULL,
+     created_at INTEGER NOT NULL
+   );`,
 ]
 
 /** Who made a change. There are no users yet, so for now it's where the change came from. */

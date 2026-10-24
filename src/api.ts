@@ -10,6 +10,7 @@ import type {
   Machine,
   ModelOption,
   PermissionMode,
+  ReviewDiff,
   ServerEvent,
   SessionSummary,
   TerminalInfo,
@@ -46,6 +47,8 @@ export const api = {
   /** A copy of the chat up to the end of the turn `at`, here or somewhere else. Returns the new chat's id. */
   fork: (sessionId: string, to: { at?: string; machine?: string; cwd?: string; worktree?: string; draft?: string }) =>
     request<{ sessionId: string }>('POST', `/api/sessions/${sessionId}/fork`, to),
+  /** The diff review of a folder's changes: the open one there, or a new one, told what the chat it's started `from` was asked. Returns its id. */
+  startReview: (to: { cwd: string; machine?: string; from?: string; card?: number }) => request<{ sessionId: string }>('POST', '/api/reviews', to),
   /** A side chat under this one, forked in place, sent `text` if given. Returns the side chat's id. */
   btw: (sessionId: string, first: { text?: string; pastes?: string[]; images?: ImageAttachment[]; mode?: PermissionMode; model?: string }) =>
     request<{ sessionId: string }>('POST', `/api/sessions/${sessionId}/btw`, first),
@@ -59,6 +62,9 @@ export const api = {
   worktree: (path: string, machine?: string) => get<WorktreeStatus>(`/api/worktree?${on(machine, { path })}`),
   /** Null outside a git repo. Fetching first makes "behind" current, but can take a moment. */
   git: (path: string, machine?: string, fetch = false) => get<GitStatus | null>(`/api/git?${on(machine, { path, ...(fetch ? { fetch: '1' } : {}) })}`),
+  /** `scope` as the server reads it: base, uncommitted, commit:<sha> or since:<tree>. */
+  review: (path: string, scope: string, context: number, machine?: string) =>
+    get<ReviewDiff>(`/api/review?${on(machine, { path, scope, context: String(context) })}`),
   push: (path: string, machine?: string) => request<void>('POST', '/api/git/push', { path, machine }),
   pull: (path: string, machine?: string) => request<void>('POST', '/api/git/pull', { path, machine }),
   removeWorktree: (path: string, machine?: string) => request<void>('DELETE', `/api/worktree?${on(machine, { path })}`),
