@@ -347,19 +347,28 @@ export function ReviewPage(props: {
   })
 
   const sectionEls = new Map<string, HTMLElement>()
-  const jumpTo = (id: string) => sectionEls.get(id)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
-  /** The section being read: the last one whose top has scrolled up past the top of the page. */
+  const hunkEls = new Map<string, HTMLElement>()
+  const jumpTo = (el?: HTMLElement) => el?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  /** The section being read, the last whose top has scrolled up past the pinned header, and its hunk at the top of the view. */
   const [current, setCurrent] = createSignal<string>()
+  const [currentHunk, setCurrentHunk] = createSignal<string>()
   let scroller!: HTMLDivElement
   const track = () => {
-    const top = scroller.getBoundingClientRect().top + 60
+    const top = scroller.getBoundingClientRect().top + PINNED_TOP + 8
     let at: string | undefined
+    let hunk: string | undefined
     for (const s of sections()) {
       const el = sectionEls.get(s.id)
-      if (el && el.getBoundingClientRect().top <= top) at = s.id
+      if (!el || el.getBoundingClientRect().top > top) continue
+      at = s.id
+      hunk = s.hunks.find((p) => (hunkEls.get(p.hunk.id)?.getBoundingClientRect().bottom ?? 0) > top)?.hunk.id
     }
     setCurrent(at ?? sections()[0]?.id)
+    setCurrentHunk(hunk)
   }
+  /** Groups opened or folded in the outline by hand; otherwise only the one being read is open. */
+  const [unfolded, setUnfolded] = createSignal<Record<string, boolean>>({})
+  const isUnfolded = (id: string) => unfolded()[id] ?? current() === id
   createEffect(on(sections, () => requestAnimationFrame(track)))
 
   /**
@@ -435,13 +444,53 @@ export function ReviewPage(props: {
             {(s) => {
               const done = () => s.hunks.filter((p) => isViewed(p.hunk.id)).length
               return (
-                <button onClick={() => jumpTo(s.id)} title={s.title} class={`flex w-full items-center gap-2 px-3 py-1 text-left text-xs ${current() === s.id ? 'bg-surface' : 'hover:bg-surface/60'}`}>
-                  <AttentionDot attention={s.attention} />
-                  <span class={`min-w-0 flex-1 truncate ${current() === s.id ? 'text-fg' : done() === s.hunks.length ? 'text-fg-3' : 'text-fg-2'}`}>{s.title}</span>
-                  <Show when={done() === s.hunks.length} fallback={<span class="shrink-0 text-fg-3 tabular-nums">{done()}/{s.hunks.length}</span>}>
-                    <Check class="size-3 shrink-0 text-ok" />
+                <div>
+                  <div class={`flex items-center ${current() === s.id ? 'bg-surface' : 'hover:bg-surface/60'}`}>
+                    <button
+                      onClick={() => setUnfolded((u) => ({ ...u, [s.id]: !isUnfolded(s.id) }))}
+                      title={isUnfolded(s.id) ? 'Fold' : 'Show its hunks'}
+                      class="grid h-6 w-6 shrink-0 place-items-center pl-1 text-fg-3 hover:text-fg-2"
+                    >
+                      {isUnfolded(s.id) ? <ChevronDown class="size-3" /> : <ChevronRight class="size-3" />}
+                    </button>
+                    <button onClick={() => jumpTo(sectionEls.get(s.id))} title={s.title} class="flex min-w-0 flex-1 items-center gap-2 py-1 pr-3 text-left text-xs">
+                      <AttentionDot attention={s.attention} />
+                      <span class={`min-w-0 flex-1 truncate ${current() === s.id ? 'text-fg' : done() === s.hunks.length ? 'text-fg-3' : 'text-fg-2'}`}>{s.title}</span>
+                      <Show when={done() === s.hunks.length} fallback={<span class="shrink-0 text-fg-3 tabular-nums">{done()}/{s.hunks.length}</span>}>
+                        <Check class="size-3 shrink-0 text-ok" />
+                      </Show>
+                    </button>
+                  </div>
+                  <Show when={isUnfolded(s.id)}>
+                    <For each={s.hunks}>
+                      {(p) => {
+                        // With its folder, since a change touches many a lib.rs or index.ts.
+                        const name = p.file.path.split('/').slice(-2).join('/')
+                        const line = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(p.hunk.patch)?.[1]
+                        const here = () => currentHunk() === p.hunk.id
+                        return (
+                          <button
+                            ref={(el) => createEffect(() => here() && el.scrollIntoView({ block: 'nearest' }))}
+                            onClick={() => jumpTo(hunkEls.get(p.hunk.id))}
+                            title={p.file.path}
+                            class={`flex w-full items-center gap-2 py-0.5 pr-3 pl-7 text-left font-mono text-xs ${here() ? 'bg-surface text-fg' : isViewed(p.hunk.id) ? 'text-fg-3 hover:bg-surface/60' : 'text-fg-2 hover:bg-surface/60'}`}
+                          >
+                            <span class={`h-3.5 w-0.5 shrink-0 rounded-full ${here() ? 'bg-primary' : 'bg-line'}`} />
+                            <span class="min-w-0 flex-1 truncate">
+                              {name}
+                              <Show when={line}>
+                                <span class="text-fg-3">:{line}</span>
+                              </Show>
+                            </span>
+                            <Show when={isViewed(p.hunk.id)}>
+                              <Check class="size-3 shrink-0 text-ok" />
+                            </Show>
+                          </button>
+                        )
+                      }}
+                    </For>
                   </Show>
-                </button>
+                </div>
               )
             }}
           </For>
@@ -536,6 +585,7 @@ export function ReviewPage(props: {
                             const id = p.hunk.id
                             return (
                               <HunkView
+                                ref={(el) => hunkEls.set(id, el)}
                                 file={p.file}
                                 rows={rows()}
                                 open={isOpen(id)}
@@ -624,6 +674,7 @@ const STATUS_LETTER = { added: 'A', modified: 'M', deleted: 'D', renamed: 'R' } 
 const STATUS_TONE = { added: 'text-ok', modified: 'text-fg-3', deleted: 'text-danger', renamed: 'text-accent' } as const
 
 function HunkView(props: {
+  ref: (el: HTMLElement) => void
   file: ReviewFile
   rows: Row[]
   open: boolean
@@ -662,7 +713,7 @@ function HunkView(props: {
   const lineHtml = (i: number) => (html()?.rows === props.rows ? html()!.lines?.[i] : undefined)
 
   return (
-    <div class={`overflow-hidden rounded-lg border ${props.viewed ? 'border-line/60' : 'border-line'}`}>
+    <div ref={props.ref} class={`scroll-mt-14 overflow-hidden rounded-lg border ${props.viewed ? 'border-line/60' : 'border-line'}`}>
       <div class="flex items-center gap-2 bg-surface/60 px-2 py-1">
         <button onClick={props.onToggle} class="grid size-5 shrink-0 place-items-center rounded text-fg-3 hover:bg-surface hover:text-fg-2">
           {props.open ? <ChevronDown class="size-3.5" /> : <ChevronRight class="size-3.5" />}
