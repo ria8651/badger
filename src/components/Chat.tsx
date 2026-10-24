@@ -248,14 +248,14 @@ export function Chat(props: {
     if (edit) composer?.focus()
   }
 
-  /** A review chat shows its review in place of the conversation, until you switch. */
+  /** A diff review chat shows the review in place of the conversation, until you switch. */
   const isReview = () => !!session()?.review
   const [showConversation, setShowConversation] = createSignal(false)
   const reviewing = () => isReview() && !showConversation()
   const startReview = () =>
-    void api.startReview(props.sessionId).then(
+    void api.startReview({ cwd: cwd()!, machine: machine(), from: props.sessionId, card: card()?.id }).then(
       ({ sessionId }) => openChat(sessionId),
-      (err: Error) => showError("Couldn't start a review", err.message),
+      (err: Error) => showError("Couldn't start a diff review", err.message),
     )
 
   /** The end of the turn being forked from, while picking where the fork goes. */
@@ -279,7 +279,7 @@ export function Chat(props: {
           fetching={git.fetching()}
           onRefresh={git.refresh}
           actions={actions()}
-          onReview={picking() || isReview() ? undefined : startReview}
+          onReview={isReview() || !cwd() || isScratch(cwd()) ? undefined : startReview}
           onAsk={picking() ? undefined : (prompt) => send(prompt)}
         />
       </Show>
@@ -291,7 +291,7 @@ export function Chat(props: {
                 onClick={() => setShowConversation(conversation)}
                 class={`flex items-center gap-1.5 rounded-md px-2 py-1 ${showConversation() === conversation ? 'bg-surface text-fg' : 'text-fg-3 hover:text-fg-2'}`}
               >
-                {conversation ? 'Conversation' : 'Review'}
+                {conversation ? 'Conversation' : 'Diff review'}
                 <Show when={conversation && working()}>
                   <span class="size-1.5 animate-pulse rounded-full bg-accent" />
                 </Show>

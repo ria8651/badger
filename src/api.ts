@@ -47,8 +47,8 @@ export const api = {
   /** A copy of the chat up to the end of the turn `at`, here or somewhere else. Returns the new chat's id. */
   fork: (sessionId: string, to: { at?: string; machine?: string; cwd?: string; worktree?: string; draft?: string }) =>
     request<{ sessionId: string }>('POST', `/api/sessions/${sessionId}/fork`, to),
-  /** The review chat for a chat's changes: the open one, or a new one. Returns its id. */
-  startReview: (sessionId: string) => request<{ sessionId: string }>('POST', `/api/sessions/${sessionId}/review`),
+  /** The diff review of a folder's changes: the open one there, or a new one, told what the chat it's started `from` was asked. Returns its id. */
+  startReview: (to: { cwd: string; machine?: string; from?: string; card?: number }) => request<{ sessionId: string }>('POST', '/api/reviews', to),
   /** A side chat under this one, forked in place, sent `text` if given. Returns the side chat's id. */
   btw: (sessionId: string, first: { text?: string; pastes?: string[]; images?: ImageAttachment[]; mode?: PermissionMode; model?: string }) =>
     request<{ sessionId: string }>('POST', `/api/sessions/${sessionId}/btw`, first),

@@ -128,6 +128,7 @@ export class ChatMeta {
     this.db.sql.prepare('DELETE FROM forks WHERE session_id = ?').run(sessionId)
   }
 
+  /** `sourceId` is the chat it was started from, or empty if there was none with anything in it. */
   addReview(review: { sessionId: string; sourceId: string }): void {
     this.db.sql.prepare('INSERT INTO review_sessions (session_id, source_id, created_at) VALUES (?, ?, ?)').run(review.sessionId, review.sourceId, Date.now())
   }
@@ -139,16 +140,6 @@ export class ChatMeta {
 
   isReview(sessionId: string): boolean {
     return !!this.db.sql.prepare('SELECT 1 FROM review_sessions WHERE session_id = ?').get(sessionId)
-  }
-
-  /** The latest review started from a chat that isn't archived, if any. */
-  reviewOf(sourceId: string): string | undefined {
-    const row = this.db.sql
-      .prepare(
-        'SELECT session_id FROM review_sessions WHERE source_id = ? AND session_id NOT IN (SELECT session_id FROM archived_sessions) ORDER BY created_at DESC LIMIT 1',
-      )
-      .get(sourceId) as { session_id: string } | undefined
-    return row?.session_id
   }
 
   addSideChat(sessionId: string, parentId: string): void {

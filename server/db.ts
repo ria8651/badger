@@ -246,7 +246,7 @@ const MIGRATIONS = [
      replaced_at INTEGER NOT NULL
    );
    CREATE INDEX transcript_lines_replaced_session ON transcript_lines_replaced (session_id, subpath, replaced_at);`,
-  // Review chats, and the chat whose changes each was started from.
+  // Diff review chats, and the chat each was started from (empty if none had anything in it).
   `CREATE TABLE review_sessions (
      session_id TEXT PRIMARY KEY,
      source_id TEXT NOT NULL,

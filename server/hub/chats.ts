@@ -147,7 +147,7 @@ export class Chats {
         if (childIds.has(live.id) || summaries.some((s) => s.id === live.id)) continue
         summaries.unshift({
           id: live.id,
-          title: reviews.has(live.id) ? 'Review' : 'New chat',
+          title: reviews.has(live.id) ? 'Diff review' : 'New chat',
           cwd: live.cwd,
           machine: runner.id,
           lastModified: Date.now(),
@@ -547,24 +547,27 @@ export class Chats {
   }
 
   /**
-   * A review chat for the changes in a chat's checkout: the open one started from it, or a new one, on the
-   * same machine, folder and card. It's told what the chat was asked, so its guide knows what the changes are for.
+   * A diff review of a folder's changes: the open one there, or a new review chat in it, on `card` if given and
+   * otherwise the card of the chat it was started `from`. It's told what that chat (or, if it has nothing in it yet,
+   * the folder's latest) was asked, so its guide knows what the changes are for.
    */
-  async review(id: string): Promise<{ sessionId: string }> {
+  async review(body: { cwd?: unknown; machine?: unknown; from?: unknown; card?: unknown }): Promise<{ sessionId: string }> {
     const { db, board, meta, transcripts, machines, placement } = this.d
-    const open = meta.reviewOf(id)
-    if (open) return { sessionId: open }
-    const machine = placement.machineOf(id)
-    const cwd = machines.live(id)?.cwd ?? (await transcripts.info(id))?.cwd
-    if (!machine || !cwd) throw new BadRequest("This chat hasn't started yet, so there's nothing to review")
-    const runner = machines.require(machine)
-    const prompt = reviewPrompt(askedIn(await transcripts.transcript(id).catch(() => [])))
+    const cwd = absolutePath(body.cwd)
+    const runner = machines.fromRequest(body.machine)
+    if (body.card !== undefined && typeof body.card !== 'number') throw new BadRequest('card must be a card id')
+    // Newest first.
+    const here = (await this.list()).filter((s) => s.cwd === cwd && (s.machine ?? LOCAL_MACHINE) === runner.id && !s.archived)
+    const open = here.find((s) => s.review)
+    if (open) return { sessionId: open.id }
+    const from = here.find((s) => s.id === body.from && !s.review) ?? here.find((s) => !s.review && !s.sideOf)
+    const prompt = reviewPrompt(from ? askedIn(await transcripts.transcript(from.id).catch(() => [])) : [])
     const sessionId = randomUUID()
     db.transaction(() => {
-      placement.assign(sessionId, machine)
-      meta.addReview({ sessionId, sourceId: id })
+      placement.assign(sessionId, runner.id)
+      meta.addReview({ sessionId, sourceId: from?.id ?? '' })
     })
-    const card = board.cardOf(id)
+    const card = typeof body.card === 'number' ? board.card(body.card) : from && board.cardOf(from.id)
     if (card) {
       board.linkSession(card.id, sessionId, UI)
       this.d.cardsChanged()
@@ -581,7 +584,7 @@ export class Chats {
     return [
       ['GET', '/api/sessions', async () => [200, await this.list()]],
       ['POST', path('fork'), async ({ params: [id], json }) => [201, await this.fork(id, await json())]],
-      ['POST', path('review'), async ({ params: [id] }) => [200, await this.review(id)]],
+      ['POST', '/api/reviews', async ({ json }) => [200, await this.review(await json())]],
       ['POST', path('btw'), async ({ params: [id], json }) => [201, await this.btw(id, await json())]],
       ['POST', path('archive'), ({ params: [id] }) => (meta.setArchived(id, true, UI), [204, null])],
       ['DELETE', path('archive'), ({ params: [id] }) => (meta.setArchived(id, false, UI), [204, null])],
