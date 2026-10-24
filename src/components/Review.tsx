@@ -982,9 +982,9 @@ export function ReviewPage(props: {
             const general = e.currentTarget.value
             update((s) => ({ ...s, general }))
           }}
-          rows={saved().general ? 3 : 1}
           placeholder="Overall comment (optional)"
-          class={`${inputClass} h-auto resize-none py-1.5`}
+          // Grows with what's typed, as the composer does.
+          class={`${inputClass} h-auto max-h-[calc(8lh+0.75rem)] resize-none py-1.5 [field-sizing:content]`}
         />
         <div class="flex flex-wrap items-center gap-2">
           <Button primary disabled={!props.onSend || (!saved().comments.length && !saved().general.trim())} onClick={send}>
@@ -1355,9 +1355,9 @@ function DraftBox(props: {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) props.onComment()
           if (e.key === 'Escape') props.onCancel()
         }}
-        rows={3}
         placeholder={props.lines > 1 ? `On these ${props.lines} lines…` : 'On this line…'}
-        class="w-full resize-y bg-transparent text-ui outline-none placeholder:text-fg-3"
+        // Grows with what's typed, as the composer does.
+        class="block max-h-[12lh] min-h-[3lh] w-full resize-none bg-transparent text-ui outline-none [field-sizing:content] placeholder:text-fg-3"
       />
       <div class="mt-1 flex flex-wrap items-center gap-2">
         <Button primary onClick={props.onComment} class="h-7 text-xs" title="Kept with your other comments, to send together for Claude to act on">
