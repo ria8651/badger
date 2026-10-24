@@ -1128,7 +1128,8 @@ function HunkView(props: {
           if (!b.width) continue
           // As tall as the line, not the text, so marks on lines one under another meet.
           const mid = (b.top + b.bottom) / 2 - at.top
-          boxes[r.kind].push({ l: b.left - at.left - 1, r: b.right - at.left + 1, t: mid - half, b: mid + half })
+          // Exactly the text's width, so where a selection cuts a mark the two meet rather than overlap.
+          boxes[r.kind].push({ l: b.left - at.left, r: b.right - at.left, t: mid - half, b: mid + half })
         }
       }
     })
@@ -1169,7 +1170,7 @@ function HunkView(props: {
           ['del', '--color-danger'],
         ] as const
       ).map(([kind, colour]) => `<path d="${blobs(boxes[kind], 4)}" style="fill: var(${colour}); opacity: 0.28" />`),
-      selected.length ? `<path d="${blobs(selected, 4)}" style="fill: var(--color-accent); opacity: 0.3" />` : '',
+      selected.length ? `<path d="${blobs(selected, 4)}" style="fill: var(--color-selection); opacity: 0.3" />` : '',
     ].join('')
   }
 

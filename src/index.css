@@ -64,6 +64,8 @@
   --color-accent: #c15f3c;
   --color-danger: #c13a2e;
   --color-ok: #3d7a4a;
+  /* What's selected in code, drawn as a shape: unlike both the accent and the diff's red and green. */
+  --color-selection: #3b74d9;
   --color-primary: #1b1a18;
   --color-on-primary: #fafaf8;
   --color-sidebar: #fafaf8;
@@ -151,6 +153,7 @@
   --color-accent: #c15f3c;
   --color-danger: #c13a2e;
   --color-ok: #3d7a4a;
+  --color-selection: #3b74d9;
   --pane-ring: rgb(0 0 0 / 0.07);
 }
 [data-palette="dark"] {
@@ -166,6 +169,7 @@
   --color-accent: #d97757;
   --color-danger: #e26d5f;
   --color-ok: #7cb08a;
+  --color-selection: #5b8ff0;
   --pane-ring: rgb(255 255 255 / 0.1);
 }
 /* True dark: near-black, as the dark theme first was. */
@@ -182,6 +186,7 @@
   --color-accent: #d97757;
   --color-danger: #e26d5f;
   --color-ok: #7cb08a;
+  --color-selection: #5b8ff0;
   --pane-ring: rgb(255 255 255 / 0.1);
 }
 /* Retro terminal: green phosphor on black, amber for what's live, square corners, glow and scanlines. */
@@ -198,6 +203,7 @@
   --color-accent: #ffb000;
   --color-danger: #ff5f4f;
   --color-ok: #b4ffc6;
+  --color-selection: #4d8dff;
   --pane-ring: rgb(107 255 143 / 0.18);
   --font-sans: var(--font-mono);
   --roundness: 0;
@@ -226,6 +232,7 @@
   --color-accent: #3e7bfa;
   --color-danger: #e63535;
   --color-ok: #2e7d32;
+  --color-selection: #3e7bfa;
   --font-sans: "Inter Variable", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --roundness: 1.25;
   --radius-pill: 9999px;
@@ -259,6 +266,7 @@
   --color-accent: #000080;
   --color-danger: #a00000;
   --color-ok: #006400;
+  --color-selection: #000080;
   --color-button-edge: transparent;
   --color-bar: #000080;
   --color-on-bar: #fff;
