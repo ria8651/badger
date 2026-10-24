@@ -14,6 +14,9 @@ export { sidebarWidth }
 
 export const setSidebarWidth = (w: number) => setWidth(Math.round(Math.max(200, Math.min(480, w))))
 
+/** Lights the sidebar's edge, while it or a corner that moves it is hovered or dragged. */
+export const [sidebarLit, setSidebarLit] = createSignal(false)
+
 /** Follows the pointer from a press on the sidebar's edge, until it's let go. */
 export function dragSidebar(e: PointerEvent): (m: PointerEvent) => void {
   const start = e.clientX - sidebarWidth()
