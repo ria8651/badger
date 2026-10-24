@@ -70,8 +70,22 @@ function useReview(session: string) {
     stores.set(session, (s = createSignal<Saved>(initial)))
   }
   const [saved, setSaved] = s
-  const update = (f: (s: Saved) => Saved) => localStorage.setItem(storeKey(session), JSON.stringify(setSaved(f)))
+  // Written once typing pauses, not on every keystroke.
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const update = (f: (s: Saved) => Saved) => {
+    setSaved(f)
+    clearTimeout(timer)
+    timer = setTimeout(() => localStorage.setItem(storeKey(session), JSON.stringify(saved())), 300)
+  }
   return { saved, update }
+}
+
+const NO_NOTES: Note[] = []
+const NO_QUESTIONS: Question[] = []
+const byPath = <T extends Note>(notes: T[]) => {
+  const out = new Map<string, T[]>()
+  for (const n of notes) out.set(n.path, [...(out.get(n.path) ?? []), n])
+  return out
 }
 
 // ── The diff, as rows ──
@@ -81,6 +95,14 @@ type Row = { kind: 'hunk'; text: string } | Line
 
 const anchorOf = (r: Line) => (r.kind === 'del' ? `o${r.old}` : `n${r.new}`)
 const SIGN = { ctx: ' ', add: '+', del: '-' } as const
+
+/** A hunk's rows, worked out once per hunk: hunks keep their identity while their lines don't change. */
+const rowCache = new WeakMap<ReviewHunk, Row[]>()
+function rowsFor(hunk: ReviewHunk): Row[] {
+  let rows = rowCache.get(hunk)
+  if (!rows) rowCache.set(hunk, (rows = rowsOf(hunk.patch)))
+  return rows
+}
 
 function rowsOf(patch: string): Row[] {
   const rows: Row[] = []
@@ -102,8 +124,9 @@ function rowsOf(patch: string): Row[] {
 
 /** Words, runs of spaces, and each other character: what a line's changes are found in. */
 const TOKEN = /\w+|\s+|[^\w\s]/g
-/** Past this many token pairs, comparing two lines isn't worth it: they're marked whole. */
+/** Past this many token pairs, or a line this long, comparing two lines isn't worth it: they're marked whole. */
 const MAX_COMPARE = 250_000
+const MAX_LINE = 2000
 
 /** All of a line but its indentation and trailing spaces, or nothing for a blank one. */
 const whole = (text: string): [number, number][] => {
@@ -118,6 +141,7 @@ const whole = (text: string): [number, number][] => {
  * one line edited, rather than one line swapped for another.
  */
 function lineDiff(a: string, b: string): { a: [number, number][]; b: [number, number][] } | undefined {
+  if (a.length > MAX_LINE || b.length > MAX_LINE) return
   const x = a.match(TOKEN) ?? []
   const y = b.match(TOKEN) ?? []
   if (!x.length || !y.length || x.length * y.length > MAX_COMPARE) return
@@ -141,14 +165,17 @@ function lineDiff(a: string, b: string): { a: [number, number][]; b: [number, nu
   const ranges = (tokens: string[], keep: boolean[]) => {
     const out: [number, number][] = []
     let at = 0
+    // Whether everything kept since the last change was spaces, so the two join.
+    let onlySpaces = true
     tokens.forEach((t, i) => {
       const end = at + t.length
       if (!keep[i]) {
         const last = out.at(-1)
         // Joined across spaces kept between them: "foo bar" to "baz qux" is one change, not two.
-        if (last && tokens.slice(0, i).join('').slice(last[1]).trim() === '') last[1] = end
+        if (last && onlySpaces) last[1] = end
         else out.push([at, end])
-      }
+        onlySpaces = true
+      } else if (t.trim()) onlySpaces = false
       at = end
     })
     return out.filter(([f, t]) => t > f)
@@ -297,6 +324,8 @@ const guideCall = (name?: string) => [GROUP_TOOL, DONE_TOOL].find((t) => name ==
 function guideCalls(index: Index): string {
   let key = ''
   for (const m of index.groups.get('') ?? []) {
+    // A turn ending counts too: a call it left without a result was never going to get one.
+    if (m.type === 'result') key += '| '
     if (m.type !== 'assistant') continue
     for (const b of ((m.message as { content?: Block[] })?.content ?? []) as Block[]) {
       if (b.type !== 'tool_use' || !b.id || !guideCall(b.name)) continue
@@ -320,6 +349,8 @@ function guideOf(index: Index): { guide?: ReviewGuide; writing: boolean } {
   let done = false
   let pending = false
   for (const m of index.groups.get('') ?? []) {
+    // Only a call in the turn under way is still being made; one an ended turn left behind (a process killed) never will be.
+    if (m.type === 'result') pending = false
     if (m.type !== 'assistant') continue
     for (const b of ((m.message as { content?: Block[] })?.content ?? []) as Block[]) {
       const call = b.type === 'tool_use' && b.id ? guideCall(b.name) : undefined
@@ -527,7 +558,12 @@ export function ReviewPage(props: {
   // Worked out again only when a guide call comes or finishes, not on every message.
   const told = createMemo(on(createMemo(() => guideCalls(props.index())), () => guideOf(untrack(props.index))))
   const guide = () => told().guide
-  const answers = createMemo(() => answersOf(props.index(), saved().questions))
+  // Each part of what's kept on its own, so typing an overall comment or ticking a hunk doesn't redo the rest.
+  const comments = createMemo(() => saved().comments)
+  const questions = createMemo(() => saved().questions)
+  const commentsIn = createMemo(() => byPath(comments()))
+  const questionsIn = createMemo(() => byPath(questions()))
+  const answers = createMemo(() => answersOf(props.index(), questions()))
 
   // Kept the same where a hunk is, so reading the diff again (each time a turn ends) doesn't redraw what hasn't changed.
   const placed = createMemo<Map<string, Placed>>((before) => {
@@ -541,6 +577,18 @@ export function ReviewPage(props: {
     }
     return all
   })
+  // A comment being written on lines Claude has since changed has no hunk to show under any more: what was written goes
+  // into the overall comment, rather than being lost.
+  createEffect(
+    on(placed, (all) => {
+      const d = untrack(draft)
+      if (!d || !diff() || all.has(d.hunk)) return
+      const text = untrack(draftText).trim()
+      if (text) update((x) => ({ ...x, general: [x.general.trim(), `On lines that have since changed: ${text}`].filter(Boolean).join('\n\n') }))
+      setDraft(undefined)
+      setDraftText('')
+    }),
+  )
   /** Sections by what they hold, so one that hasn't changed stays the same object and isn't drawn again. */
   let sectionCache = new Map<string, Section>()
   const keep = (s: Section): Section => {
@@ -632,11 +680,12 @@ export function ReviewPage(props: {
   }
 
   /** Comments whose lines aren't in any hunk now, e.g. after Claude changed them. */
-  const loose = createMemo(() => {
-    const shown = new Set<string>()
-    for (const p of placed().values()) for (const r of rowsOf(p.hunk.patch)) if (r.kind !== 'hunk') shown.add(`${p.file.path}:${anchorOf(r)}`)
-    return saved().comments.filter((c) => !shown.has(`${c.path}:${c.to}`))
+  const shown = createMemo(() => {
+    const out = new Set<string>()
+    for (const p of placed().values()) for (const r of rowsFor(p.hunk)) if (r.kind !== 'hunk') out.add(`${p.file.path}:${anchorOf(r)}`)
+    return out
   })
+  const loose = createMemo(() => comments().filter((c) => !shown().has(`${c.path}:${c.to}`)))
 
   const sectionEls = new Map<string, HTMLElement>()
   const hunkEls = new Map<string, HTMLElement>()
@@ -948,7 +997,7 @@ export function ReviewPage(props: {
                       <div ref={(el) => side() && pin(el)} class="min-w-0 space-y-2 @4xl:sticky @4xl:self-start">
                         <For each={s.hunks}>
                           {(p) => {
-                            const rows = createMemo(() => rowsOf(p.hunk.patch))
+                            const rows = () => rowsFor(p.hunk)
                             const id = p.hunk.id
                             return (
                               <HunkView
@@ -960,8 +1009,8 @@ export function ReviewPage(props: {
                                 rows={rows()}
                                 open={isOpen(id)}
                                 viewed={isViewed(id)}
-                                comments={saved().comments.filter((c) => c.path === p.file.path)}
-                                questions={saved().questions.filter((q) => q.path === p.file.path)}
+                                comments={commentsIn().get(p.file.path) ?? NO_NOTES}
+                                questions={questionsIn().get(p.file.path) ?? NO_QUESTIONS}
                                 answers={answers()}
                                 running={props.running}
                                 draft={draft()?.hunk === id ? draft() : undefined}
@@ -1096,6 +1145,8 @@ function HunkView(props: {
   let queued = 0
   const draw = () => {
     queued = 0
+    // Not until it's near the screen: measuring a hunk lays it out, which is what skipping off-screen ones saves.
+    if (!near()) return
     const el = body()
     if (!el || !marks || !el.isConnected) return
     const at = el.getBoundingClientRect()
@@ -1200,7 +1251,9 @@ function HunkView(props: {
     const el = body()
     const sel = getSelection()
     const range = el && sel && !sel.isCollapsed && sel.rangeCount ? sel.getRangeAt(0) : undefined
-    const here = el && range && range.intersectsNode(el) ? range : undefined
+    // Not one with an end in this hunk but outside its lines, e.g. text picked out of an answer or a comment.
+    const stray = (n: Node) => el?.contains(n) && !rowOf(n)
+    const here = el && range && range.intersectsNode(el) && !stray(range.startContainer) && !stray(range.endContainer) ? range : undefined
     if (!here && !selection()) return
     setSelection(here?.cloneRange())
     if (!here) setOffer(undefined)
@@ -1247,7 +1300,10 @@ function HunkView(props: {
   const redraw = () => {
     if (!queued) queued = requestAnimationFrame(draw)
   }
-  createEffect(on(() => props.draft, redraw, { defer: true }))
+  // Only this hunk's draft: picking lines elsewhere doesn't redraw every hunk.
+  const draft = createMemo(() => props.draft)
+  createEffect(on(draft, redraw, { defer: true }))
+  createEffect(on(near, (n) => n && redraw(), { defer: true }))
   createEffect(() => {
     const el = body()
     if (!el) return
@@ -1352,8 +1408,7 @@ function HunkView(props: {
           }
         >
           {/* Its own stacking context, so the marks can go under the rows' text but stay above the page. */}
-          {/* The browser's own selection colour is hidden here: the selection is drawn with the marks, as a shape. */}
-          <div ref={setBody} class="relative isolate font-mono text-xs leading-5 selection:bg-transparent">
+          <div ref={setBody} class="relative isolate font-mono text-xs leading-5">
             <svg ref={marks} class="pointer-events-none absolute inset-0 -z-10 size-full overflow-visible" aria-hidden="true" />
             <Show when={offer()}>
               {(o) => (
@@ -1385,7 +1440,8 @@ function HunkView(props: {
                         <span class="w-10 pr-1.5 text-right text-fg-3/70 tabular-nums">{r.new ?? ''}</span>
                       </span>
                       <span class={`w-4 shrink-0 select-none text-center ${r.kind === 'add' ? 'text-ok' : r.kind === 'del' ? 'text-danger' : 'text-fg-3'}`}>{SIGN[r.kind]}</span>
-                      <span class="min-w-0 flex-1 whitespace-pre-wrap break-all pr-3 text-fg">
+                      {/* The browser's own selection colour is hidden on the code: it's drawn with the marks, as a shape. */}
+                      <span class="min-w-0 flex-1 whitespace-pre-wrap break-all pr-3 text-fg selection:bg-transparent">
                         <Code line={r} html={lineHtml(i())} ref={(el) => (codeEls[i()] = el)} onDrawn={redraw} />
                       </span>
                     </div>
