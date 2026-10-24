@@ -183,6 +183,12 @@ function markChanges(rows: Row[]) {
 
 // ── Marks drawn as one shape ──
 
+/** A range less another: what's left either side of it. */
+function without([from, to]: [number, number], [cutFrom, cutTo]: [number, number]): [number, number][] {
+  if (cutTo <= from || cutFrom >= to) return [[from, to]]
+  return ([[from, Math.min(to, cutFrom)], [Math.max(from, cutTo), to]] as [number, number][]).filter(([f, t]) => t > f)
+}
+
 type Box = { l: number; r: number; t: number; b: number }
 
 /** Where characters from..to of an element's text are on screen: a box per piece, per line it wraps onto. */
@@ -487,8 +493,9 @@ interface Draft {
   to: number
   /** Editing this comment, rather than adding one. */
   id?: string
-  /** Still being dragged over, so the box to write in waits for the drag to end. */
-  picking?: boolean
+  /** Where in its first line it starts and in its last it ends, as selected; whole lines when absent. */
+  start?: number
+  end?: number
 }
 
 export function ReviewPage(props: {
@@ -596,16 +603,10 @@ export function ReviewPage(props: {
 
   // ── Comments and questions ──
 
-  const startDraft = (hunk: string, at: number, extend: boolean) => {
-    const d = draft()
-    if (extend && d && d.hunk === hunk && !d.id) return setDraft({ hunk, from: Math.min(d.from, at), to: Math.max(d.to, at) })
-    setDraft({ hunk, from: at, to: at })
-    setDraftText('')
-  }
-  /** Lines `anchor` to `at` of a hunk, either way round, as a new comment's while dragging over them. */
-  const spanDraft = (hunk: string, anchor: number, at: number, picking: boolean) => {
+  /** A new comment on what's selected: lines from..to of a hunk, from `start` in the first to `end` in the last. */
+  const selectDraft = (hunk: string, from: number, to: number, start?: number, end?: number) => {
     if (draft()?.hunk !== hunk || draft()?.id) setDraftText('')
-    setDraft({ hunk, from: Math.min(anchor, at), to: Math.max(anchor, at), picking })
+    setDraft({ hunk, from, to, start, end })
   }
   /** The draft as a note on its lines, or undefined if it's empty. */
   const noteOf = (rows: Row[], path: string): Note | undefined => {
@@ -986,8 +987,7 @@ export function ReviewPage(props: {
                                 canAsk={!!props.onSend}
                                 onToggle={() => setOpen((o) => ({ ...o, [id]: !isOpen(id) }))}
                                 onViewed={(on) => setViewed([id], on)}
-                                onLine={(at, extend) => startDraft(id, at, extend)}
-                                onSpan={(anchor, at, picking) => spanDraft(id, anchor, at, picking)}
+                                onSelect={(from, to, start, end) => selectDraft(id, from, to, start, end)}
                                 onDraftText={setDraftText}
                                 onComment={() => saveComment(rows(), p.file.path)}
                                 onAsk={() => ask(rows(), p.file.path)}
@@ -1030,7 +1030,7 @@ export function ReviewPage(props: {
           <Button primary disabled={!props.onSend || (!saved().comments.length && !saved().general.trim())} onClick={send}>
             {saved().comments.length ? `Send ${plural(saved().comments.length, 'comment')}` : 'Send to Claude'}
           </Button>
-          <span class="text-xs text-fg-3">Click a line’s + to comment or ask; shift-click another to cover the lines between. Claude acts on comments, then updates the guide.</span>
+          <span class="text-xs text-fg-3">Select code, or drag over line numbers, to comment or ask about it. Claude acts on comments, then updates the guide.</span>
         </div>
       </div>
     </div>
@@ -1079,8 +1079,8 @@ function HunkView(props: {
   canAsk: boolean
   onToggle: () => void
   onViewed: (on: boolean) => void
-  onLine: (at: number, extend: boolean) => void
-  onSpan: (anchor: number, at: number, picking: boolean) => void
+  /** Comment on what's selected: rows from..to, from `start` in the first to `end` in the last. */
+  onSelect: (from: number, to: number, start?: number, end?: number) => void
   onDraftText: (text: string) => void
   onComment: () => void
   onAsk: () => void
@@ -1120,10 +1120,10 @@ function HunkView(props: {
     const half = parseFloat(getComputedStyle(el).lineHeight) / 2 || 10
     const boxes: Record<'add' | 'del', Box[]> = { add: [], del: [] }
     props.rows.forEach((r, i) => {
-      // Lines being picked for a comment, or selected, show only that, rather than its colour mixing with theirs.
-      const picking = (props.draft && i >= props.draft.from && i <= props.draft.to) || (selectedRows() && i >= selectedRows()![0] && i <= selectedRows()![1])
-      if (r.kind === 'hunk' || r.kind === 'ctx' || picking || !r.marks?.length || !codeEls[i]?.isConnected) return
-      for (const m of r.marks) {
+      if (r.kind === 'hunk' || r.kind === 'ctx' || !r.marks?.length || !codeEls[i]?.isConnected) return
+      // Under what's selected the selection shows instead, rather than its colour mixing with theirs.
+      const cut = [selectedIn(i), draftedIn(i)].filter((x): x is [number, number] => !!x)
+      for (const m of r.marks.flatMap((m) => cut.reduce<[number, number][]>((left, c) => left.flatMap((x) => without(x, c)), [m]))) {
         for (const b of textBoxes(codeEls[i], m)) {
           if (!b.width) continue
           // As tall as the line, not the text, so marks on lines one under another meet.
@@ -1132,41 +1132,36 @@ function HunkView(props: {
         }
       }
     })
-    // The lines a comment is being written on, like an editor's whole-line selection: from the start of the code to the end of
-    // each line's text, at least a character wide so a blank line in it doesn't break it up.
-    const picked: Box[] = []
+    // What's selected, or what a comment's being written on, which is what was selected: drawn like the rest rather than by
+    // the browser, character by character, leaving out the line numbers and signs a selection runs through on its way.
+    const selected: Box[] = []
+    const code = codeEls.find((c) => c?.isConnected)?.getBoundingClientRect()
+    const add = (b: DOMRect) => {
+      if (!b.width || !code || b.left < code.left - 1 || b.bottom < at.top || b.top > at.bottom) return
+      const mid = (b.top + b.bottom) / 2 - at.top
+      selected.push({ l: b.left - at.left, r: b.right - at.left, t: mid - half, b: mid + half })
+    }
     const d = props.draft
     if (d) {
       const ch = parseFloat(getComputedStyle(el).fontSize) * 0.6
       for (let i = d.from; i <= d.to; i++) {
-        const code = codeEls[i]
+        const c = codeEls[i]
         const r = props.rows[i]
-        if (!code?.isConnected || !r || r.kind === 'hunk') continue
-        const start = code.getBoundingClientRect()
-        const lines = r.text.trimEnd() ? textBoxes(code, [0, r.text.trimEnd().length]) : []
-        // A blank line by its row, since an empty span measures as nothing at the baseline.
-        if (!lines.length) {
-          const row = code.closest('[data-row]')?.getBoundingClientRect()
-          lines.push(new DOMRect(start.left, row ? row.top : start.top, ch, row ? half * 2 : start.height))
+        if (!c?.isConnected || !r || r.kind === 'hunk') continue
+        const from = i === d.from ? (d.start ?? 0) : 0
+        const to = i === d.to ? (d.end ?? r.text.length) : r.text.length
+        const got = to > from ? textBoxes(c, [from, to]) : []
+        // A blank line in it as a character's width, placed by its row: an empty span measures as nothing at the baseline.
+        if (!got.length && from === 0) {
+          const row = c.closest('[data-row]')?.getBoundingClientRect()
+          const left = c.getBoundingClientRect().left
+          if (row) got.push(new DOMRect(left, row.top, ch, half * 2))
         }
-        for (const b of lines) {
-          const mid = (b.top + b.bottom) / 2 - at.top
-          picked.push({ l: start.left - at.left - 3, r: Math.max(b.right, start.left + ch) - at.left + 3, t: mid - half, b: mid + half })
-        }
+        got.forEach(add)
       }
     }
-    // Text selected the ordinary way, drawn like the rest rather than by the browser: the part of it in this hunk's code,
-    // character by character, leaving out the line numbers and signs a selection runs through on its way.
-    const chosen: Box[] = []
     const range = selection()
-    if (range) {
-      const code = codeEls.find((c) => c?.isConnected)?.getBoundingClientRect()
-      for (const b of range.getClientRects()) {
-        if (!b.width || !code || b.left < code.left - 1 || b.bottom < at.top || b.top > at.bottom) continue
-        const mid = (b.top + b.bottom) / 2 - at.top
-        chosen.push({ l: b.left - at.left, r: b.right - at.left, t: mid - half, b: mid + half })
-      }
-    }
+    if (range) for (const b of range.getClientRects()) add(b)
     marks.innerHTML = [
       ...(
         [
@@ -1174,14 +1169,40 @@ function HunkView(props: {
           ['del', '--color-danger'],
         ] as const
       ).map(([kind, colour]) => `<path d="${blobs(boxes[kind], 4)}" style="fill: var(${colour}); opacity: 0.28" />`),
-      picked.length ? `<path d="${blobs(picked, 5)}" style="fill: var(--color-accent); opacity: 0.3" />` : '',
-      chosen.length ? `<path d="${blobs(chosen, 4)}" style="fill: var(--color-accent); opacity: 0.3" />` : '',
+      selected.length ? `<path d="${blobs(selected, 4)}" style="fill: var(--color-accent); opacity: 0.3" />` : '',
     ].join('')
   }
 
   /** The page's text selection while some of it is in this hunk; where to offer commenting on it, once it's been made. */
   const [selection, setSelection] = createSignal<Range>()
-  const [offer, setOffer] = createSignal<{ from: number; to: number; x: number; y: number }>()
+  const [offer, setOffer] = createSignal<{ from: number; to: number; start: number; end: number; x: number; y: number }>()
+  /** Where a point of a selection is in a row's code, as an offset into its text; its start or end if it's outside it. */
+  const offsetIn = (row: number, node: Node, offset: number, side: 'start' | 'end') => {
+    const c = codeEls[row]
+    const text = props.rows[row]?.kind === 'hunk' ? '' : (props.rows[row] as Line).text
+    if (!c || !c.contains(node)) return side === 'start' ? 0 : text.length
+    const before = document.createRange()
+    before.setStart(c, 0)
+    before.setEnd(node, offset)
+    return Math.min(before.toString().length, text.length)
+  }
+  /** What of row i's text the selection covers, from..to, if any of it. */
+  const selectedIn = (i: number): [number, number] | undefined => {
+    const rows = selectedRows()
+    const range = selection()
+    const r = props.rows[i]
+    if (!rows || !range || i < rows[0] || i > rows[1] || r.kind === 'hunk') return
+    const from = i === rows[0] ? offsetIn(i, range.startContainer, range.startOffset, 'start') : 0
+    const to = i === rows[1] ? offsetIn(i, range.endContainer, range.endOffset, 'end') : r.text.length
+    return [from, to]
+  }
+  /** What of row i's text the comment being written is on, from..to, if any of it. */
+  const draftedIn = (i: number): [number, number] | undefined => {
+    const d = props.draft
+    const r = props.rows[i]
+    if (!d || i < d.from || i > d.to || r.kind === 'hunk') return
+    return [i === d.from ? (d.start ?? 0) : 0, i === d.to ? (d.end ?? r.text.length) : r.text.length]
+  }
   /** The rows of this hunk the selection covers, from..to: all of them past whichever end of it is outside. */
   const selectedRows = (): [number, number] | undefined => {
     const range = selection()
@@ -1205,13 +1226,25 @@ function HunkView(props: {
   // Offered once the mouse lets go, for a selection that starts and ends in this hunk's lines.
   const onSelected = () => {
     const el = body()
-    const range = selection()
+    const sel = getSelection()
+    // Read now, not from the signal: the selection may have been made this moment, before selectionchange has said.
+    const range = sel && !sel.isCollapsed && sel.rangeCount ? sel.getRangeAt(0) : undefined
     const from = range && rowOf(range.startContainer)
     const to = range && rowOf(range.endContainer)
     if (!el || !range || !from || !to || !el.contains(from) || !el.contains(to)) return setOffer(undefined)
     const end = [...range.getClientRects()].filter((b) => b.width).at(-1)
     const at = el.getBoundingClientRect()
-    if (end) setOffer({ from: Number(from.dataset.row), to: Number(to.dataset.row), x: end.right - at.left, y: end.bottom - at.top })
+    const f = Number(from.dataset.row)
+    const t = Number(to.dataset.row)
+    if (end)
+      setOffer({
+        from: f,
+        to: t,
+        start: offsetIn(f, range.startContainer, range.startOffset, 'start'),
+        end: offsetIn(t, range.endContainer, range.endOffset, 'end'),
+        x: end.right - at.left,
+        y: end.bottom - at.top,
+      })
   }
   onMount(() => {
     document.addEventListener('selectionchange', onSelectionChange)
@@ -1226,7 +1259,7 @@ function HunkView(props: {
     if (!o) return
     getSelection()?.removeAllRanges()
     setOffer(undefined)
-    props.onSpan(o.from, o.to, false)
+    props.onSelect(o.from, o.to, o.start, o.end)
   }
   const redraw = () => {
     if (!queued) queued = requestAnimationFrame(draw)
@@ -1242,19 +1275,28 @@ function HunkView(props: {
 
   /** Only for the rows it was made from: while new rows are highlighted, the last ones' lines would be out of step. */
   /**
-   * Pressing on a line's + or numbers picks it for a comment, and dragging up or down picks the lines between, scrolling
-   * the page near its edges; the box to write in opens when it's let go. Shift picks from the last line picked, as before.
+   * Pressing on a line's numbers selects the line, and dragging up or down selects the lines between, scrolling the page near
+   * its edges: an ordinary selection of whole lines, so it's commented on as any other is. Shift extends the selection to it.
    */
-  const pickFrom = (e: PointerEvent, at: number) => {
+  const selectRows = (anchor: number, at: number) => {
+    const a = codeEls[anchor]
+    const b = codeEls[at]
+    if (!a || !b) return
+    if (anchor <= at) getSelection()?.setBaseAndExtent(a, 0, b, b.childNodes.length)
+    else getSelection()?.setBaseAndExtent(a, a.childNodes.length, b, 0)
+  }
+  const selectFrom = (e: PointerEvent, at: number) => {
     if (e.button !== 0) return
     e.preventDefault()
-    if (e.shiftKey) return props.onLine(at, true)
+    const sel = getSelection()
+    const was = sel?.anchorNode && rowOf(sel.anchorNode)
+    const anchor = e.shiftKey && was && body()?.contains(was) ? Number(was.dataset.row) : at
     let to = at
-    props.onSpan(at, at, true)
+    selectRows(anchor, at)
     const page = body()?.closest('.overflow-y-auto')
     const move = (ev: PointerEvent) => {
       const row = (document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null)?.closest<HTMLElement>('[data-row]')
-      if (row && body()?.contains(row) && Number(row.dataset.row) !== to) props.onSpan(at, (to = Number(row.dataset.row)), true)
+      if (row && body()?.contains(row) && Number(row.dataset.row) !== to) selectRows(anchor, (to = Number(row.dataset.row)))
       if (page) {
         const edge = page.getBoundingClientRect()
         if (ev.clientY < edge.top + 60) page.scrollBy(0, -20)
@@ -1265,7 +1307,6 @@ function HunkView(props: {
       removeEventListener('pointermove', move)
       removeEventListener('pointerup', up)
       removeEventListener('pointercancel', up)
-      props.onSpan(at, to, false)
     }
     addEventListener('pointermove', move)
     addEventListener('pointerup', up)
@@ -1349,26 +1390,17 @@ function HunkView(props: {
                 const anchor = anchorOf(r)
                 const comments = () => props.comments.filter((c) => c.to === anchor)
                 const questions = () => props.questions.filter((q) => q.to === anchor)
-                const editing = () => props.draft && !props.draft.picking && props.draft.to === i()
+                const editing = () => props.draft && props.draft.to === i()
                 return (
                   <>
                     <div
                       data-row={i()}
                       class={`group relative flex ${r.kind === 'add' ? 'bg-ok/10' : r.kind === 'del' ? 'bg-danger/10' : ''}`}
                     >
-                      <span onPointerDown={(e) => pickFrom(e, i())} class="flex shrink-0 cursor-pointer select-none">
+                      <span onPointerDown={(e) => selectFrom(e, i())} title="Select this line: drag to select more, shift-click to extend" class="flex shrink-0 cursor-pointer select-none">
                         <span class="w-10 pr-1.5 text-right text-fg-3/70 tabular-nums">{r.old ?? ''}</span>
                         <span class="w-10 pr-1.5 text-right text-fg-3/70 tabular-nums">{r.new ?? ''}</span>
                       </span>
-                      <button
-                        onPointerDown={(e) => pickFrom(e, i())}
-                        // A click from the keyboard; a pointer's is handled as it goes down.
-                        onClick={(e) => e.detail === 0 && props.onLine(i(), e.shiftKey)}
-                        title="Comment on or ask about this line: drag to cover more, or shift-click another"
-                        class="absolute left-0.5 top-0.5 grid size-4 place-items-center rounded bg-primary text-on-primary opacity-0 group-hover:opacity-100 pointer-coarse:opacity-40"
-                      >
-                        <MessageSquarePlus class="size-2.5" />
-                      </button>
                       <span class={`w-4 shrink-0 select-none text-center ${r.kind === 'add' ? 'text-ok' : r.kind === 'del' ? 'text-danger' : 'text-fg-3'}`}>{SIGN[r.kind]}</span>
                       <span class="min-w-0 flex-1 whitespace-pre-wrap break-all pr-3 text-fg">
                         <Code line={r} html={lineHtml(i())} ref={(el) => (codeEls[i()] = el)} onDrawn={redraw} />
