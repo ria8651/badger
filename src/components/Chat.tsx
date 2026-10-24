@@ -119,7 +119,7 @@ export function Chat(props: {
   const tasks = createMemo(() => trayItems(index(), state.running, state.background, cwd()))
   const children = createChildChats(state)
 
-  const sticky = createStickyScroll()
+  const sticky = createStickyScroll(`chat:${untrack(() => props.sessionId)}`)
   let content!: HTMLDivElement
   let bottom!: HTMLDivElement
   let scroller!: HTMLDivElement
@@ -128,6 +128,14 @@ export function Chat(props: {
     if (!touch.matches) composer?.focus()
     sticky.follow(content, bottom, scroller)
     props.onReady?.(() => composer?.focus())
+  })
+  // Back where it was left, once there's a transcript to scroll; one left at the bottom just stays stuck there.
+  let restored = false
+  createEffect(() => {
+    // A review chat's conversation can't be scrolled while the review is showing in its place.
+    if (restored || !state.loaded || !state.messages.length || reviewing()) return
+    restored = true
+    requestAnimationFrame(() => sticky.restore(content))
   })
 
   /** Where tasks, plans and attachments open beside the chat. An embedded chat has nowhere: they stay in it. */

@@ -4,6 +4,7 @@ import type { ReviewAttention, ReviewDiff, ReviewFile, ReviewGroup, ReviewGuide,
 import { api } from '../api.ts'
 import { plural } from '../format.ts'
 import { highlight, languageOf } from '../highlight.ts'
+import { recall, remember, settle } from '../scrollMemory.ts'
 import { itemsFor, type Block, type Index } from '../transcript/model.ts'
 import { Markdown } from './Markdown.tsx'
 import { Button, DiffCount, GhostButton, inputClass } from './ui.tsx'
@@ -491,7 +492,43 @@ export function ReviewPage(props: {
     hunk = last?.hunks.find((p) => (hunkEls.get(p.hunk.id)?.getBoundingClientRect().bottom ?? 0) > top)?.hunk.id
     setCurrent(at ?? sections()[0]?.id)
     setCurrentHunk(hunk)
+    // Where it's been read to, as the hunk at the top and how far down it, since off-screen hunks only have a guessed height.
+    if (!restoring) {
+      const el = hunk && hunkEls.get(hunk)
+      remember(scrollKey, el && scroller.scrollTop > 0 ? { hunk, offset: top - el.getBoundingClientRect().top } : undefined)
+    }
   }
+  const scrollKey = `review:${untrack(() => props.sessionId)}`
+  let content!: HTMLDivElement
+  const spot = recall<{ hunk: string; offset: number }>(scrollKey)
+  // Not saved over until it's been gone back to: the page starts at the top while the diff loads.
+  let restoring = !!spot
+  let restored = false
+  // Back to where it was read to, once that hunk is on the page; given up on if it's not in the diff any more.
+  createEffect(
+    on(sections, () => {
+      if (restored || !spot) return
+      if (diff() && !placed().has(spot.hunk)) {
+        restored = true
+        restoring = false
+        return
+      }
+      if (!hunkEls.has(spot.hunk)) return
+      restored = true
+      requestAnimationFrame(() => {
+        const stop = settle(scroller, content, () => {
+          const el = hunkEls.get(spot.hunk)
+          if (el) scroller.scrollTop += el.getBoundingClientRect().top - (scroller.getBoundingClientRect().top + PINNED_TOP + 8) + spot.offset
+        })
+        // Saving again once it's settled, or the user takes over.
+        setTimeout(() => {
+          stop()
+          restoring = false
+        }, 3000)
+        for (const e of ['wheel', 'touchstart', 'keydown', 'pointerdown']) scroller.addEventListener(e, () => (restoring = false), { once: true, passive: true })
+      })
+    }),
+  )
   /** Groups opened or folded in the outline by hand; otherwise only the one being read is open. */
   const [unfolded, setUnfolded] = createSignal<Record<string, boolean>>({})
   const isUnfolded = (id: string) => unfolded()[id] ?? current() === id
@@ -645,7 +682,7 @@ export function ReviewPage(props: {
         </nav>
 
         <div ref={scroller} onScroll={onScroll} class="min-w-0 flex-1 overflow-y-auto">
-          <div class="mx-auto max-w-[100rem] px-4 pb-10 @3xl:px-6">
+          <div ref={content} class="mx-auto max-w-[100rem] px-4 pb-10 @3xl:px-6">
             <Show when={!diff() && loading()}>
               <p class="p-10 text-center text-fg-3">Reading the changes…</p>
             </Show>
