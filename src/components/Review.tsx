@@ -469,6 +469,8 @@ interface Draft {
   to: number
   /** Editing this comment, rather than adding one. */
   id?: string
+  /** Still being dragged over, so the box to write in waits for the drag to end. */
+  picking?: boolean
 }
 
 export function ReviewPage(props: {
@@ -577,6 +579,11 @@ export function ReviewPage(props: {
     if (extend && d && d.hunk === hunk && !d.id) return setDraft({ hunk, from: Math.min(d.from, at), to: Math.max(d.to, at) })
     setDraft({ hunk, from: at, to: at })
     setDraftText('')
+  }
+  /** Lines `anchor` to `at` of a hunk, either way round, as a new comment's while dragging over them. */
+  const spanDraft = (hunk: string, anchor: number, at: number, picking: boolean) => {
+    if (draft()?.hunk !== hunk || draft()?.id) setDraftText('')
+    setDraft({ hunk, from: Math.min(anchor, at), to: Math.max(anchor, at), picking })
   }
   /** The draft as a note on its lines, or undefined if it's empty. */
   const noteOf = (rows: Row[], path: string): Note | undefined => {
@@ -940,6 +947,7 @@ export function ReviewPage(props: {
                                 onToggle={() => setOpen((o) => ({ ...o, [id]: !isOpen(id) }))}
                                 onViewed={(on) => setViewed([id], on)}
                                 onLine={(at, extend) => startDraft(id, at, extend)}
+                                onSpan={(anchor, at, picking) => spanDraft(id, anchor, at, picking)}
                                 onDraftText={setDraftText}
                                 onComment={() => saveComment(rows(), p.file.path)}
                                 onAsk={() => ask(rows(), p.file.path)}
@@ -1030,6 +1038,7 @@ function HunkView(props: {
   onToggle: () => void
   onViewed: (on: boolean) => void
   onLine: (at: number, extend: boolean) => void
+  onSpan: (anchor: number, at: number, picking: boolean) => void
   onDraftText: (text: string) => void
   onComment: () => void
   onAsk: () => void
@@ -1093,7 +1102,11 @@ function HunkView(props: {
         if (!code?.isConnected || !r || r.kind === 'hunk') continue
         const start = code.getBoundingClientRect()
         const lines = r.text.trimEnd() ? textBoxes(code, [0, r.text.trimEnd().length]) : []
-        if (!lines.length) lines.push(new DOMRect(start.left, start.top, ch, start.height))
+        // A blank line by its row, since an empty span measures as nothing at the baseline.
+        if (!lines.length) {
+          const row = code.closest('[data-row]')?.getBoundingClientRect()
+          lines.push(new DOMRect(start.left, row ? row.top : start.top, ch, row ? half * 2 : start.height))
+        }
         for (const b of lines) {
           const mid = (b.top + b.bottom) / 2 - at.top
           picked.push({ l: start.left - at.left - 3, r: Math.max(b.right, start.left + ch) - at.left + 3, t: mid - half, b: mid + half })
@@ -1123,6 +1136,37 @@ function HunkView(props: {
   })
 
   /** Only for the rows it was made from: while new rows are highlighted, the last ones' lines would be out of step. */
+  /**
+   * Pressing on a line's + or numbers picks it for a comment, and dragging up or down picks the lines between, scrolling
+   * the page near its edges; the box to write in opens when it's let go. Shift picks from the last line picked, as before.
+   */
+  const pickFrom = (e: PointerEvent, at: number) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    if (e.shiftKey) return props.onLine(at, true)
+    let to = at
+    props.onSpan(at, at, true)
+    const page = body()?.closest('.overflow-y-auto')
+    const move = (ev: PointerEvent) => {
+      const row = (document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null)?.closest<HTMLElement>('[data-row]')
+      if (row && body()?.contains(row) && Number(row.dataset.row) !== to) props.onSpan(at, (to = Number(row.dataset.row)), true)
+      if (page) {
+        const edge = page.getBoundingClientRect()
+        if (ev.clientY < edge.top + 60) page.scrollBy(0, -20)
+        else if (ev.clientY > edge.bottom - 40) page.scrollBy(0, 20)
+      }
+    }
+    const up = () => {
+      removeEventListener('pointermove', move)
+      removeEventListener('pointerup', up)
+      removeEventListener('pointercancel', up)
+      props.onSpan(at, to, false)
+    }
+    addEventListener('pointermove', move)
+    addEventListener('pointerup', up)
+    addEventListener('pointercancel', up)
+  }
+
   const lineHtml = (i: number) => (html()?.rows === props.rows ? html()!.lines?.[i] : undefined)
 
   return (
@@ -1187,17 +1231,22 @@ function HunkView(props: {
                 const anchor = anchorOf(r)
                 const comments = () => props.comments.filter((c) => c.to === anchor)
                 const questions = () => props.questions.filter((q) => q.to === anchor)
-                const editing = () => props.draft && props.draft.to === i()
+                const editing = () => props.draft && !props.draft.picking && props.draft.to === i()
                 return (
                   <>
                     <div
+                      data-row={i()}
                       class={`group relative flex ${r.kind === 'add' ? 'bg-ok/10' : r.kind === 'del' ? 'bg-danger/10' : ''}`}
                     >
-                      <span class="w-10 shrink-0 select-none pr-1.5 text-right text-fg-3/70 tabular-nums">{r.old ?? ''}</span>
-                      <span class="w-10 shrink-0 select-none pr-1.5 text-right text-fg-3/70 tabular-nums">{r.new ?? ''}</span>
+                      <span onPointerDown={(e) => pickFrom(e, i())} class="flex shrink-0 cursor-pointer select-none">
+                        <span class="w-10 pr-1.5 text-right text-fg-3/70 tabular-nums">{r.old ?? ''}</span>
+                        <span class="w-10 pr-1.5 text-right text-fg-3/70 tabular-nums">{r.new ?? ''}</span>
+                      </span>
                       <button
-                        onClick={(e) => props.onLine(i(), e.shiftKey)}
-                        title="Comment on or ask about this line (shift-click to cover from the last one)"
+                        onPointerDown={(e) => pickFrom(e, i())}
+                        // A click from the keyboard; a pointer's is handled as it goes down.
+                        onClick={(e) => e.detail === 0 && props.onLine(i(), e.shiftKey)}
+                        title="Comment on or ask about this line: drag to cover more, or shift-click another"
                         class="absolute left-0.5 top-0.5 grid size-4 place-items-center rounded bg-primary text-on-primary opacity-0 group-hover:opacity-100 pointer-coarse:opacity-40"
                       >
                         <MessageSquarePlus class="size-2.5" />
@@ -1267,7 +1316,8 @@ function Code(props: { line: Line; html?: string; ref: (el: HTMLElement) => void
   let el!: HTMLSpanElement
   // Filled by hand rather than by Solid, since highlighting replaces what's inside.
   createEffect(() => {
-    if (props.html !== undefined) el.innerHTML = props.html
+    // A space for an empty line, so it's a line's height like the rest.
+    if (props.html) el.innerHTML = props.html
     else el.textContent = props.line.text || ' '
     props.onDrawn()
   })
