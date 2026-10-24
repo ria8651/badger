@@ -308,14 +308,21 @@ export function Chat(props: {
           </For>
         </div>
         <Show when={reviewing()}>
-          <ReviewPage
-            sessionId={props.sessionId}
-            cwd={cwd()}
-            machine={machine()}
-            index={index}
-            running={state.running}
-            onSend={state.gone || stranded() ? undefined : (text) => send(text)}
-          />
+          <ChildChats.Provider value={children.state}>
+            <Checking.Provider value={(id) => state.checking.includes(id)}>
+              <ReviewPage
+                sessionId={props.sessionId}
+                cwd={cwd()}
+                machine={machine()}
+                index={index}
+                running={state.running}
+                partial={state.partial}
+                bashOutput={state.bashOutput}
+                children={state.children}
+                onSend={state.gone || stranded() ? undefined : (text) => send(text)}
+              />
+            </Checking.Provider>
+          </ChildChats.Provider>
           {/* Claude asking for something can't wait for you to switch to the conversation. */}
           <Show when={state.permissions.length || state.error}>
             <div class="flex shrink-0 flex-col gap-2 border-t border-line p-3">

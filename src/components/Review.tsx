@@ -1,13 +1,16 @@
-import { For, Show, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack } from 'solid-js'
-import { Check, ChevronDown, ChevronRight, MessageSquarePlus, RotateCw, Sparkles, Trash2 } from '../icons'
-import type { ReviewAttention, ReviewDiff, ReviewFile, ReviewGroup, ReviewGuide, ReviewHunk } from '../../shared/protocol.ts'
+import { For, Show, createContext, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack, useContext } from 'solid-js'
+import { Check, ChevronDown, ChevronRight, MessageSquarePlus, RotateCw, Trash2 } from '../icons'
+import type { ReviewAttention, ReviewDiff, ReviewFile, ReviewGroup, ReviewGuide, ReviewHunk, WireMessage } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { plural } from '../format.ts'
 import { highlight, languageOf } from '../highlight.ts'
 import { recall, remember, settle } from '../scrollMemory.ts'
+import { TranscriptIndex } from '../transcript/context.ts'
 import { itemsFor, type Block, type Index } from '../transcript/model.ts'
+import type { Partial as Streaming } from '../useChat.ts'
+import { Messages } from './Transcript.tsx'
 import { Markdown } from './Markdown.tsx'
-import { Button, DiffCount, GhostButton, inputClass } from './ui.tsx'
+import { Button, DiffCount, GhostButton, LiveDot, inputClass } from './ui.tsx'
 
 /*
  * SPIKE: a review chat's page. Its checkout's changes, every hunk, in the groups and order of the
@@ -368,18 +371,23 @@ function guideOf(index: Index): { guide?: ReviewGuide; writing: boolean } {
   return { guide, writing: pending || (!!guide && !done) }
 }
 
-/** Claude's replies to each question, by its id: what it said after the question went in, until the next message. */
-function answersOf(index: Index, questions: Question[]): Map<string, string> {
+/**
+ * Claude's answer to each question, by its id: the conversation from the question until the next message the user sent,
+ * without how the turn ended. `latest`: nothing's been sent since, so what's streaming now is the rest of it.
+ */
+type Answer = { messages: WireMessage[]; latest: boolean }
+function answersOf(index: Index, questions: Question[]): Map<string, Answer> {
   const ids = new Map(questions.map((q) => [q.message.trim(), q.id]))
-  const out = new Map<string, string>()
-  let current: string | undefined
+  const out = new Map<string, Answer>()
+  let current: Answer | undefined
   for (const m of index.groups.get('') ?? []) {
-    for (const item of itemsFor(m)) {
-      if (item.kind === 'user') {
-        current = ids.get(item.text.trim())
-        if (current) out.set(current, '')
-      } else if (current && item.kind === 'text') out.set(current, [out.get(current), item.text].filter(Boolean).join('\n\n'))
-    }
+    const prompt = itemsFor(m).find((i) => i.kind === 'user')
+    if (prompt?.kind === 'user') {
+      if (current) current.latest = false
+      const id = ids.get(prompt.text.trim())
+      current = id ? { messages: [], latest: true } : undefined
+      if (id && current) out.set(id, current)
+    } else if (current && m.type !== 'result') current.messages.push(m)
   }
   return out
 }
@@ -462,6 +470,16 @@ interface Section {
 }
 type Placed = { file: ReviewFile; hunk: ReviewHunk }
 
+/** What an answer streaming in needs from its chat, for the transcript's own rendering of it. */
+interface LiveChat {
+  partial: () => Streaming | null
+  bashOutput: () => Record<string, string>
+  children: () => Record<string, string> | undefined
+  running: () => boolean
+  cwd: () => string | undefined
+}
+const LiveChatContext = createContext<LiveChat>()
+
 /** Where a new comment or question is going: rows from..to of one hunk. */
 interface Draft {
   hunk: string
@@ -483,6 +501,10 @@ export function ReviewPage(props: {
   running: boolean
   /** Sends a message to the chat; absent when it can't take one. */
   onSend?: (text: string) => void
+  /** What's streaming in, for answers to show as the conversation does. */
+  partial: Streaming | null
+  bashOutput: Record<string, string>
+  children?: Record<string, string>
 }) {
   const { saved, update } = useReview(untrack(() => props.sessionId))
   const [diff, setDiff] = createSignal<ReviewDiff>()
@@ -666,31 +688,34 @@ export function ReviewPage(props: {
   // Not saved over until it's been gone back to: the page starts at the top while the diff loads.
   let restoring = !!spot
   let restored = false
-  // Back to where it was read to, once that hunk is on the page; given up on if it's not in the diff any more.
-  createEffect(
-    on(sections, () => {
-      if (restored || !spot) return
-      if (diff() && !placed().has(spot.hunk)) {
-        restored = true
-        restoring = false
-        return
-      }
-      if (!hunkEls.has(spot.hunk)) return
-      restored = true
-      requestAnimationFrame(() => {
-        const stop = settle(scroller, content, () => {
-          const el = hunkEls.get(spot.hunk)
-          if (el) scroller.scrollTop += el.getBoundingClientRect().top - (scroller.getBoundingClientRect().top + PINNED_TOP + 8) + spot.offset
-        })
-        // Saving again once it's settled, or the user takes over.
-        setTimeout(() => {
-          stop()
-          restoring = false
-        }, 3000)
-        for (const e of ['wheel', 'touchstart', 'keydown', 'pointerdown']) scroller.addEventListener(e, () => (restoring = false), { once: true, passive: true })
+  /** No going back once the page is being used, or the hunk has gone: it would jump from under the reader. */
+  const giveUp = () => {
+    restored = true
+    restoring = false
+  }
+  onMount(() => {
+    for (const e of ['wheel', 'touchstart', 'keydown', 'pointerdown']) scroller.addEventListener(e, () => restored || giveUp(), { once: true, passive: true })
+  })
+  // Back to where it was read to, as soon as that hunk is on the page.
+  const tryRestore = () => {
+    if (restored || !spot) return
+    if (diff() && !placed().has(spot.hunk)) return giveUp()
+    if (!hunkEls.has(spot.hunk)) return
+    restored = true
+    requestAnimationFrame(() => {
+      const stop = settle(scroller, content, () => {
+        const el = hunkEls.get(spot.hunk)
+        if (el) scroller.scrollTop += el.getBoundingClientRect().top - (scroller.getBoundingClientRect().top + PINNED_TOP + 8) + spot.offset
       })
-    }),
-  )
+      // Saving again once it's settled, or the user takes over.
+      setTimeout(() => {
+        stop()
+        restoring = false
+      }, 3000)
+      for (const e of ['wheel', 'touchstart', 'keydown', 'pointerdown']) scroller.addEventListener(e, () => (restoring = false), { once: true, passive: true })
+    })
+  }
+  createEffect(on(sections, tryRestore))
   /** Groups opened or folded in the outline by hand; otherwise only the one being read is open. */
   const [unfolded, setUnfolded] = createSignal<Record<string, boolean>>({})
   const isUnfolded = (id: string) => unfolded()[id] ?? current() === id
@@ -749,7 +774,17 @@ export function ReviewPage(props: {
     })
   }
 
+  const live: LiveChat = {
+    partial: () => props.partial,
+    bashOutput: () => props.bashOutput,
+    children: () => props.children,
+    running: () => props.running,
+    cwd: () => props.cwd,
+  }
+
   return (
+    <TranscriptIndex.Provider value={props.index}>
+    <LiveChatContext.Provider value={live}>
     <div class="@container flex min-h-0 flex-1 flex-col text-ui">
       <div class="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-line px-3 py-1.5 text-xs text-fg-3">
         <Show when={diff()}>
@@ -856,7 +891,9 @@ export function ReviewPage(props: {
               fallback={
                 <Show when={diff()}>
                   <p class="mt-4 flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 text-fg-2">
-                    <Sparkles class={`size-3.5 shrink-0 text-accent ${props.running ? 'animate-pulse' : ''}`} />
+                    <Show when={props.running || told().writing}>
+                      <LiveDot />
+                    </Show>
                     {props.running || told().writing
                       ? 'Claude is reading the changes to write a guide. Meanwhile, here they are file by file.'
                       : 'No guide yet. Here are the changes file by file.'}
@@ -900,7 +937,7 @@ export function ReviewPage(props: {
                       </span>
                       <Show when={s.attention === 'changed' && props.onSend}>
                         <Button class="flex h-7 items-center gap-1 text-xs" disabled={props.running} onClick={() => props.onSend!(UPDATE_GUIDE)}>
-                          <Sparkles class="size-3" /> Update the guide
+                          Update the guide
                         </Button>
                       </Show>
                       <button
@@ -932,7 +969,10 @@ export function ReviewPage(props: {
                             const id = p.hunk.id
                             return (
                               <HunkView
-                                ref={(el) => hunkEls.set(id, el)}
+                                ref={(el) => {
+                                  hunkEls.set(id, el)
+                                  if (id === spot?.hunk) queueMicrotask(tryRestore)
+                                }}
                                 file={p.file}
                                 rows={rows()}
                                 open={isOpen(id)}
@@ -994,6 +1034,8 @@ export function ReviewPage(props: {
         </div>
       </div>
     </div>
+    </LiveChatContext.Provider>
+    </TranscriptIndex.Provider>
   )
 }
 
@@ -1030,7 +1072,7 @@ function HunkView(props: {
   /** The file's; each shows under its last line, if that's in this hunk. */
   comments: Note[]
   questions: Question[]
-  answers: Map<string, string>
+  answers: Map<string, Answer>
   running: boolean
   draft?: Draft
   draftText: string
@@ -1078,8 +1120,8 @@ function HunkView(props: {
     const half = parseFloat(getComputedStyle(el).lineHeight) / 2 || 10
     const boxes: Record<'add' | 'del', Box[]> = { add: [], del: [] }
     props.rows.forEach((r, i) => {
-      // Lines being picked for a comment show only that, rather than its colour mixing with theirs.
-      const picking = props.draft && i >= props.draft.from && i <= props.draft.to
+      // Lines being picked for a comment, or selected, show only that, rather than its colour mixing with theirs.
+      const picking = (props.draft && i >= props.draft.from && i <= props.draft.to) || (selectedRows() && i >= selectedRows()![0] && i <= selectedRows()![1])
       if (r.kind === 'hunk' || r.kind === 'ctx' || picking || !r.marks?.length || !codeEls[i]?.isConnected) return
       for (const m of r.marks) {
         for (const b of textBoxes(codeEls[i], m)) {
@@ -1113,6 +1155,18 @@ function HunkView(props: {
         }
       }
     }
+    // Text selected the ordinary way, drawn like the rest rather than by the browser: the part of it in this hunk's code,
+    // character by character, leaving out the line numbers and signs a selection runs through on its way.
+    const chosen: Box[] = []
+    const range = selection()
+    if (range) {
+      const code = codeEls.find((c) => c?.isConnected)?.getBoundingClientRect()
+      for (const b of range.getClientRects()) {
+        if (!b.width || !code || b.left < code.left - 1 || b.bottom < at.top || b.top > at.bottom) continue
+        const mid = (b.top + b.bottom) / 2 - at.top
+        chosen.push({ l: b.left - at.left, r: b.right - at.left, t: mid - half, b: mid + half })
+      }
+    }
     marks.innerHTML = [
       ...(
         [
@@ -1121,7 +1175,58 @@ function HunkView(props: {
         ] as const
       ).map(([kind, colour]) => `<path d="${blobs(boxes[kind], 4)}" style="fill: var(${colour}); opacity: 0.28" />`),
       picked.length ? `<path d="${blobs(picked, 5)}" style="fill: var(--color-accent); opacity: 0.3" />` : '',
+      chosen.length ? `<path d="${blobs(chosen, 4)}" style="fill: var(--color-accent); opacity: 0.3" />` : '',
     ].join('')
+  }
+
+  /** The page's text selection while some of it is in this hunk; where to offer commenting on it, once it's been made. */
+  const [selection, setSelection] = createSignal<Range>()
+  const [offer, setOffer] = createSignal<{ from: number; to: number; x: number; y: number }>()
+  /** The rows of this hunk the selection covers, from..to: all of them past whichever end of it is outside. */
+  const selectedRows = (): [number, number] | undefined => {
+    const range = selection()
+    const el = body()
+    if (!range || !el) return
+    const start = rowOf(range.startContainer)
+    const end = rowOf(range.endContainer)
+    return [start && el.contains(start) ? Number(start.dataset.row) : 0, end && el.contains(end) ? Number(end.dataset.row) : props.rows.length - 1]
+  }
+  const rowOf = (n: Node) => (n.nodeType === Node.TEXT_NODE ? n.parentElement : (n as Element))?.closest<HTMLElement>('[data-row]')
+  const onSelectionChange = () => {
+    const el = body()
+    const sel = getSelection()
+    const range = el && sel && !sel.isCollapsed && sel.rangeCount ? sel.getRangeAt(0) : undefined
+    const here = el && range && range.intersectsNode(el) ? range : undefined
+    if (!here && !selection()) return
+    setSelection(here?.cloneRange())
+    if (!here) setOffer(undefined)
+    redraw()
+  }
+  // Offered once the mouse lets go, for a selection that starts and ends in this hunk's lines.
+  const onSelected = () => {
+    const el = body()
+    const range = selection()
+    const from = range && rowOf(range.startContainer)
+    const to = range && rowOf(range.endContainer)
+    if (!el || !range || !from || !to || !el.contains(from) || !el.contains(to)) return setOffer(undefined)
+    const end = [...range.getClientRects()].filter((b) => b.width).at(-1)
+    const at = el.getBoundingClientRect()
+    if (end) setOffer({ from: Number(from.dataset.row), to: Number(to.dataset.row), x: end.right - at.left, y: end.bottom - at.top })
+  }
+  onMount(() => {
+    document.addEventListener('selectionchange', onSelectionChange)
+    document.addEventListener('pointerup', onSelected)
+    onCleanup(() => {
+      document.removeEventListener('selectionchange', onSelectionChange)
+      document.removeEventListener('pointerup', onSelected)
+    })
+  })
+  const commentOnSelection = () => {
+    const o = offer()
+    if (!o) return
+    getSelection()?.removeAllRanges()
+    setOffer(undefined)
+    props.onSpan(o.from, o.to, false)
   }
   const redraw = () => {
     if (!queued) queued = requestAnimationFrame(draw)
@@ -1223,8 +1328,21 @@ function HunkView(props: {
           }
         >
           {/* Its own stacking context, so the marks can go under the rows' text but stay above the page. */}
-          <div ref={setBody} class="relative isolate font-mono text-xs leading-5">
+          {/* The browser's own selection colour is hidden here: the selection is drawn with the marks, as a shape. */}
+          <div ref={setBody} class="relative isolate font-mono text-xs leading-5 selection:bg-transparent">
             <svg ref={marks} class="pointer-events-none absolute inset-0 -z-10 size-full overflow-visible" aria-hidden="true" />
+            <Show when={offer()}>
+              {(o) => (
+                <button
+                  onPointerDown={(e) => e.preventDefault()}
+                  onClick={commentOnSelection}
+                  style={{ left: `${Math.max(0, o().x - 40)}px`, top: `${o().y + 4}px` }}
+                  class="absolute z-10 flex items-center gap-1 rounded-md bg-primary px-2 py-1 font-sans text-xs text-on-primary shadow-(--shadow-pop)"
+                >
+                  <MessageSquarePlus class="size-3" /> Comment
+                </button>
+              )}
+            </Show>
             <For each={props.rows}>
               {(r, i) => {
                 if (r.kind === 'hunk') return null
@@ -1269,7 +1387,7 @@ function HunkView(props: {
                       />
                     </Show>
                     <For each={questions()}>
-                      {(q) => <QuestionBox question={q} answer={props.answers.get(q.id)} running={props.running} onRemove={() => props.onRemoveQuestion(q.id)} />}
+                      {(q) => <QuestionBox question={q} answer={props.answers.get(q.id)} onRemove={() => props.onRemoveQuestion(q.id)} />}
                     </For>
                     <For each={comments()}>
                       {(c) => (
@@ -1365,7 +1483,7 @@ function DraftBox(props: {
         </Button>
         <Show when={!props.editing}>
           <Button onClick={props.onAsk} disabled={!props.canAsk} class="flex h-7 items-center gap-1 text-xs" title="Sent now; Claude's answer shows here">
-            <Sparkles class="size-3" /> Ask Claude
+            Ask Claude
           </Button>
         </Show>
         <Button onClick={props.onCancel} class="h-7 text-xs">
@@ -1399,9 +1517,14 @@ function CommentBox(props: { note: Note; onEdit?: () => void; onRemove: () => vo
   )
 }
 
-function QuestionBox(props: { question: Question; answer?: string; running: boolean; onRemove: () => void }) {
+/** A question and Claude's answer, shown as the conversation shows a turn: its work folded once done, its reply as it streams. */
+function QuestionBox(props: { question: Question; answer?: Answer; onRemove: () => void }) {
+  const live = useContext(LiveChatContext)!
+  const answering = () => !!props.answer?.latest && live.running()
   return (
-    <div class={`${boxClass} group/q border-accent/30 bg-accent/5`}>
+    // Never what the page keeps still as it scrolls: an answer changes height as it streams and folds, and the lines around
+    // it shouldn't move for that.
+    <div class={`${boxClass} group/q border-accent/30 bg-accent/5 [overflow-anchor:none]`}>
       <div class="mb-0.5 flex items-center gap-2 text-xs text-fg-3">
         <span>You asked</span>
         <div class="flex-1" />
@@ -1410,17 +1533,30 @@ function QuestionBox(props: { question: Question; answer?: string; running: bool
         </button>
       </div>
       <p class="whitespace-pre-wrap text-fg">{props.question.text}</p>
-      <div class="mt-2 border-t border-accent/20 pt-2 text-fg-2">
+      <div class="mt-2 border-t border-accent/20 pt-1 text-fg-2">
         <Show
           when={props.answer}
           fallback={
-            <span class="flex items-center gap-1.5 text-xs text-fg-3">
-              <Sparkles class={`size-3 ${props.running ? 'animate-pulse' : ''}`} />
-              {props.answer === undefined ? 'Waiting to go in…' : props.running ? 'Claude is answering…' : 'No answer.'}
+            <span class="flex items-center gap-2 py-1 text-xs text-fg-3">
+              <LiveDot /> Waiting to go in
             </span>
           }
         >
-          {(a) => <Markdown text={a()} />}
+          {(a) => (
+            <Show when={a().messages.length || answering()} fallback={<span class="text-xs text-fg-3">No answer.</span>}>
+              <Messages
+                messages={a().messages}
+                partial={a().latest ? live.partial() : null}
+                bashOutput={live.bashOutput()}
+                running={answering()}
+                working={answering()}
+                cwd={live.cwd()}
+                children={live.children()}
+                nested
+                folded
+              />
+            </Show>
+          )}
         </Show>
       </div>
     </div>
