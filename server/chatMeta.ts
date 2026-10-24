@@ -129,6 +129,10 @@ export class ChatMeta {
   }
 
   /** `sourceId` is the chat it was started from, or empty if there was none with anything in it. */
+  removeReview(sessionId: string): void {
+    this.db.sql.prepare('DELETE FROM review_sessions WHERE session_id = ?').run(sessionId)
+  }
+
   addReview(review: { sessionId: string; sourceId: string }): void {
     this.db.sql.prepare('INSERT INTO review_sessions (session_id, source_id, created_at) VALUES (?, ?, ?)').run(review.sessionId, review.sourceId, Date.now())
   }

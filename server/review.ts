@@ -47,9 +47,6 @@ export function reviewTool(deps: ReviewDeps, sessionId: string, cwd: () => strin
         `Review ${what.filter(Boolean).join(' and ')}. Another chat is waiting on your report, so don't change anything.`,
         ...(card ? ['', `The work is for card #${card.id}: ${card.title}.`] : []),
         ...(focus?.trim() ? ['', focus.trim()] : []),
-        // SPIKE: for the review panel, which shows these beside the diff.
-        '',
-        'End your report with a fenced code block tagged `findings`: a JSON array with one {"file", "line", "severity", "note"} for each issue on a specific line. file is relative to the checkout root, line is on the new side, severity is high, medium or low. An empty array if there are none.',
       ].join('\n')
 
       const result = await child(dir, prompt)

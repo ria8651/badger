@@ -35,7 +35,7 @@ import type { CreateSpec } from './ptyProtocol.ts'
  * Runners and the hub are updated separately, so bump this when either side
  * would misread the other; the hub turns away runners on another version.
  */
-export const RUNNER_PROTOCOL = 7
+export const RUNNER_PROTOCOL = 8
 
 /** Header a runner sends its protocol version in, so a mismatch is caught before the upgrade. */
 export const PROTOCOL_HEADER = 'x-badger-protocol'

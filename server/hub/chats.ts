@@ -93,6 +93,8 @@ export class Chats {
   private rootAnswers = new Map<string, Map<string, string | Promise<string | undefined>>>()
   /** By machine, folders it didn't answer for lately, and when: not waited on again for GONE_TTL_MS. */
   private rootMisses = new Map<string, Map<string, number>>()
+  /** Diff reviews being started, by machine and folder. */
+  private reviewsStarting = new Map<string, Promise<{ sessionId: string }>>()
   /** Chats whose history grew with no live process, whose viewers get it again. */
   private stale = new Set<string>()
   private readonly soonListChanged: () => void
@@ -551,11 +553,22 @@ export class Chats {
    * otherwise the card of the chat it was started `from`. It's told what that chat (or, if it has nothing in it yet,
    * the folder's latest) was asked, so its guide knows what the changes are for.
    */
-  async review(body: { cwd?: unknown; machine?: unknown; from?: unknown; card?: unknown }): Promise<{ sessionId: string }> {
-    const { db, board, meta, transcripts, machines, placement } = this.d
+  review(body: { cwd?: unknown; machine?: unknown; from?: unknown; card?: unknown }): Promise<{ sessionId: string }> {
     const cwd = absolutePath(body.cwd)
-    const runner = machines.fromRequest(body.machine)
+    const runner = this.d.machines.fromRequest(body.machine)
     if (body.card !== undefined && typeof body.card !== 'number') throw new BadRequest('card must be a card id')
+    // One start at a time per folder: a second (a double click, another tab) gets the same review chat, not one of its own.
+    const key = `${runner.id}\0${cwd}`
+    let starting = this.reviewsStarting.get(key)
+    if (!starting) {
+      starting = this.startReview(cwd, runner, body).finally(() => this.reviewsStarting.delete(key))
+      this.reviewsStarting.set(key, starting)
+    }
+    return starting
+  }
+
+  private async startReview(cwd: string, runner: Connection, body: { from?: unknown; card?: unknown }): Promise<{ sessionId: string }> {
+    const { db, board, meta, transcripts, placement } = this.d
     // Newest first.
     const here = (await this.list()).filter((s) => s.cwd === cwd && (s.machine ?? LOCAL_MACHINE) === runner.id && !s.archived)
     const open = here.find((s) => s.review)
@@ -572,7 +585,22 @@ export class Chats {
       board.linkSession(card.id, sessionId, UI)
       this.d.cardsChanged()
     }
-    await runner.remote.send(sessionId, { cwd, mode: 'auto', review: true }, prompt, [], [])
+    try {
+      await runner.remote.send(sessionId, { cwd, mode: 'auto', review: true }, prompt, [], [])
+    } catch (err) {
+      // Turned away, so it never started: nothing of it is kept. Anything else, e.g. the connection dropping, it may have.
+      if (err instanceof BadRequest) {
+        db.transaction(() => {
+          placement.unassign(sessionId, runner.id)
+          meta.removeReview(sessionId)
+        })
+        if (card) {
+          board.unlinkSession(card.id, sessionId, UI)
+          this.d.cardsChanged()
+        }
+      }
+      throw err
+    }
     this.d.listChanged()
     return { sessionId }
   }

@@ -21,7 +21,6 @@ export type View =
   | PreviewView
   | { kind: 'task'; session: string; id: string }
   | PlanView
-  | ReviewView
   | AttachmentView
   | BtwView
 /**
@@ -33,9 +32,6 @@ export type PreviewView = { kind: 'preview'; id: string; name?: string; path?: s
 /** The plan a chat is proposing, or last proposed. One per chat, so a revised plan takes the old one's place. */
 export type PlanView = { kind: 'plan'; session: string }
 export const planView = (session: string): PlanView => ({ kind: 'plan', session })
-/** The changes in a chat's checkout, to read and comment on. One per chat, since comments go back to it. */
-export type ReviewView = { kind: 'review'; session: string }
-export const reviewView = (session: string): ReviewView => ({ kind: 'review', session })
 /**
  * Something that went in with a prompt, e.g. a paste or a memory file. By reference: the prompt's message
  * and which `part` of it (`paste:<n>` or `context:<n>`), so layouts don't keep copies of what can be big.
@@ -47,13 +43,13 @@ export const btwView = (session: string): BtwView => ({ kind: 'btw', session })
 export const viewKey = (v: View) =>
   v.kind === 'task'
     ? `task:${v.session}:${v.id}`
-    : v.kind === 'plan' || v.kind === 'review' || v.kind === 'btw'
+    : v.kind === 'plan' || v.kind === 'btw'
       ? `${v.kind}:${v.session}`
       : v.kind === 'attachment'
         ? `attachment:${v.session}:${v.prompt}:${v.part}`
         : `${v.kind}:${v.id}`
 /** The chat a view belongs to, if it only shows beside one. */
-export const sessionOf = (v: View) => (v.kind === 'task' || v.kind === 'plan' || v.kind === 'review' || v.kind === 'attachment' || v.kind === 'btw' ? v.session : undefined)
+export const sessionOf = (v: View) => (v.kind === 'task' || v.kind === 'plan' || v.kind === 'attachment' || v.kind === 'btw' ? v.session : undefined)
 
 export type Group = { type: 'group'; id: string; views: View[]; active?: string }
 export type Leaf = { type: 'chat' } | Group

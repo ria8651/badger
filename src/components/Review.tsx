@@ -14,7 +14,7 @@ import { Button, DiffCount, GhostButton, LiveDot, inputClass } from './ui.tsx'
 
 /*
  * SPIKE: a review chat's page. Its checkout's changes, every hunk, in the groups and order of the
- * guide Claude writes for them (report_review_guide), each group with what a reader needs to
+ * guide Claude writes for them (review_guide_group, then review_guide_done), each group with what a reader needs to
  * follow it. You tick hunks off as you read, ask about lines (Claude answers beside them), and
  * send comments for Claude to act on, after which it updates the guide. What's kept (viewed
  * hunks, comments, questions) is in localStorage, per review chat.
@@ -22,8 +22,7 @@ import { Button, DiffCount, GhostButton, LiveDot, inputClass } from './ui.tsx'
 
 const GROUP_TOOL = 'review_guide_group'
 const DONE_TOOL = 'review_guide_done'
-/** How the whole guide was reported in one call, before groups came one at a time. */
-const OLD_GUIDE_TOOL = 'report_review_guide'
+
 /** Where a pinned column sits by its start: below its group's header, which is pinned at the top. */
 const PINNED_TOP = 56
 
@@ -291,8 +290,8 @@ function roundedPath(pts: [number, number][], radius: number): string {
 
 // ── What Claude said: the guide, and answers ──
 
-/** The chat's guide calls, by tool name's end: tools are named mcp__<server>__<tool>. */
-const guideCall = (name?: string) => [GROUP_TOOL, DONE_TOOL, OLD_GUIDE_TOOL].find((t) => name?.endsWith(`__${t}`))
+/** Which of Badger's guide tools a call is, if it is one: another MCP server's tool of the same name isn't. */
+const guideCall = (name?: string) => [GROUP_TOOL, DONE_TOOL].find((t) => name === `mcp__badger__${t}`)
 
 /** The guide calls and how each went, as a string: the guide only needs working out again when this changes. */
 function guideCalls(index: Index): string {
@@ -311,7 +310,7 @@ function guideCalls(index: Index): string {
 /**
  * The guide as the chat's guide calls left it, those that were shown, in order. A group call adds a group or changes one,
  * keeping what it leaves out, and takes its hunks from any other group; a done call sets the summary and the order, and
- * says it's whole. (A chat from before groups came one at a time reported the whole guide in one call.) `writing`: a call
+ * says it's whole. `writing`: a call
  * is out, or groups have come since the last done.
  */
 function guideOf(index: Index): { guide?: ReviewGuide; writing: boolean } {
@@ -351,23 +350,6 @@ function guideOf(index: Index): { guide?: ReviewGuide; writing: boolean } {
       } else if (call === DONE_TOOL) {
         for (const id of input.remove ?? []) groups.delete(id)
         order = [...new Set([...(input.order ?? []), ...order])].filter((id) => groups.has(id))
-        summary = input.summary ?? summary
-        done = true
-      } else if (call === OLD_GUIDE_TOOL) {
-        const before = new Map(groups)
-        groups.clear()
-        for (const g of input.groups ?? []) {
-          const old = before.get(g.id ?? '')
-          groups.set(g.id ?? '', {
-            id: g.id ?? '',
-            title: g.title ?? old?.title ?? g.id ?? '',
-            attention: g.attention ?? old?.attention ?? 'medium',
-            kind: g.kind ?? old?.kind,
-            explanation: g.explanation ?? old?.explanation ?? '',
-            hunks: g.hunks ?? [],
-          })
-        }
-        order = [...groups.keys()]
         summary = input.summary ?? summary
         done = true
       }

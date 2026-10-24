@@ -103,7 +103,7 @@ function store(dir: string, sessionId: string) {
 
 /** How far the guide has got against the diff now: hunks placed, and the ones still to go. */
 function progress(p: Placed, diff: ReviewDiff): { placed: number; missing: string[] } {
-  const inGuide = new Set(p.order.flatMap((g) => p.groups[g] ?? []))
+  const inGuide = new Set(p.order.flatMap((g) => (Object.hasOwn(p.groups, g) ? p.groups[g] : [])))
   const all = hunkIds(diff.files)
   const missing = all.filter((h) => !inGuide.has(h))
   return { placed: all.length - missing.length, missing }
@@ -150,7 +150,7 @@ export function reviewGuideTools(sessionId: string, cwd: () => string, dir: stri
         'Calling it again with a group’s id changes that group: leave out title, attention, kind or explanation to keep them, and pass hunks to replace its hunks. A hunk given to one group leaves any other it was in. After the changes move on (e.g. you acted on comments), update the groups that changed this way, then call review_guide_done again.',
       ].join('\n'),
       {
-        id: z.string().describe('A short slug, e.g. "settings-field".'),
+        id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/, 'a short slug of lowercase letters, digits and hyphens').describe('A short slug, e.g. "settings-field".'),
         title: z.string().optional().describe('What the change is, in a few words. Needed for a new group.'),
         attention: z.enum(REVIEW_ATTENTION).optional().describe('Needed for a new group.'),
         kind: z.string().optional().describe('A word or two, e.g. "new logic", "rename", "plumbing", "tests", "config".'),
@@ -165,7 +165,7 @@ export function reviewGuideTools(sessionId: string, cwd: () => string, dir: stri
           return refuse((err as Error).message)
         }
         const p = await saved.read()
-        const fresh = !p.groups[g.id]
+        const fresh = !Object.hasOwn(p.groups, g.id)
         if (fresh) {
           const needs = (['title', 'attention', 'explanation', 'hunks'] as const).filter((k) => !g[k]?.length)
           if (needs.length) return refuse(`Not shown: a new group needs ${needs.join(', ')}.`)
@@ -203,7 +203,7 @@ export function reviewGuideTools(sessionId: string, cwd: () => string, dir: stri
           return refuse((err as Error).message)
         }
         const p = await saved.read()
-        const unknown = [...(order ?? []), ...(remove ?? [])].filter((id) => !p.groups[id])
+        const unknown = [...(order ?? []), ...(remove ?? [])].filter((id) => !Object.hasOwn(p.groups, id))
         if (unknown.length) return refuse(`Not done: there are no groups ${list(unknown)}.`)
         const next: Placed = {
           order: [...new Set([...(order ?? []), ...p.order])].filter((id) => !remove?.includes(id)),

@@ -203,9 +203,6 @@ export function Chat(props: {
     ),
     attachment: (v) => attachmentOf(index(), v.prompt, v.part),
     renderAttachment: (v, onReady) => <AttachmentPane index={index} prompt={v.prompt} part={v.part} onReady={onReady} />,
-    // SPIKE: left from the review panel; review chats show theirs as the page instead.
-    reviewDrafts: () => 0,
-    renderReview: () => null,
     btwLive: () => sideChatsOf(props.sessionId).some((s) => s.running),
     renderBtw: (onReady) => <BtwPane parent={props.sessionId} onNew={() => askAside('')} onReady={onReady} />,
   }
