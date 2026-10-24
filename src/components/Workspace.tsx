@@ -43,7 +43,7 @@ import {
   type View,
 } from '../layout.ts'
 import { LOCAL, isOnline, onMachine } from '../machines.ts'
-import { dragSidebar } from '../sidebar.ts'
+import { dragSidebar, setSidebarLit } from '../sidebar.ts'
 import { previewUrl } from '../previews.ts'
 import { inWs, terminalLabel, terminalTooltip, terminals, terminalsListed, type Ws } from '../terminals.ts'
 import { PreviewFrame } from './PreviewFrame.tsx'
@@ -63,6 +63,11 @@ const css = (l: Len, px = 0) => `calc(${l.f * 100}% + ${l.g} * var(--pane-gutter
 const mid = (l: Len): Len => ({ f: l.f, g: l.g + 0.5 })
 /** Placed over a box. */
 const place = (b: Box): JSX.CSSProperties => ({ left: css(b.x), top: css(b.y), width: css(b.w), height: css(b.h) })
+/** Placed over a gutter, clear of the outlines of the panes either side. */
+const placeGutter = (b: Box, dir: 'row' | 'col'): JSX.CSSProperties =>
+  dir === 'row'
+    ? { ...place(b), left: `calc(${css(b.x)} + var(--pane-outline))`, width: `calc(${css(b.w)} - 2 * var(--pane-outline))` }
+    : { ...place(b), top: `calc(${css(b.y)} + var(--pane-outline))`, height: `calc(${css(b.h)} - 2 * var(--pane-outline))` }
 /** Placed inside a pane over a box: under its tab bar, and clear of the --inset round its edges. */
 const placeIn = (b: Box): JSX.CSSProperties => ({
   left: `calc(${css(b.x)} + var(--inset))`,
@@ -233,6 +238,15 @@ export function Workspace(props: {
   /** What's being dragged, for a cover over the page that keeps the cursor and stops terminals taking the pointer. */
   const [dragging, setDragging] = createSignal<'col-resize' | 'row-resize' | 'move' | 'grabbing'>()
 
+  // A gutter lights on hover by itself; these light the ones a corner moves, and the ones being dragged, which the cover
+  // above takes the hover from. 'sidebar' is the sidebar's edge.
+  const keyOf = (d: Divider) => `${d.path.join('.')}/${d.index}`
+  const [hovered, setHovered] = createSignal<string[]>([])
+  const [held, setHeld] = createSignal<string[]>([])
+  const lit = (key: string) => hovered().includes(key) || held().includes(key)
+  createEffect(() => setSidebarLit(lit('sidebar')))
+  onCleanup(() => setSidebarLit(false))
+
   /**
    * Drags gutters: one, or two where they meet. Each keeps the pair of panes either side of it the same size together.
    * With `sidebar`, the sidebar's edge comes too, from where a gutter meets it.
@@ -252,6 +266,7 @@ export function Workspace(props: {
     const cursors = new Set(drags.map((g) => g.row))
     if (sidebar) cursors.add(true)
     setDragging(cursors.size > 1 ? 'move' : cursors.has(true) ? 'col-resize' : 'row-resize')
+    setHeld([...ds.map(keyOf), ...(sidebar ? ['sidebar'] : [])])
     const move = (m: PointerEvent) => {
       followSidebar?.(m)
       update((l) =>
@@ -267,6 +282,7 @@ export function Workspace(props: {
     }
     const up = () => {
       setDragging()
+      setHeld([])
       removeEventListener('pointermove', move)
       removeEventListener('pointerup', up)
     }
@@ -651,15 +667,18 @@ export function Workspace(props: {
         }}
       </For>
 
-      {/* The gutters are the handles, grown a little each way so a thin one is easy to catch. */}
+      {/* The gutters are the handles, between the panes' outlines, grown a little each way so a thin one is easy to catch. */}
       <Index each={measured().dividers}>
         {(d) => (
           <div
             onPointerDown={(e) => startResize(e, [d()])}
-            class={`absolute z-10 rounded-full transition-colors delay-150 hover:bg-edge after:absolute after:content-[""] ${
-              d().dir === 'row' ? 'cursor-col-resize after:inset-y-0 after:-inset-x-1' : 'cursor-row-resize after:inset-x-0 after:-inset-y-1'
+            class={`gutter-handle absolute z-10 after:absolute after:content-[""] ${
+              d().dir === 'row'
+                ? 'cursor-col-resize after:inset-y-0 after:-inset-x-[calc(4px+var(--pane-outline))]'
+                : 'cursor-row-resize after:inset-x-0 after:-inset-y-[calc(4px+var(--pane-outline))]'
             }`}
-            style={place(d().gutter)}
+            data-lit={lit(keyOf(d())) || undefined}
+            style={placeGutter(d().gutter, d().dir)}
           />
         )}
       </Index>
@@ -667,6 +686,8 @@ export function Workspace(props: {
         {(j) => (
           <div
             onPointerDown={(e) => startResize(e, [j().vertical, j().horizontal])}
+            onPointerEnter={() => setHovered([keyOf(j().vertical), keyOf(j().horizontal)])}
+            onPointerLeave={() => setHovered([])}
             class="absolute z-20 size-4 -translate-1/2 cursor-move"
             style={{ left: css(mid(j().vertical.gutter.x)), top: css(mid(j().horizontal.gutter.y)) }}
           />
@@ -677,6 +698,8 @@ export function Workspace(props: {
         {(d) => (
           <div
             onPointerDown={(e) => startResize(e, [d()], true)}
+            onPointerEnter={() => setHovered([keyOf(d()), 'sidebar'])}
+            onPointerLeave={() => setHovered([])}
             class="absolute z-20 hidden size-4 -translate-1/2 cursor-move md:block"
             style={{ left: 'calc(var(--sidebar-gutter) / -2)', top: css(mid(d().gutter.y)) }}
           />

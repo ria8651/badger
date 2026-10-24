@@ -10,7 +10,7 @@ import { navigate, replace, route } from './router.tsx'
 import { cardById, cards, cardsLoaded } from './stores/cards.ts'
 import { sessionById, sessions, sessionsLoaded } from './stores/sessions.ts'
 import { terminalLabel, terminals, terminalsLoaded } from './terminals.ts'
-import { SIDEBAR_DEFAULT, dragSidebar, setSidebarWidth, sidebarWidth } from './sidebar.ts'
+import { SIDEBAR_DEFAULT, dragSidebar, setSidebarLit, setSidebarWidth, sidebarLit, sidebarWidth } from './sidebar.ts'
 import { useDocumentTitle } from './title.ts'
 import { Board } from './components/Board.tsx'
 import { CardView } from './components/CardView.tsx'
@@ -53,9 +53,11 @@ export function App() {
     if (e.button !== 0) return
     e.preventDefault()
     document.body.style.cursor = 'col-resize'
+    setSidebarLit(true)
     const move = dragSidebar(e)
     const up = () => {
       document.body.style.cursor = ''
+      setSidebarLit(false)
       removeEventListener('pointermove', move)
       removeEventListener('pointerup', up)
     }
@@ -177,12 +179,13 @@ export function App() {
       >
         <Sidebar current={current()} onSettings={() => setSettings(true)} onNewChat={newHomeChat} />
       </aside>
-      {/* The gutter beside the sidebar, grown a little each way so a thin one is easy to catch. */}
+      {/* The gutter beside the sidebar, between the panes' outlines, grown a little each way so a thin one is easy to catch. */}
       <div
         onPointerDown={startSidebarDrag}
         onDblClick={() => setSidebarWidth(SIDEBAR_DEFAULT)}
         title="Drag to resize; double-click to reset"
-        class="absolute inset-y-0 left-[calc(var(--pane-margin)+var(--sidebar-w))] z-10 hidden w-(--pane-gutter) cursor-col-resize rounded-full transition-colors delay-150 after:absolute after:inset-y-0 after:-inset-x-1 after:content-[''] hover:bg-edge md:block"
+        data-lit={sidebarLit() || undefined}
+        class="gutter-handle absolute inset-y-(--pane-margin) left-[calc(var(--pane-margin)+var(--sidebar-w)+var(--pane-outline))] z-10 hidden w-[calc(var(--pane-gutter)-2*var(--pane-outline))] cursor-col-resize after:absolute after:inset-y-0 after:-inset-x-[calc(4px+var(--pane-outline))] after:content-[''] md:block"
       />
 
       <div class="flex min-w-0 flex-1 flex-col gap-(--pane-gutter)">
