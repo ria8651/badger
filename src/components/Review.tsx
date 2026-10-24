@@ -228,6 +228,64 @@ function answersOf(index: Index, questions: Question[]): Map<string, string> {
   return out
 }
 
+// ── The outline ──
+
+/**
+ * A row of a group's outline: a folder, a file, or one of a file's hunks when it has several. `line` is where a hunk starts,
+ * on the new side; a file with one hunk has its own.
+ */
+type OutlineRow =
+  | { kind: 'folder'; name: string; path: string; depth: number }
+  | { kind: 'file'; name: string; path: string; depth: number; hunks: Placed[]; line?: string }
+  | { kind: 'hunk'; path: string; depth: number; hunks: [Placed]; line?: string }
+
+type Folder = { folders: Map<string, Folder>; files: Map<string, Placed[]> }
+
+const startLine = (p: Placed) => /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(p.hunk.patch)?.[1]
+
+/**
+ * A group's hunks as a tree of folders and files, flattened into rows. A folder with only one folder in it shares its row,
+ * as a/b/, and everything keeps the order it first comes in the group, which is the order it's read in.
+ */
+const outlines = new WeakMap<Placed[], OutlineRow[]>()
+function outlineRows(hunks: Placed[]): OutlineRow[] {
+  const cached = outlines.get(hunks)
+  if (cached) return cached
+  const root: Folder = { folders: new Map(), files: new Map() }
+  for (const p of hunks) {
+    const parts = p.file.path.split('/')
+    const name = parts.pop()!
+    let at = root
+    for (const part of parts) {
+      if (!at.folders.has(part)) at.folders.set(part, { folders: new Map(), files: new Map() })
+      at = at.folders.get(part)!
+    }
+    at.files.set(name, [...(at.files.get(name) ?? []), p])
+  }
+  const rows: OutlineRow[] = []
+  const walk = (folder: Folder, prefix: string, depth: number) => {
+    for (let [name, sub] of folder.folders) {
+      let path = prefix + name
+      while (sub.folders.size === 1 && !sub.files.size) {
+        const [next, inner] = [...sub.folders][0]
+        name += `/${next}`
+        path += `/${next}`
+        sub = inner
+      }
+      rows.push({ kind: 'folder', name, path, depth })
+      walk(sub, `${path}/`, depth + 1)
+    }
+    for (const [name, list] of folder.files) {
+      const path = prefix + name
+      rows.push({ kind: 'file', name, path, depth, hunks: list, line: list.length === 1 ? startLine(list[0]) : undefined })
+      if (list.length > 1) for (const p of list) rows.push({ kind: 'hunk', path, depth: depth + 1, hunks: [p], line: startLine(p) })
+    }
+  }
+  walk(root, '', 0)
+  outlines.set(hunks, rows)
+  return rows
+}
+
 // ── Messages to Claude ──
 
 const quote = (n: Note) => `${n.path}, ${n.where}:\n\`\`\`diff\n${n.code}\n\`\`\``
@@ -538,7 +596,7 @@ export function ReviewPage(props: {
       </div>
 
       <div class="flex min-h-0 flex-1">
-        <nav class="hidden w-60 shrink-0 overflow-y-auto border-r border-line py-2 @6xl:block">
+        <nav class="hidden w-72 shrink-0 overflow-y-auto border-r border-line py-2 @6xl:block">
           <For each={sections()}>
             {(s) => {
               const done = () => s.hunks.filter((p) => isViewed(p.hunk.id)).length
@@ -561,27 +619,36 @@ export function ReviewPage(props: {
                     </button>
                   </div>
                   <Show when={isUnfolded(s.id)}>
-                    <For each={s.hunks}>
-                      {(p) => {
-                        // With its folder, since a change touches many a lib.rs or index.ts.
-                        const name = p.file.path.split('/').slice(-2).join('/')
-                        const line = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(p.hunk.patch)?.[1]
-                        const here = () => currentHunk() === p.hunk.id
+                    <For each={outlineRows(s.hunks)}>
+                      {(row) => {
+                        const ids = row.kind === 'folder' ? [] : row.hunks.map((p) => p.hunk.id)
+                        const here = () => ids.includes(currentHunk() ?? '')
+                        const done = () => ids.length > 0 && ids.every(isViewed)
+                        const indent = { 'padding-left': `${1.75 + row.depth * 0.75}rem` }
+                        if (row.kind === 'folder')
+                          return (
+                            <div style={indent} title={row.path} class="truncate py-0.5 pr-3 font-mono text-xs text-fg-3">
+                              {row.name}/
+                            </div>
+                          )
+                        // A file with one hunk is its row; one with more is a heading, its hunks under it.
+                        const target = row.kind === 'hunk' || row.hunks.length === 1 ? row.hunks[0] : undefined
                         return (
                           <button
-                            ref={(el) => createEffect(() => here() && el.scrollIntoView({ block: 'nearest' }))}
-                            onClick={() => jumpTo(hunkEls.get(p.hunk.id))}
-                            title={p.file.path}
-                            class={`flex w-full items-center gap-2 py-0.5 pr-3 pl-7 text-left font-mono text-xs ${here() ? 'bg-surface text-fg' : isViewed(p.hunk.id) ? 'text-fg-3 hover:bg-surface/60' : 'text-fg-2 hover:bg-surface/60'}`}
+                            ref={(el) => createEffect(() => here() && target && el.scrollIntoView({ block: 'nearest' }))}
+                            onClick={() => jumpTo(hunkEls.get((target ?? row.hunks[0]).hunk.id))}
+                            title={row.path}
+                            style={indent}
+                            class={`flex w-full items-center gap-2 py-0.5 pr-3 text-left font-mono text-xs ${here() && target ? 'bg-surface text-fg' : done() ? 'text-fg-3 hover:bg-surface/60' : 'text-fg-2 hover:bg-surface/60'}`}
                           >
-                            <span class={`h-3.5 w-0.5 shrink-0 rounded-full ${here() ? 'bg-primary' : 'bg-line'}`} />
+                            <span class={`h-3.5 w-0.5 shrink-0 rounded-full ${here() && target ? 'bg-primary' : target ? 'bg-line' : 'bg-transparent'}`} />
                             <span class="min-w-0 flex-1 truncate">
-                              {name}
-                              <Show when={line}>
-                                <span class="text-fg-3">:{line}</span>
+                              {row.kind === 'file' ? row.name : ''}
+                              <Show when={target && row.line}>
+                                <span class="text-fg-3">:{row.line}</span>
                               </Show>
                             </span>
-                            <Show when={isViewed(p.hunk.id)}>
+                            <Show when={done()}>
                               <Check class="size-3 shrink-0 text-ok" />
                             </Show>
                           </button>
