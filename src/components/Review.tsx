@@ -74,7 +74,7 @@ function useReview(session: string) {
 
 // ── The diff, as rows ──
 
-type Line = { kind: 'ctx' | 'add' | 'del'; old?: number; new?: number; text: string; /** The part that changed, against its pair. */ mark?: [number, number] }
+type Line = { kind: 'ctx' | 'add' | 'del'; old?: number; new?: number; text: string; /** The characters that changed, from..to: against its pair, or all of it. */ marks?: [number, number][] }
 type Row = { kind: 'hunk'; text: string } | Line
 
 const anchorOf = (r: Line) => (r.kind === 'del' ? `o${r.old}` : `n${r.new}`)
@@ -94,35 +94,183 @@ function rowsOf(patch: string): Row[] {
     else if (l.startsWith('-')) rows.push({ kind: 'del', old: o++, text: l.slice(1) })
     else if (l.startsWith(' ')) rows.push({ kind: 'ctx', old: o++, new: n++, text: l.slice(1) })
   }
-  markPairs(rows)
+  markChanges(rows)
   return rows
 }
 
-/** A run of removed lines then as many added: each pair's changed middle, when it's a small edit rather than a new line. */
-function markPairs(rows: Row[]) {
+/** Words, runs of spaces, and each other character: what a line's changes are found in. */
+const TOKEN = /\w+|\s+|[^\w\s]/g
+/** Past this many token pairs, comparing two lines isn't worth it: they're marked whole. */
+const MAX_COMPARE = 250_000
+
+/** All of a line but its indentation and trailing spaces, or nothing for a blank one. */
+const whole = (text: string): [number, number][] => {
+  const from = text.length - text.trimStart().length
+  const to = text.trimEnd().length
+  return from < to ? [[from, to]] : []
+}
+
+/**
+ * What changed between a removed line and the added one it became, as ranges of each: the tokens that aren't in their
+ * longest common subsequence, with ranges only spaces apart joined. Undefined when they have too little in common to be
+ * one line edited, rather than one line swapped for another.
+ */
+function lineDiff(a: string, b: string): { a: [number, number][]; b: [number, number][] } | undefined {
+  const x = a.match(TOKEN) ?? []
+  const y = b.match(TOKEN) ?? []
+  if (!x.length || !y.length || x.length * y.length > MAX_COMPARE) return
+  // lcs[i][j]: the longest common subsequence of x from i and y from j.
+  const lcs = Array.from({ length: x.length + 1 }, () => new Uint16Array(y.length + 1))
+  for (let i = x.length - 1; i >= 0; i--) for (let j = y.length - 1; j >= 0; j--) lcs[i][j] = x[i] === y[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1])
+  const keepX = new Array<boolean>(x.length).fill(false)
+  const keepY = new Array<boolean>(y.length).fill(false)
+  let same = 0
+  for (let i = 0, j = 0; i < x.length && j < y.length; ) {
+    if (x[i] === y[j]) {
+      keepX[i] = keepY[j] = true
+      if (x[i].trim()) same += x[i].length
+      i++
+      j++
+    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) i++
+    else j++
+  }
+  const longest = Math.max(a.replace(/\s/g, '').length, b.replace(/\s/g, '').length)
+  if (same < longest * 0.3) return
+  const ranges = (tokens: string[], keep: boolean[]) => {
+    const out: [number, number][] = []
+    let at = 0
+    tokens.forEach((t, i) => {
+      const end = at + t.length
+      if (!keep[i]) {
+        const last = out.at(-1)
+        // Joined across spaces kept between them: "foo bar" to "baz qux" is one change, not two.
+        if (last && tokens.slice(0, i).join('').slice(last[1]).trim() === '') last[1] = end
+        else out.push([at, end])
+      }
+      at = end
+    })
+    return out.filter(([f, t]) => t > f)
+  }
+  return { a: ranges(x, keepX), b: ranges(y, keepY) }
+}
+
+/**
+ * Every changed character, so the strong colour always means changed and the row's tint alone means part of a change.
+ * In a run of removed lines then added ones, each pair in order is compared, if they're alike enough to be a line edited;
+ * any other line, removed or added, changed whole.
+ */
+function markChanges(rows: Row[]) {
   for (let i = 0; i < rows.length; ) {
     let d = i
     while (d < rows.length && rows[d].kind === 'del') d++
     let a = d
     while (a < rows.length && rows[a].kind === 'add') a++
-    const dels = d - i
-    if (dels && a - d === dels) {
-      for (let k = 0; k < dels; k++) {
-        const x = rows[i + k] as Line
-        const y = rows[d + k] as Line
-        let p = 0
-        while (p < x.text.length && p < y.text.length && x.text[p] === y.text[p]) p++
-        let s = 0
-        while (s < x.text.length - p && s < y.text.length - p && x.text[x.text.length - 1 - s] === y.text[y.text.length - 1 - s]) s++
-        const same = p + s
-        if (same && same > Math.max(x.text.length, y.text.length) * 0.3) {
-          x.mark = [p, x.text.length - s]
-          y.mark = [p, y.text.length - s]
-        }
-      }
-    }
+    const removed = rows.slice(i, d) as Line[]
+    const added = rows.slice(d, a) as Line[]
+    removed.forEach((x, k) => {
+      const y = added[k]
+      const diff = y && lineDiff(x.text, y.text)
+      x.marks = diff ? diff.a : whole(x.text)
+      if (y) y.marks = diff ? diff.b : whole(y.text)
+    })
+    for (const y of added.slice(removed.length)) y.marks = whole(y.text)
     i = Math.max(a, i + 1)
   }
+}
+
+// ── Marks drawn as one shape ──
+
+type Box = { l: number; r: number; t: number; b: number }
+
+/** Where characters from..to of an element's text are on screen: a box per piece, per line it wraps onto. */
+function textBoxes(el: HTMLElement, [from, to]: [number, number]): DOMRect[] {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+  const range = document.createRange()
+  let at = 0
+  let started = false
+  while (walker.nextNode()) {
+    const t = walker.currentNode as Text
+    if (!started && from <= at + t.length) {
+      range.setStart(t, from - at)
+      started = true
+    }
+    if (started && to <= at + t.length) {
+      range.setEnd(t, to - at)
+      return [...range.getClientRects()]
+    }
+    at += t.length
+  }
+  return []
+}
+
+/**
+ * Boxes as rounded shapes, the way an editor draws a selection: boxes on the same line that touch become one, a box that
+ * overlaps one on the line straight above joins it, and each shape is traced around its outline with every corner rounded,
+ * outward where it sticks out and inward where it steps in, as one SVG path.
+ */
+function blobs(boxes: Box[], radius: number): string {
+  boxes.sort((p, q) => p.t - q.t || p.l - q.l)
+  const lines: Box[] = []
+  for (const b of boxes) {
+    const last = lines.at(-1)
+    if (last && Math.abs(last.t - b.t) < 1 && b.l <= last.r + 1) last.r = Math.max(last.r, b.r)
+    else lines.push({ ...b })
+  }
+  // A chain of boxes, one per line, each overlapping the one above; a box that would join two starts a chain of its own.
+  const chains: Box[][] = []
+  for (const b of lines) {
+    const chain = chains.find((c) => {
+      const above = c.at(-1)!
+      return Math.abs(above.b - b.t) < 1 && b.l < above.r && b.r > above.l
+    })
+    if (chain) chain.push(b)
+    else chains.push([b])
+  }
+  return chains
+    .map((c) => {
+      // Down the right side, then back up the left.
+      const pts: [number, number][] = [[c[0].l, c[0].t]]
+      c.forEach((b) => pts.push([b.r, b.t], [b.r, b.b]))
+      for (let i = c.length - 1; i >= 0; i--) pts.push([c[i].l, c[i].b], [c[i].l, c[i].t])
+      return roundedPath(outline(pts), radius)
+    })
+    .join(' ')
+}
+
+/** A polygon without repeated points or points in the middle of a straight edge. */
+function outline(pts: [number, number][]): [number, number][] {
+  const same = (p: [number, number], q: [number, number]) => Math.abs(p[0] - q[0]) < 0.5 && Math.abs(p[1] - q[1]) < 0.5
+  let out = pts.filter((p, i) => !same(p, pts[(i + 1) % pts.length]))
+  const straight = (p: [number, number], v: [number, number], q: [number, number]) =>
+    (Math.abs(p[0] - v[0]) < 0.5 && Math.abs(v[0] - q[0]) < 0.5) || (Math.abs(p[1] - v[1]) < 0.5 && Math.abs(v[1] - q[1]) < 0.5)
+  for (let changed = true; changed && out.length > 3; ) {
+    changed = false
+    out = out.filter((v, i) => {
+      const keep = !straight(out[(i - 1 + out.length) % out.length], v, out[(i + 1) % out.length])
+      if (!keep) changed = true
+      return keep
+    })
+  }
+  return out
+}
+
+/** A polygon traced with each corner rounded: cut back along both edges by up to `radius`, and joined by a curve through it. */
+function roundedPath(pts: [number, number][], radius: number): string {
+  const n = pts.length
+  if (n < 3) return ''
+  let d = ''
+  for (let i = 0; i < n; i++) {
+    const p = pts[(i - 1 + n) % n]
+    const v = pts[i]
+    const q = pts[(i + 1) % n]
+    const d1 = Math.hypot(p[0] - v[0], p[1] - v[1])
+    const d2 = Math.hypot(q[0] - v[0], q[1] - v[1])
+    const r = Math.min(radius, d1 / 2, d2 / 2)
+    const a = [v[0] + ((p[0] - v[0]) / d1) * r, v[1] + ((p[1] - v[1]) / d1) * r]
+    const b = [v[0] + ((q[0] - v[0]) / d2) * r, v[1] + ((q[1] - v[1]) / d2) * r]
+    d += `${i ? 'L' : 'M'}${a[0].toFixed(1)},${a[1].toFixed(1)}Q${v[0].toFixed(1)},${v[1].toFixed(1)} ${b[0].toFixed(1)},${b[1].toFixed(1)}`
+  }
+  return d + 'Z'
 }
 
 // ── What Claude said: the guide, and answers ──
@@ -901,6 +1049,49 @@ function HunkView(props: {
     () => near() && props.open && !folded() && props.rows.length > 0 && { rows: props.rows, lang: languageOf(f().path) },
     async ({ rows, lang }) => ({ rows, lines: await highlightRows(rows, lang) }),
   )
+  // What changed, drawn as shapes behind the text once the rows are on the page, and again whenever they move.
+  const [body, setBody] = createSignal<HTMLDivElement>()
+  let marks: SVGSVGElement | undefined
+  const codeEls: HTMLElement[] = []
+  let queued = 0
+  const draw = () => {
+    queued = 0
+    const el = body()
+    if (!el || !marks || !el.isConnected) return
+    const at = el.getBoundingClientRect()
+    const half = parseFloat(getComputedStyle(el).lineHeight) / 2 || 10
+    const boxes: Record<'add' | 'del', Box[]> = { add: [], del: [] }
+    props.rows.forEach((r, i) => {
+      if (r.kind === 'hunk' || r.kind === 'ctx' || !r.marks?.length || !codeEls[i]?.isConnected) return
+      for (const m of r.marks) {
+        for (const b of textBoxes(codeEls[i], m)) {
+          if (!b.width) continue
+          // As tall as the line, not the text, so marks on lines one under another meet.
+          const mid = (b.top + b.bottom) / 2 - at.top
+          boxes[r.kind].push({ l: b.left - at.left - 1, r: b.right - at.left + 1, t: mid - half, b: mid + half })
+        }
+      }
+    })
+    marks.innerHTML = (
+      [
+        ['add', '--color-ok'],
+        ['del', '--color-danger'],
+      ] as const
+    )
+      .map(([kind, colour]) => `<path d="${blobs(boxes[kind], 4)}" style="fill: var(${colour}); opacity: 0.28" />`)
+      .join('')
+  }
+  const redraw = () => {
+    if (!queued) queued = requestAnimationFrame(draw)
+  }
+  createEffect(() => {
+    const el = body()
+    if (!el) return
+    const resized = new ResizeObserver(redraw)
+    resized.observe(el)
+    onCleanup(() => resized.disconnect())
+  })
+
   /** Only for the rows it was made from: while new rows are highlighted, the last ones' lines would be out of step. */
   const lineHtml = (i: number) => (html()?.rows === props.rows ? html()!.lines?.[i] : undefined)
 
@@ -957,7 +1148,9 @@ function HunkView(props: {
             </p>
           }
         >
-          <div class="font-mono text-xs leading-5">
+          {/* Its own stacking context, so the marks can go under the rows' text but stay above the page. */}
+          <div ref={setBody} class="relative isolate font-mono text-xs leading-5">
+            <svg ref={marks} class="pointer-events-none absolute inset-0 -z-10 size-full overflow-visible" aria-hidden="true" />
             <For each={props.rows}>
               {(r, i) => {
                 if (r.kind === 'hunk') return null
@@ -982,7 +1175,7 @@ function HunkView(props: {
                       </button>
                       <span class={`w-4 shrink-0 select-none text-center ${r.kind === 'add' ? 'text-ok' : r.kind === 'del' ? 'text-danger' : 'text-fg-3'}`}>{SIGN[r.kind]}</span>
                       <span class="min-w-0 flex-1 whitespace-pre-wrap break-all pr-3 text-fg">
-                        <Code line={r} html={lineHtml(i())} />
+                        <Code line={r} html={lineHtml(i())} ref={(el) => (codeEls[i()] = el)} onDrawn={redraw} />
                       </span>
                     </div>
                     <Show when={editing()}>
@@ -1040,42 +1233,23 @@ async function highlightRows(rows: Row[], lang: string | undefined): Promise<(st
   })
 }
 
-/** Wraps characters from..to of an element's text in spans of this class, one per token they're in, rounded at the ends as one. */
-function markText(el: HTMLElement, [from, to]: [number, number], cls: string) {
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
-  const texts: Text[] = []
-  while (walker.nextNode()) texts.push(walker.currentNode as Text)
-  let at = 0
-  const spans: HTMLSpanElement[] = []
-  for (const t of texts) {
-    const start = Math.max(from - at, 0)
-    const end = Math.min(to - at, t.length)
-    at += t.length
-    if (start >= end) continue
-    const part = t.splitText(start)
-    part.splitText(end - start)
-    const span = document.createElement('span')
-    span.className = cls
-    part.replaceWith(span)
-    span.append(part)
-    spans.push(span)
-  }
-  spans[0]?.classList.add('rounded-l-sm')
-  spans.at(-1)?.classList.add('rounded-r-sm')
-}
-
-/** A line, highlighted once that's done, with the part that changed against its pair picked out. */
-function Code(props: { line: Line; html?: string }) {
+/** A line, highlighted once that's done. What changed in it is drawn behind it, by its hunk (see blobs). */
+function Code(props: { line: Line; html?: string; ref: (el: HTMLElement) => void; onDrawn: () => void }) {
   let el!: HTMLSpanElement
-  const tone = () => `${props.line.kind === 'add' ? 'bg-ok/25' : 'bg-danger/25'}`
   // Filled by hand rather than by Solid, since highlighting replaces what's inside.
   createEffect(() => {
     if (props.html !== undefined) el.innerHTML = props.html
-    else el.textContent = props.line.text
-    if (props.line.mark) markText(el, props.line.mark, tone())
-    if (!el.textContent) el.textContent = ' '
+    else el.textContent = props.line.text || ' '
+    props.onDrawn()
   })
-  return <span ref={el} />
+  return (
+    <span
+      ref={(e) => {
+        el = e
+        props.ref(e)
+      }}
+    />
+  )
 }
 
 const boxClass = 'mx-3 my-1.5 rounded-lg border px-3 py-2 font-sans text-ui'
