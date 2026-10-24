@@ -79,19 +79,23 @@ export function PlanActions(props: { sessionId: string; permission: PendingPermi
 
   const respond = (decision: 'allow' | 'deny', extra: { message?: string; updatedInput?: Record<string, unknown> }) => {
     socket.send({ type: 'permission', sessionId: props.sessionId, requestId: id(), decision, ...extra })
+    // As sent, edits and all, for the panel to show until Claude proposes the next one.
+    if (p().toolUseId) seen.set(p().toolUseId!, planText(p()))
     clearTimeout(timers.get(id()))
     timers.delete(id())
     setEdits((e) => without(e, id()))
     setFeedback((f) => without(f, id()))
   }
+  const updated = () => (edited(p()) ? { ...p().input, plan: planText(p()) } : undefined)
+  // Approving can't carry a message, so the server sends the note on as the next one.
   const approve = (mode: PermissionMode) => {
-    respond('allow', { updatedInput: edited(p()) ? { ...p().input, plan: planText(p()) } : undefined })
+    respond('allow', { message: note().trim() || undefined, updatedInput: updated() })
     chatCommands(props.sessionId).setMode(mode)
   }
-  // A plan sent back isn't the tool's input any more, so edits go in the message for Claude to start from.
+  // The server saves edits to the plan's file, which the next plan is read from; they go in the message too, for Claude to start from.
   const keepPlanning = () => {
-    const parts = [note().trim(), edited(p()) ? `I edited the plan. Carry on from my version:\n\n${planText(p())}` : '']
-    respond('deny', { message: parts.filter(Boolean).join('\n\n') || undefined })
+    const parts = [note().trim(), edited(p()) ? `I edited the plan and saved my version to the plan file. Carry on from it:\n\n${planText(p())}` : '']
+    respond('deny', { message: parts.filter(Boolean).join('\n\n') || undefined, updatedInput: updated() })
   }
   const revert = () => {
     setEdits((e) => ({ ...e, [id()]: original(p()) }))

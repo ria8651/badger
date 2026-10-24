@@ -210,8 +210,12 @@ export class LiveSession {
         await this.agent.setModel(c.model === 'default' ? undefined : c.model)
         this.model = c.model
         return this.emitStatus()
-      case 'permission':
-        return this.permissions.resolve(c.requestId, c.decision, c.message, c.updatedInput)
+      case 'permission': {
+        const answered = await this.permissions.resolve(c.requestId, c.decision, c.message, c.updatedInput)
+        // Allowing can't carry a message, so a note typed with it follows as the user's next message.
+        if (answered && c.decision !== 'deny' && c.message?.trim()) this.send(c.message.trim())
+        return
+      }
       // False if the question or plan is no longer pending.
       case 'answer_draft':
         return this.permissions.draftAnswers(c.requestId, c.answers)

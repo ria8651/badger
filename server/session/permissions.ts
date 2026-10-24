@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { writeFile } from 'node:fs/promises'
 import type { CanUseTool, PermissionResult, PermissionUpdate } from '@anthropic-ai/claude-agent-sdk'
 import type { AnswerDraft, PendingPermission, ServerEvent } from '../../shared/protocol.ts'
 import { SCRIPT_TOOL } from '../scripts.ts'
@@ -55,10 +56,16 @@ export class Permissions {
       this.emit({ type: 'permission_request', sessionId: this.sessionId, permission: publicPermission(pending) })
     })
 
-  resolve(requestId: string, decision: 'allow' | 'allow_always' | 'deny', message?: string, updatedInput?: Record<string, unknown>): void {
+  /** False if it's no longer pending. */
+  async resolve(requestId: string, decision: 'allow' | 'allow_always' | 'deny', message?: string, updatedInput?: Record<string, unknown>): Promise<boolean> {
     const p = this.pending.get(requestId)
-    if (!p) return
+    if (!p) return false
     if (decision === 'deny') {
+      // A plan sent back with edits goes into its file, which Claude Code reads the next plan from and Claude carries on from.
+      const file = p.input.planFilePath
+      if (p.toolName === 'ExitPlanMode' && typeof updatedInput?.plan === 'string' && typeof file === 'string') {
+        await writeFile(file, updatedInput.plan).catch((e) => console.error('Saving the edited plan failed:', e))
+      }
       p.resolve({ behavior: 'deny', message: message || 'The user denied this action.' })
     } else {
       p.resolve({
@@ -67,6 +74,7 @@ export class Permissions {
         ...(decision === 'allow_always' && p.suggestions ? { updatedPermissions: p.suggestions } : {}),
       })
     }
+    return true
   }
 
   /** Denies every one, stopping the turn: the user interrupted it. */

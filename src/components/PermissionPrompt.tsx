@@ -8,6 +8,9 @@ import { PlanActions, PlanEditor, planText, planTitle } from './Plan.tsx'
 import { ToolInput, relPath, toolLabel, toolSummary, type Question } from './ToolCard.tsx'
 import { Button, inputClass } from './ui.tsx'
 
+/** What's typed in each prompt, by request id. Kept outside them so it survives switching chats. */
+const [notes, setNotes] = createSignal<Record<string, string>>({})
+
 export function PermissionPrompt(props: {
   sessionId: string
   permission: PendingPermission
@@ -19,18 +22,22 @@ export function PermissionPrompt(props: {
   /** The plan is on screen in a panel, so the prompt needn't show it too. */
   planShown?: boolean
 }) {
-  const [feedback, setFeedback] = createSignal('')
   const p = () => props.permission
+  const feedback = () => notes()[p().requestId] ?? ''
+  const setFeedback = (note: string) => setNotes((all) => ({ ...all, [p().requestId]: note }))
 
-  const respond = (decision: 'allow' | 'allow_always' | 'deny', updatedInput?: Record<string, unknown>) =>
+  // Allowing can't carry a message, so the server sends a note given with it on as the next one.
+  const respond = (decision: 'allow' | 'allow_always' | 'deny', updatedInput?: Record<string, unknown>, message = feedback().trim()) => {
     socket.send({
       type: 'permission',
       sessionId: props.sessionId,
       requestId: p().requestId,
       decision,
-      message: feedback() || undefined,
+      message: message || undefined,
       updatedInput,
     })
+    setNotes(({ [p().requestId]: _, ...rest }) => rest)
+  }
 
   return (
     <Switch
@@ -42,7 +49,7 @@ export function PermissionPrompt(props: {
           subtitle={toolSummary(p().toolName, p().input, props.cwd)}
           actions={
             <>
-              <FeedbackInput value={feedback()} onChange={setFeedback} placeholder="Reason for denying (optional)" />
+              <FeedbackInput value={feedback()} onChange={setFeedback} placeholder="Tell Claude why, or what to do instead (optional)" />
               <div class="flex flex-wrap gap-2 pt-1">
                 <Button primary onClick={() => respond('allow')}>Allow</Button>
                 <Show when={p().canAlwaysAllow}>
@@ -70,7 +77,7 @@ export function PermissionPrompt(props: {
           input={p().input}
           draft={p().answers}
           onAnswer={(answers) => respond('allow', { ...p().input, answers })}
-          onSkip={() => respond('deny')}
+          onSkip={(message) => respond('deny', undefined, message)}
         />
       </Match>
       <Match when={p().toolName === 'ExitPlanMode'}>
@@ -108,7 +115,8 @@ function QuestionPrompt(props: {
   /** Saved answers; changes when another tab edits them. */
   draft?: AnswerDraft
   onAnswer: (answers: Record<string, string>) => void
-  onSkip: () => void
+  /** With what was answered before skipping, if anything, for Claude to know. */
+  onSkip: (message: string) => void
 }) {
   const questions = () => (props.input.questions as Question[]) ?? []
   const [picked, setPicked] = createStore<Record<string, string[]>>(copy(props.draft?.picked ?? {}))
@@ -162,6 +170,12 @@ function QuestionPrompt(props: {
     unsaved = false
     props.onAnswer(Object.fromEntries(questions().map((q) => [q.question, answer(q) || 'No answer'])))
   }
+  const skip = () => {
+    clearTimeout(saveTimer)
+    unsaved = false
+    const answered = questions().filter(answer).map((q) => `- ${q.question}: ${answer(q)}`)
+    props.onSkip(answered.length ? `I skipped answering, but had put:\n${answered.join('\n')}` : '')
+  }
 
   return (
     <Shell
@@ -174,7 +188,7 @@ function QuestionPrompt(props: {
           <Button primary disabled={unanswered() === questions().length} onClick={submit}>
             Submit
           </Button>
-          <Button onClick={props.onSkip}>{questions().length > 1 ? 'Skip all' : 'Skip'}</Button>
+          <Button onClick={skip}>{questions().length > 1 ? 'Skip all' : 'Skip'}</Button>
           <Show when={unanswered() && questions().length > 1}>
             <span class="ml-auto text-xs tabular-nums text-fg-3">{unanswered()} unanswered</span>
           </Show>
