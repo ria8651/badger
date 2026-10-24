@@ -228,6 +228,13 @@ function blobs(boxes: Box[], radius: number): string {
   }
   return chains
     .map((c) => {
+      // Edges only a little apart on lines next to each other line up, as the wider: a step too short to round would wiggle.
+      for (let pass = 0; pass < 2; pass++) {
+        for (let i = 0; i + 1 < c.length; i++) {
+          if (Math.abs(c[i].r - c[i + 1].r) < radius * 2) c[i].r = c[i + 1].r = Math.max(c[i].r, c[i + 1].r)
+          if (Math.abs(c[i].l - c[i + 1].l) < radius * 2) c[i].l = c[i + 1].l = Math.min(c[i].l, c[i + 1].l)
+        }
+      }
       // Down the right side, then back up the left.
       const pts: [number, number][] = [[c[0].l, c[0].t]]
       c.forEach((b) => pts.push([b.r, b.t], [b.r, b.b]))
@@ -1062,7 +1069,9 @@ function HunkView(props: {
     const half = parseFloat(getComputedStyle(el).lineHeight) / 2 || 10
     const boxes: Record<'add' | 'del', Box[]> = { add: [], del: [] }
     props.rows.forEach((r, i) => {
-      if (r.kind === 'hunk' || r.kind === 'ctx' || !r.marks?.length || !codeEls[i]?.isConnected) return
+      // Lines being picked for a comment show only that, rather than its colour mixing with theirs.
+      const picking = props.draft && i >= props.draft.from && i <= props.draft.to
+      if (r.kind === 'hunk' || r.kind === 'ctx' || picking || !r.marks?.length || !codeEls[i]?.isConnected) return
       for (const m of r.marks) {
         for (const b of textBoxes(codeEls[i], m)) {
           if (!b.width) continue
@@ -1072,18 +1081,39 @@ function HunkView(props: {
         }
       }
     })
-    marks.innerHTML = (
-      [
-        ['add', '--color-ok'],
-        ['del', '--color-danger'],
-      ] as const
-    )
-      .map(([kind, colour]) => `<path d="${blobs(boxes[kind], 4)}" style="fill: var(${colour}); opacity: 0.28" />`)
-      .join('')
+    // The lines a comment is being written on, like an editor's whole-line selection: from the start of the code to the end of
+    // each line's text, at least a character wide so a blank line in it doesn't break it up.
+    const picked: Box[] = []
+    const d = props.draft
+    if (d) {
+      const ch = parseFloat(getComputedStyle(el).fontSize) * 0.6
+      for (let i = d.from; i <= d.to; i++) {
+        const code = codeEls[i]
+        const r = props.rows[i]
+        if (!code?.isConnected || !r || r.kind === 'hunk') continue
+        const start = code.getBoundingClientRect()
+        const lines = r.text.trimEnd() ? textBoxes(code, [0, r.text.trimEnd().length]) : []
+        if (!lines.length) lines.push(new DOMRect(start.left, start.top, ch, start.height))
+        for (const b of lines) {
+          const mid = (b.top + b.bottom) / 2 - at.top
+          picked.push({ l: start.left - at.left - 3, r: Math.max(b.right, start.left + ch) - at.left + 3, t: mid - half, b: mid + half })
+        }
+      }
+    }
+    marks.innerHTML = [
+      ...(
+        [
+          ['add', '--color-ok'],
+          ['del', '--color-danger'],
+        ] as const
+      ).map(([kind, colour]) => `<path d="${blobs(boxes[kind], 4)}" style="fill: var(${colour}); opacity: 0.28" />`),
+      picked.length ? `<path d="${blobs(picked, 5)}" style="fill: var(--color-accent); opacity: 0.3" />` : '',
+    ].join('')
   }
   const redraw = () => {
     if (!queued) queued = requestAnimationFrame(draw)
   }
+  createEffect(on(() => props.draft, redraw, { defer: true }))
   createEffect(() => {
     const el = body()
     if (!el) return
@@ -1155,14 +1185,13 @@ function HunkView(props: {
               {(r, i) => {
                 if (r.kind === 'hunk') return null
                 const anchor = anchorOf(r)
-                const inDraft = () => !!props.draft && i() >= props.draft.from && i() <= props.draft.to
                 const comments = () => props.comments.filter((c) => c.to === anchor)
                 const questions = () => props.questions.filter((q) => q.to === anchor)
                 const editing = () => props.draft && props.draft.to === i()
                 return (
                   <>
                     <div
-                      class={`group relative flex ${r.kind === 'add' ? 'bg-ok/10' : r.kind === 'del' ? 'bg-danger/10' : ''} ${inDraft() ? 'outline outline-1 -outline-offset-1 outline-accent/60' : ''}`}
+                      class={`group relative flex ${r.kind === 'add' ? 'bg-ok/10' : r.kind === 'del' ? 'bg-danger/10' : ''}`}
                     >
                       <span class="w-10 shrink-0 select-none pr-1.5 text-right text-fg-3/70 tabular-nums">{r.old ?? ''}</span>
                       <span class="w-10 shrink-0 select-none pr-1.5 text-right text-fg-3/70 tabular-nums">{r.new ?? ''}</span>
