@@ -61,6 +61,8 @@ export function wsLink(ws: WebSocket, opts: { pingMs?: number } = {}): Link {
     }, opts.pingMs)
     ws.on('close', () => clearInterval(ping))
   }
+  // Errors, e.g. a frame over maxPayload, end in a close, which is what's listened for. Unheard, one would crash the process.
+  ws.on('error', () => {})
   return {
     send: (frame) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(frame)),
     onFrame: (fn) =>

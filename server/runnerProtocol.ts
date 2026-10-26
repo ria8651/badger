@@ -35,7 +35,7 @@ import type { CreateSpec } from './ptyProtocol.ts'
  * Runners and the hub are updated separately, so bump this when either side
  * would misread the other; the hub turns away runners on another version.
  */
-export const RUNNER_PROTOCOL = 8
+export const RUNNER_PROTOCOL = 9
 
 /** Header a runner sends its protocol version in, so a mismatch is caught before the upgrade. */
 export const PROTOCOL_HEADER = 'x-badger-protocol'
@@ -74,8 +74,16 @@ export interface LiveInfo {
 
 /** A live chat's state that only its process has: its messages since it started, prompts, running Bash output. */
 export interface LiveSnapshot extends LiveState {
+  /** Ones the hub said it has a copy of come as KnownMessages. */
   messages: WireMessage[]
 }
+
+/**
+ * A live message the hub already has, as just its id. A chat's process keeps
+ * every message since it started, its subagents' screenshots too, which can
+ * run to hundreds of MB; the hub has nearly all of them from the transcript.
+ */
+export type KnownMessage = { type: 'known'; uuid: string }
 
 /** The live state of a chat with no process: nothing running, waiting or queued. Its mode is the one new chats start in. */
 export const IDLE: Omit<LiveState, 'cwd' | 'model'> = {
@@ -137,8 +145,8 @@ export interface RunnerApi {
   send(sessionId: string, opts: OpenOptions, text: string, pastes: string[], images: ImageAttachment[]): Promise<void>
   /** Passes a browser's command to the chat's live process; one without a process has nothing to do. */
   command(sessionId: string, command: ChatCommand): Promise<ChatCommandReply>
-  /** Null when the chat has no live process. Settled in order with the chat's events. */
-  liveSnapshot(sessionId: string): Later<LiveSnapshot | null>
+  /** Null when the chat has no live process. Settled in order with the chat's events. `known`: ids of messages the hub has. */
+  liveSnapshot(sessionId: string, known: string[]): Later<LiveSnapshot | null>
   contextUsage(sessionId: string): Promise<ContextUsage | undefined>
   accountUsage(): Promise<AccountUsage>
   models(): Promise<ModelOption[]>

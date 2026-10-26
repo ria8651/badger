@@ -6,7 +6,7 @@ import { BashStreams } from './bashStream.ts'
 import { readContext, readLimits } from './claudeProbe.ts'
 import { message } from './errors.ts'
 import { MessageQueue } from './queue.ts'
-import type { LiveSnapshot } from './runnerProtocol.ts'
+import type { KnownMessage, LiveSnapshot } from './runnerProtocol.ts'
 import { AutoChecks } from './session/checks.ts'
 import { sdkOptions } from './session/options.ts'
 import { Outbox, publicQueued } from './session/outbox.ts'
@@ -149,10 +149,10 @@ export class LiveSession {
   }
 
   /** This process's turns in order, and the state only it has. The hub adds the history from earlier processes. */
-  snapshot(): LiveSnapshot {
+  snapshot(known: Set<string>): LiveSnapshot {
     return {
       ...this.status(),
-      messages: [...this.live],
+      messages: this.live.map((m): WireMessage => (m.uuid && known.has(m.uuid) ? ({ type: 'known', uuid: m.uuid } satisfies KnownMessage) : m)),
       permissions: this.permissions.list(),
       bashOutput: this.bash.outputs(),
       checking: this.checks.ids(),

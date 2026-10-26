@@ -255,8 +255,8 @@ export class Runner implements RunnerApi {
     if (command.type === 'answer_draft' || command.type === 'plan_draft') return false
   }
 
-  liveSnapshot(sessionId: string): Later<LiveSnapshot | null> {
-    return new Later((settle) => settle(null, this.manager.get(sessionId)?.snapshot() ?? null))
+  liveSnapshot(sessionId: string, known: string[]): Later<LiveSnapshot | null> {
+    return new Later((settle) => settle(null, this.manager.get(sessionId)?.snapshot(new Set(known)) ?? null))
   }
 
   contextUsage(sessionId: string) {

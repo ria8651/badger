@@ -66,6 +66,8 @@ export function serveBrowser(ws: WebSocket, d: BrowserDeps): void {
     chains.set(key, next)
     void next.then(() => chains.get(key) === next && chains.delete(key))
   })
+  // Errors end in a close, handled below. Unheard, one (e.g. a message over maxPayload) would crash the hub.
+  ws.on('error', () => {})
   ws.on('close', () => {
     const id = viewers.identity(ws)
     if (id) {

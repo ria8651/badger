@@ -85,6 +85,8 @@ export class Bridges {
         else p.reject(new Error(String(m.error)))
       }
     })
+    // Errors, e.g. a message over maxPayload, end in a close, which is what's listened for. Unheard, one would crash the process.
+    ws.on('error', () => {})
     ws.on('close', () => {
       this.pages.delete(page)
       for (const [id, p] of this.pending) {

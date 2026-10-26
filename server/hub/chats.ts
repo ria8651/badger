@@ -294,9 +294,12 @@ export class Chats {
       if (!live) {
         return viewers.send(ws, { ...IDLE, ...base, messages: externalizeImages(sessionId, history), model: transcriptModel(history), cwd: info?.cwd, gone })
       }
-      // History holds earlier processes' turns; the live list holds this process's, in order.
-      const seen = new Set(live.messages.map((m) => m.uuid))
-      const messages = [...history.filter((m) => !seen.has(m.uuid) && !seen.has(m.after_uuid as string)), ...live.messages]
+      // History holds earlier processes' turns; the live list holds this process's, in order. Of those, the ones
+      // already copied here came as just their ids.
+      const copies = new Map(history.map((m) => [m.uuid, m]))
+      const own = live.messages.flatMap((m) => (m.type === 'known' ? (copies.get(m.uuid) ?? []) : [m]))
+      const seen = new Set(own.map((m) => m.uuid))
+      const messages = [...history.filter((m) => !seen.has(m.uuid) && !seen.has(m.after_uuid as string)), ...own]
       // The runner's answer goes first, so it can't say which chat this is.
       // The process's newest messages may not have been copied here yet, and their images can't be served until they are.
       viewers.send(ws, { ...live, ...base, messages: externalizeImages(sessionId, messages, (uuid) => transcripts.hasImageEntry(sessionId, uuid)) })
@@ -306,7 +309,7 @@ export class Chats {
     // A runner slow to answer doesn't hold up the history; its answer, when it comes, puts the live part right.
     let shown = false
     const slow = setTimeout(() => ((shown = true), done(null, gone)), QUICK_TIMEOUT_MS)
-    runner.liveSnapshot(sessionId, (err, live) => {
+    runner.liveSnapshot(sessionId, history.flatMap((m) => (m.uuid ? [m.uuid] : [])), (err, live) => {
       clearTimeout(slow)
       if (!err) done(live ?? null, gone)
       else if (!shown) done(null, gone)

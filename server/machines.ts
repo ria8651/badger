@@ -54,8 +54,8 @@ export class Connection {
   }
 
   /** A live chat's state, or null with no process; `done` runs in order with the chat's events, so none falls between. */
-  liveSnapshot(sessionId: string, done: (err: Error | null, live?: LiveSnapshot | null) => void): void {
-    this.peer.request('liveSnapshot', [sessionId], done)
+  liveSnapshot(sessionId: string, known: string[], done: (err: Error | null, live?: LiveSnapshot | null) => void): void {
+    this.peer.request('liveSnapshot', [sessionId, known], done)
   }
 
   /** A terminal's screen; `done` runs in order with its output, so none falls between. */
