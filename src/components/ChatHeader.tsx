@@ -107,16 +107,14 @@ export function ChatHeader(props: {
     }
   }
 
-  /** Pushing as it stands, publishing the branch if it has nowhere to go yet. */
-  const canPush = (g: GitStatus) => !!g.branch && (g.upstream ? g.ahead > 0 : !!g.remote)
+  /** Pushing as it stands, publishing the branch if it has nowhere to go yet, once it has commits no remote has. */
+  const canPush = (g: GitStatus) => !!g.branch && g.ahead > 0 && !!(g.upstream || g.remote)
   /** The one thing worth a button of its own, if there is one: push or pull, when that's all it takes to be in step. */
   const primary = (): 'push' | 'pull' | undefined => {
     const g = props.git
     if (!g) return undefined
-    if (g.upstream && g.ahead && !g.behind) return 'push'
+    if (canPush(g) && !g.behind) return 'push'
     if (g.upstream && g.behind && !g.ahead) return 'pull'
-    // A worktree's branch normally goes back by merging, not by being published.
-    if (!g.upstream && !g.base && canPush(g)) return 'push'
     return undefined
   }
 
@@ -138,7 +136,7 @@ export function ChatHeader(props: {
             }
           : {
               label: `Publish ${g.branch}`,
-              description: `Push it to ${g.remote} and track it there.`,
+              description: `Push it and its ${plural(g.ahead, 'new commit')} to ${g.remote}, and track it there.`,
               run: () => transfer('push'),
             },
       )
@@ -187,7 +185,7 @@ export function ChatHeader(props: {
     return [
       `${g.branch || 'Detached HEAD'} in ${props.cwd}`,
       g.changes ? `Uncommitted: ${uncommitted(g)}` : 'Nothing uncommitted',
-      g.upstream ? `${g.ahead} ahead, ${g.behind} behind ${g.upstream}` : g.remote ? `Not on ${g.remote} yet` : 'No remote',
+      g.upstream ? `${g.ahead} ahead, ${g.behind} behind ${g.upstream}` : g.remote ? `Not on ${g.remote} yet, ${g.ahead} no remote has` : 'No remote',
       g.base && `${g.base.ahead} not on ${g.base.branch}, ${g.base.behind} on ${g.base.branch} not here`,
       g.fetchedAt ? `Fetched ${ago(g.fetchedAt)}` : 'Never fetched',
     ]

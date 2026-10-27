@@ -140,7 +140,9 @@ export async function gitStatus(path: string, fetch = false): Promise<GitStatus 
   const remote = remoteList.includes('origin') ? 'origin' : remoteList.length === 1 ? remoteList[0] : undefined
   if (fetch && remoteList.length) await fetchRepo(path, common, branch, remote)
   const upstream = await git(path, 'rev-parse', '--abbrev-ref', '@{upstream}').catch(() => '')
-  const [ahead, behind] = upstream ? await Promise.all([count(path, '@{upstream}..HEAD'), count(path, 'HEAD..@{upstream}')]) : [0, 0]
+  const [ahead, behind] = upstream
+    ? await Promise.all([count(path, '@{upstream}..HEAD'), count(path, 'HEAD..@{upstream}')])
+    : [remote ? Number(await git(path, 'rev-list', '--count', 'HEAD', '--not', '--remotes')) : 0, 0]
   // Any linked worktree, not just Claude Code's; one with no commits yet has nothing to compare.
   const main = dirname(common)
   const linked = resolve(await git(path, 'rev-parse', '--show-toplevel')) !== resolve(main)

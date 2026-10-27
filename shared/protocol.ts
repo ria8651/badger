@@ -160,7 +160,7 @@ export interface GitStatus {
   removed: number
   /** The branch's upstream, e.g. origin/spike, if it has one. */
   upstream?: string
-  /** Commits on HEAD the upstream doesn't have, and the other way round; 0 without an upstream. */
+  /** Commits on HEAD the upstream doesn't have, and the other way round. Without an upstream, `ahead` is what no remote has and `behind` is 0. */
   ahead: number
   behind: number
   /** Where a branch with no upstream would be pushed: origin, or the only remote. Absent with no remotes. */
