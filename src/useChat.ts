@@ -237,7 +237,8 @@ export function createChat(sessionId: string) {
     /** Saves the draft's attachments at once, unlike typing: they change rarely and can be big. */
     attach: (change: (a: DraftAttachments) => DraftAttachments) => {
       const next = change(state.draftAttachments)
-      setState('draftAttachments', next)
+      // Replaced, not merged: setState('draftAttachments', next) would write into the object there, which can be NO_ATTACHMENTS.
+      setState({ draftAttachments: next })
       socket.send({ type: 'draft', sessionId, attachments: next })
     },
   }
