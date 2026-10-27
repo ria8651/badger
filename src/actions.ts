@@ -20,7 +20,7 @@ export function chatActions(git?: GitStatus, cwd?: string): ChatAction[] {
   if (git) {
     // A worktree's work is measured against the main checkout, any other branch's against its upstream.
     const base = git.base?.branch ?? git.upstream
-    const ahead = git.base ? git.base.ahead : git.ahead
+    const ahead = git.base ? git.base.ahead : git.upstream ? git.ahead : 0
     const pending = [ahead && `${plural(ahead, 'commit')} not on ${base}`, git.changes && plural(git.changes, 'uncommitted change')].filter(Boolean)
     actions.push({
       label: 'Review changes',
