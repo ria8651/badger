@@ -82,9 +82,14 @@ function switchTo(change: () => void): void {
   requestAnimationFrame(() => root.classList.remove('theme-switching'))
 }
 
+const [applied, setApplied] = createSignal<Palette>(palette())
+/** The palette the page's styles have, which changes after palette() does: for code that reads the colours themselves. */
+export const appliedPalette = applied
+
 function apply(): void {
   const root = document.documentElement
   root.dataset.palette = palette()
   root.dataset.frame = choice().frame
+  setApplied(palette())
 }
 apply()

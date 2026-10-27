@@ -1,8 +1,10 @@
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { createEffect, onCleanup } from 'solid-js'
+import { diagramWhenSeen } from '../diagram.ts'
 import { highlightWhenSeen } from '../highlight.ts'
-import { viewImageIn } from './ImageViewer.tsx'
+import { appliedPalette } from '../theme.ts'
+import { viewImageIn, viewImages } from './ImageViewer.tsx'
 
 // Open links in a new tab; DOMPurify strips target unless it's set after sanitizing.
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
@@ -17,10 +19,14 @@ const render = (text: string) => DOMPurify.sanitize(marked.parse(text, { gfm: tr
 /** Whether the text ends inside a code fence still being written. */
 const openFence = (text: string) => (text.match(/^ {0,3}(```|~~~)/gm)?.length ?? 0) % 2 === 1
 
+/** Whether the text has a mermaid fence, whose diagram is drawn in the palette's colours. */
+const hasDiagram = (text: string) => /^ {0,3}(```|~~~)[ \t]*mermaid\b/m.test(text)
+
 /**
  * Highlights the fenced code in rendered markdown, after DOMPurify: Shiki's
  * output is trusted, since it escapes the code itself. A fence that's still
- * streaming stays plain until it closes. Each block gets a copy button.
+ * streaming stays plain until it closes. Each block gets a copy button, and a
+ * mermaid one is drawn as its diagram (src/diagram.ts sanitizes that itself).
  */
 function decorate(root: HTMLElement, text: string): () => void {
   const blocks = [...root.querySelectorAll<HTMLElement>('pre > code')]
@@ -49,7 +55,9 @@ function decorate(root: HTMLElement, text: string): () => void {
     pre.replaceWith(block)
     block.append(head, pre)
     if (open && i === blocks.length - 1) return () => {}
-    return highlightWhenSeen(code, source.replace(/\n$/, ''), lang)
+    const highlight = () => highlightWhenSeen(code, source.replace(/\n$/, ''), lang)
+    if (lang !== 'mermaid') return highlight()
+    return diagramWhenSeen(block, source, highlight, (url) => viewImages([url]))
   })
   return () => stops.forEach((stop) => stop())
 }
@@ -63,6 +71,8 @@ export function Markdown(props: { text: string }) {
     viewImageIn(e.currentTarget as Element, img)
   }
   createEffect(() => {
+    // A diagram is drawn again in the new colours when the theme changes.
+    if (hasDiagram(props.text)) appliedPalette()
     el.innerHTML = render(props.text)
     onCleanup(decorate(el, props.text))
   })
