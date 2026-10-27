@@ -464,6 +464,10 @@
 .md .code-head { display: flex; align-items: center; justify-content: space-between; padding: 0.4em 0.6em 0 1em; font-size: 11px; line-height: 1.6; color: var(--color-fg-3); user-select: none; }
 .md .code-head button { padding: 0.1em 0.45em; border-radius: var(--radius-md); transition: color 0.15s, background 0.15s; }
 .md .code-head button:hover { color: var(--color-fg); background: var(--color-bg); }
+.md .code-head span { margin-right: auto; }
+.md .diagram { display: flex; justify-content: center; padding: 0.6em 1em 1em; overflow-x: auto; cursor: zoom-in; }
+.md .diagram svg { height: auto; }
+.md .code-block > [hidden] { display: none; }
 .md .code-block pre { margin: 0; padding-top: 0.3em; border-radius: 0; background: none; }
 .md table { display: block; overflow-x: auto; border-collapse: collapse; font-size: 0.93em; }
 /* break-word, not .md's anywhere: anywhere shrinks cells' min-content, so the table splits short columns mid-word to widen the long one. */

@@ -18,6 +18,7 @@ export const BOARD_INSTRUCTIONS = [
   'Use these tools when the user talks about cards, the board, tasks or what to work on. Keep a card you are working on up to date: move its status as work progresses and write what you learn into its description.',
   `Statuses, in board order: ${CARD_STATUSES.join(', ')}.`,
   "Every Badger tool (these, the terminal ones and the preview ones) can also be called from code: run_script runs JavaScript in which they're `badger.cards.list(...)` and so on, returning data rather than text. Use it for bulk changes, or anything you'd otherwise do in many calls or that needs filtering.",
+  'The chat draws ```mermaid fences as diagrams. Use one when a flow, sequence or structure is clearer drawn than described.',
 ].join('\n')
 
 const status = z.enum(CARD_STATUSES)
