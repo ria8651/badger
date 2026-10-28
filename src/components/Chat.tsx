@@ -1,5 +1,5 @@
-import { For, Show, createEffect, createMemo, createSignal, on, onMount, untrack, type JSX } from 'solid-js'
-import { FolderX, GitBranch, MonitorOff, Pencil, WifiOff, X } from '../icons'
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
+import { FolderX, GitBranch, MonitorOff, Pencil, TextQuote, WifiOff, X } from '../icons'
 import type { DraftAttachments, PermissionMode, QueuedMessage } from '../../shared/protocol.ts'
 import { chatActions } from '../actions.ts'
 import { api, connected } from '../api.ts'
@@ -347,7 +347,8 @@ export function Chat(props: {
         {/* One column for the transcript and the composer. Its padding leaves room for your messages and the
             composer to hang out by their own padding, so the text in them lines up with Claude's. */}
         <div class="mx-auto flex min-h-full max-w-[50rem] flex-col px-6 md:px-9">
-          <div ref={content} class="flex-1 py-8">
+          <div ref={content} class="relative flex-1 py-8">
+            <QuoteSelection within={() => content} onQuote={(text) => composer?.quote(text)} />
             <Show when={state.loaded} fallback={<Loading class="pt-[22vh]" />}>
               <Show
                 when={state.messages.length}
@@ -553,5 +554,57 @@ function Queued(props: { message: QueuedMessage; onEdit: () => void; onRemove: (
         <X class="size-3.5" />
       </button>
     </UserMessage>
+  )
+}
+
+/**
+ * Offers "Quote" once the mouse lets go of text selected in the transcript, to add it to the composer as a quote. It
+ * goes inside `within` and is placed against it, so it scrolls along with what's selected.
+ */
+function QuoteSelection(props: { within: () => HTMLElement; onQuote: (text: string) => void }) {
+  const [offer, setOffer] = createSignal<{ text: string; x: number; y: number }>()
+  const selected = () => {
+    const sel = getSelection()
+    const range = sel && !sel.isCollapsed && sel.rangeCount ? sel.getRangeAt(0) : undefined
+    const el = props.within()
+    return range && el.contains(range.startContainer) && el.contains(range.endContainer) ? range : undefined
+  }
+  const onSelected = () => {
+    const range = selected()
+    const text = range?.toString().trim()
+    const end = range && [...range.getClientRects()].filter((b) => b.width).at(-1)
+    if (!range || !text || !end) return setOffer(undefined)
+    const at = props.within().getBoundingClientRect()
+    setOffer({ text, x: end.right - at.left, y: end.bottom - at.top })
+  }
+  const onSelectionChange = () => offer() && !selected() && setOffer(undefined)
+  onMount(() => {
+    document.addEventListener('selectionchange', onSelectionChange)
+    document.addEventListener('pointerup', onSelected)
+    onCleanup(() => {
+      document.removeEventListener('selectionchange', onSelectionChange)
+      document.removeEventListener('pointerup', onSelected)
+    })
+  })
+  return (
+    <Show when={offer()}>
+      {(o) => (
+        <button
+          type="button"
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => {
+            const text = o().text
+            getSelection()?.removeAllRanges()
+            setOffer(undefined)
+            props.onQuote(text)
+          }}
+          style={{ left: `${Math.max(0, o().x - 40)}px`, top: `${o().y + 4}px` }}
+          title="Add it to your message as a quote"
+          class="absolute z-10 flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-xs text-on-primary shadow-(--shadow-pop)"
+        >
+          <TextQuote class="size-3" /> Quote
+        </button>
+      )}
+    </Show>
   )
 }

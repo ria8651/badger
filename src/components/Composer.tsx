@@ -26,6 +26,8 @@ export interface ComposerControls {
   focus: () => void
   /** Saves what's typed now rather than after the pause in typing. */
   flush: () => void
+  /** Adds this to the end of what's typed as a Markdown quote, with the cursor after it. */
+  quote: (text: string) => void
 }
 
 /**
@@ -84,7 +86,20 @@ export function Composer(props: {
     flush()
     removeEventListener('pagehide', flush)
   })
-  props.ref?.({ focus: () => input.focus(), flush })
+  const quote = (quoted: string) => {
+    const block = quoted
+      .trim()
+      .replace(/\n{3,}/g, '\n\n')
+      .split('\n')
+      .map((line) => (line.trim() ? `> ${line}` : '>'))
+      .join('\n')
+    const before = text().trimEnd()
+    edit(`${before ? `${before}\n\n` : ''}${block}\n\n`)
+    input.focus()
+    input.setSelectionRange(input.value.length, input.value.length)
+    input.scrollTop = input.scrollHeight
+  }
+  props.ref?.({ focus: () => input.focus(), flush, quote })
 
   const submit = () => {
     if (!hasInput()) return
