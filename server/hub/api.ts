@@ -130,6 +130,25 @@ function machineFileRoutes({ machines, chats, listChanged }: ApiDeps): Route[] {
     ],
     [
       'GET',
+      '/api/git/base',
+      async ({ url }) => {
+        const dir = absolutePath(url.searchParams.get('path'))
+        return [200, await query(url).runner.remote.baseChoices(dir)]
+      },
+    ],
+    [
+      'PUT',
+      '/api/git/base',
+      async ({ json }) => {
+        const body = await json()
+        const runner = machines.fromRequest(body.machine)
+        if (body.base !== null && typeof body.base !== 'string') throw new BadRequest('base must be a branch, empty for none, or null to work it out')
+        await runner.remote.setBase(absolutePath(body.path), body.base)
+        return [204, null]
+      },
+    ],
+    [
+      'GET',
       '/api/review',
       async ({ url }) => {
         const dir = absolutePath(url.searchParams.get('path'))

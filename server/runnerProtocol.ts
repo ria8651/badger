@@ -1,6 +1,7 @@
 import { z, type ZodType } from 'zod'
 import type {
   AccountUsage,
+  BaseChoices,
   Card,
   ChatCommand,
   ChatCommandReply,
@@ -165,6 +166,9 @@ export interface RunnerApi {
   /** Undefined outside a git repo. Fetches first if asked, at most once a minute. */
   gitStatus(path: string, fetch: boolean): Promise<GitStatus | undefined>
   gitPush(path: string): Promise<void>
+  baseChoices(path: string): Promise<BaseChoices>
+  /** `null` goes back to working the base out; `''` means none. */
+  setBase(path: string, base: string | null): Promise<void>
   /** The changes a review looks at; see ReviewScope. */
   reviewDiff(path: string, scope: ReviewScope, context: number): Promise<ReviewDiff>
   /** Fast-forward only; refused while a chat is working there. */
@@ -200,6 +204,8 @@ export const RUNNER_METHODS = [
   'worktreeStatus',
   'gitStatus',
   'gitPush',
+  'baseChoices',
+  'setBase',
   'reviewDiff',
   'gitPull',
   'removeWorktree',

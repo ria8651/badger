@@ -1,5 +1,6 @@
 import { createSignal } from 'solid-js'
 import type {
+  BaseChoices,
   Card,
   CardStatus,
   ClientEvent,
@@ -67,6 +68,9 @@ export const api = {
     get<ReviewDiff>(`/api/review?${on(machine, { path, scope, context: String(context) })}`),
   push: (path: string, machine?: string) => request<void>('POST', '/api/git/push', { path, machine }),
   pull: (path: string, machine?: string) => request<void>('POST', '/api/git/pull', { path, machine }),
+  baseChoices: (path: string, machine?: string) => get<BaseChoices>(`/api/git/base?${on(machine, { path })}`),
+  /** A branch, '' for none, or null to work it out again. */
+  setBase: (path: string, base: string | null, machine?: string) => request<void>('PUT', '/api/git/base', { path, base, machine }),
   removeWorktree: (path: string, machine?: string) => request<void>('DELETE', `/api/worktree?${on(machine, { path })}`),
   folders: (machine?: string) => get<Folder[]>(`/api/folders?${on(machine)}`),
   addFolder: (path: string, machine?: string) => request<void>('POST', '/api/folders', { path, machine }),

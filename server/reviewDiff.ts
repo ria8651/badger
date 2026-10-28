@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { ReviewCommit, ReviewDiff, ReviewFile, ReviewHunk, ReviewScope } from '../shared/protocol.ts'
 import { run } from './proc.ts'
-import { WORKTREE_PATH, git, mainCheckout } from './workspace.ts'
+import { baseOf } from './base.ts'
+import { git } from './workspace.ts'
 
 /** Lines of patch a file can have before it's left out, and the whole diff's limit. */
 const FILE_LINES = 4000
@@ -65,18 +66,6 @@ function gitPath(raw: string): string {
     } else bytes.push(({ n: 10, t: 9, r: 13, a: 7, b: 8, f: 12, v: 11 } as Record<string, number>)[next] ?? next.charCodeAt(0))
   }
   return Buffer.from(bytes).toString('utf8')
-}
-
-/** What `base` compares with: the main checkout's HEAD in a worktree, else the upstream. */
-async function baseOf(path: string): Promise<{ label: string; sha: string } | undefined> {
-  if (WORKTREE_PATH.test(path)) {
-    const main = await mainCheckout(path)
-    const [branch, sha] = await Promise.all([git(main, 'branch', '--show-current'), git(main, 'rev-parse', 'HEAD')])
-    return { label: branch || sha.slice(0, 7), sha }
-  }
-  const upstream = await git(path, 'rev-parse', '--abbrev-ref', '@{upstream}').catch(() => '')
-  if (!upstream) return undefined
-  return { label: upstream, sha: await git(path, 'rev-parse', '@{upstream}') }
 }
 
 async function commitsSince(path: string, from: string): Promise<ReviewCommit[]> {
@@ -185,7 +174,7 @@ export function reviewDiff(path: string, scope: ReviewScope, context = 3): Promi
 }
 
 async function readDiff(path: string, scope: ReviewScope, context: number): Promise<ReviewDiff> {
-  const [branch, { tree, big }, base] = await Promise.all([git(path, 'branch', '--show-current'), snapshot(path), baseOf(path).catch(() => undefined)])
+  const [branch, { tree, big }, base] = await Promise.all([git(path, 'branch', '--show-current'), snapshot(path), baseOf(path, true).catch(() => undefined)])
   const head = await git(path, 'rev-parse', '-q', '--verify', 'HEAD').catch(() => '')
   const forkPoint = base && head ? await git(path, 'merge-base', head, base.sha).catch(() => '') : ''
   const commits = forkPoint ? await commitsSince(path, forkPoint) : []
@@ -222,5 +211,5 @@ async function readDiff(path: string, scope: ReviewScope, context: number): Prom
     if (files.some((f) => f.path === b.path)) continue
     files.push({ path: b.path, status: 'added', added: 0, removed: 0, binary: false, truncated: true, hunks: [{ id: hunkId(b.path, `untracked\0${b.size}\0${b.mtime}`), patch: '' }] })
   }
-  return { branch, base: base?.label, commits, snapshot: tree, files }
+  return { branch, base: base?.branch, baseHow: base?.how, commits, snapshot: tree, files }
 }

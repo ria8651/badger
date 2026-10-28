@@ -119,7 +119,7 @@ export function reviewGuideTools(sessionId: string, cwd: () => string, dir: stri
     tool(
       REVIEW_DIFF_TOOL,
       [
-        'The changes under review: everything in this checkout not on its base yet (the main checkout’s branch in a worktree, else the upstream), uncommitted and untracked files included. 3 lines of context.',
+        'The changes under review: everything in this checkout not on its base yet (a base picked for the branch, else its open pull request’s, else the nearest likely one), uncommitted and untracked files included. 3 lines of context.',
         'Each hunk starts with its id in brackets, e.g. [h3f2a91c0]; the guide refers to hunks by these. An id stays the same while its lines do, wherever they move in the file.',
         'A small diff comes whole. A big one comes as a list of its files and their hunk ids, to read by page, or by files or hunks. Generated files (lockfiles and the like) are listed by hunk id; ask for them by file to read them.',
       ].join(' '),

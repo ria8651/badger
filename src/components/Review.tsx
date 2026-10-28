@@ -9,6 +9,7 @@ import { TranscriptIndex } from '../transcript/context.ts'
 import { itemsFor, type Block, type Index } from '../transcript/model.ts'
 import type { Partial as Streaming } from '../useChat.ts'
 import { Messages } from './Transcript.tsx'
+import { BasePicker, baseChanged, howText } from './BasePicker.tsx'
 import { Markdown } from './Markdown.tsx'
 import { Button, DiffCount, GhostButton, LiveDot, inputClass } from './ui.tsx'
 
@@ -554,6 +555,7 @@ export function ReviewPage(props: {
   }
   createEffect(on(() => props.cwd, () => void load()))
   createEffect(on(() => props.running, (r) => !r && void load(), { defer: true }))
+  createEffect(on(baseChanged, () => void load(), { defer: true }))
 
   // Worked out again only when a guide call comes or finishes, not on every message.
   const told = createMemo(on(createMemo(() => guideCalls(props.index())), () => guideOf(untrack(props.index))))
@@ -822,10 +824,25 @@ export function ReviewPage(props: {
         <Show when={diff()}>
           {(d) => (
             <>
-              <span>
-                <span class="font-mono text-fg-2">{d().branch || 'detached'}</span>
-                <Show when={d().base}> against <span class="font-mono text-fg-2">{d().base}</span></Show>
-              </span>
+              {/* The branch is in the bar above; what it's compared with is the review's own. */}
+              <Show when={props.cwd}>
+                {(dir) => (
+                  <BasePicker
+                    dir={dir()}
+                    machine={props.machine}
+                    title={d().base ? `Compared with ${d().base}, ${howText[d().baseHow ?? 'nearest']}. Pick another` : 'Pick a branch to compare with'}
+                    triggerClass={(open) => `-mx-1.5 flex items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors hover:bg-surface ${open ? 'bg-surface' : ''}`}
+                    trigger={() => (
+                      <>
+                        <Show when={d().base} fallback="Uncommitted only">
+                          against <span class="font-mono text-fg-2">{d().base}</span>
+                        </Show>
+                        <ChevronDown class="size-3" />
+                      </>
+                    )}
+                  />
+                )}
+              </Show>
               <DiffCount
                 files={d().files.length}
                 added={d().files.reduce((n, f) => n + f.added, 0)}

@@ -137,13 +137,32 @@ export interface WorktreeStatus {
   base: string
 }
 
+/**
+ * How a branch's base was chosen: picked by hand, the base of its open pull request, or the likely one it's
+ * fewest commits beyond (the main checkout's branch, the default branch, ones named like develop or release/…).
+ */
+export type BaseHow = 'set' | 'pr' | 'nearest'
+
+/** For picking a branch's base by hand. */
+export interface BaseChoices {
+  /** Empty when HEAD is detached, which has nowhere to keep a choice. */
+  branch: string
+  current?: { branch: string; how: BaseHow }
+  /** What was picked by hand: a branch, or '' for none. Undefined when it's worked out. */
+  set?: string
+  /** The likely bases, nearest first, with the commits HEAD has that each doesn't. */
+  likely: { branch: string; ahead: number }[]
+  /** Every other branch, local and remote, most recent first. */
+  others: string[]
+}
+
 /** Work in any git checkout that hasn't landed anywhere yet: what a review looks at. */
 export interface ChangesStatus {
   /** Its branch, or its commit's short hash when HEAD is detached. */
   branch: string
   /** Files with uncommitted changes. */
   changes: number
-  /** What `ahead` is counted against: the main checkout's branch for a worktree, otherwise the branch's upstream, if it has one. */
+  /** What `ahead` is counted against, if it has a base: see BaseHow. */
   base?: string
   /** Commits on HEAD that `base` doesn't have. */
   ahead: number
@@ -165,15 +184,15 @@ export interface GitStatus {
   behind: number
   /** Where a branch with no upstream would be pushed: origin, or the only remote. Absent with no remotes. */
   remote?: string
-  /** In a linked worktree: the main checkout's branch (or short hash, detached), and the commits each has that the other doesn't. */
-  base?: { branch: string; ahead: number; behind: number }
+  /** The branch this one is compared with, how it was chosen, and the commits each has that the other doesn't. Absent with none. */
+  base?: { branch: string; how: BaseHow; ahead: number; behind: number }
   /** When the repo last fetched, ms since epoch; absent if it never has. */
   fetchedAt?: number
 }
 
 /**
- * What a review looks at, as changes between two trees. `base`: everything not on the base yet (the main checkout's
- * branch in a worktree, else the upstream), committed or not. `uncommitted`: against HEAD. `commit`: one commit.
+ * What a review looks at, as changes between two trees. `base`: everything not on the branch's base yet (see BaseHow),
+ * committed or not. `uncommitted`: against HEAD. `commit`: one commit.
  * `since`: against a snapshot taken earlier, e.g. when the last review was sent.
  */
 export type ReviewScope = { kind: 'base' } | { kind: 'uncommitted' } | { kind: 'commit'; sha: string } | { kind: 'since'; tree: string }
@@ -217,8 +236,9 @@ export interface ReviewHunk {
 
 export interface ReviewDiff {
   branch: string
-  /** What `base` compares with, e.g. spike or origin/spike; absent with nothing to compare with. */
+  /** What `base` compares with, e.g. develop or origin/release/2.5, and how it was chosen; absent with nothing to compare with. */
   base?: string
+  baseHow?: BaseHow
   /** Commits on HEAD that aren't on the base, newest first. */
   commits: ReviewCommit[]
   /** The working tree as it was read, untracked files included: pass it back as `since` to see what changed after. */

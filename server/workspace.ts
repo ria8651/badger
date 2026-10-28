@@ -3,6 +3,7 @@ import { accessSync, constants, existsSync, mkdirSync, writeFileSync, statSync }
 import { appendFile, mkdir, open, readFile, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type { ChangesStatus, GitStatus, WorktreeStatus } from '../shared/protocol.ts'
+import { baseOf } from './base.ts'
 import { run } from './proc.ts'
 
 /** The git root of a directory (each worktree has its own), or the directory itself outside a repo. */
@@ -77,18 +78,11 @@ export async function worktreeStatus(path: string): Promise<WorktreeStatus> {
 
 /** Uncommitted changes and commits not yet on the base, for any git checkout. Undefined outside a repo. */
 export async function changesStatus(path: string): Promise<ChangesStatus | undefined> {
-  if (WORKTREE_PATH.test(path)) {
-    const wt = await worktreeStatus(path)
-    return { branch: wt.branch, changes: wt.changes, base: wt.base, ahead: wt.unmerged }
-  }
   const status = await git(path, 'status', '--porcelain').catch(() => undefined)
   if (status === undefined) return undefined
-  const [branch, upstream] = await Promise.all([
-    headName(path),
-    git(path, 'rev-parse', '--abbrev-ref', '@{upstream}').catch(() => ''),
-  ])
-  const ahead = upstream ? await count(path, '@{upstream}..HEAD') : 0
-  return { branch, changes: changed(status), base: upstream || undefined, ahead }
+  const [branch, base] = await Promise.all([headName(path), baseOf(path, true).catch(() => undefined)])
+  const ahead = base ? await count(path, `${base.sha}..HEAD`) : 0
+  return { branch, changes: changed(status), base: base?.branch, ahead }
 }
 
 /**
@@ -143,10 +137,8 @@ export async function gitStatus(path: string, fetch = false): Promise<GitStatus 
   const [ahead, behind] = upstream
     ? await Promise.all([count(path, '@{upstream}..HEAD'), count(path, 'HEAD..@{upstream}')])
     : [remote ? Number(await git(path, 'rev-list', '--count', 'HEAD', '--not', '--remotes')) : 0, 0]
-  // Any linked worktree, not just Claude Code's; one with no commits yet has nothing to compare.
-  const main = dirname(common)
-  const linked = resolve(await git(path, 'rev-parse', '--show-toplevel')) !== resolve(main)
-  const base = linked ? await baseStatus(path, main).catch(() => undefined) : undefined
+  // One with no commits yet has nothing to compare.
+  const base = await baseStatus(path).catch(() => undefined)
   const [fetchedAt, lines] = await Promise.all([
     stat(join(common, 'FETCH_HEAD')).then((s) => s.mtimeMs, () => undefined),
     status ? lineChanges(path) : { added: 0, removed: 0 },
@@ -154,11 +146,12 @@ export async function gitStatus(path: string, fetch = false): Promise<GitStatus 
   return { branch, changes: changed(status), ...lines, upstream: upstream || undefined, ahead, behind, remote, base, fetchedAt }
 }
 
-/** How a linked worktree compares with the main checkout's HEAD. */
-async function baseStatus(path: string, main: string): Promise<GitStatus['base']> {
-  const [branch, head] = await Promise.all([headName(main), git(main, 'rev-parse', 'HEAD')])
-  const [ahead, behind] = await Promise.all([count(path, `${head}..HEAD`), count(path, `HEAD..${head}`)])
-  return { branch, ahead, behind }
+/** How a branch compares with its base. */
+async function baseStatus(path: string): Promise<GitStatus['base']> {
+  const base = await baseOf(path)
+  if (!base) return undefined
+  const [ahead, behind] = await Promise.all([count(path, `${base.sha}..HEAD`), count(path, `HEAD..${base.sha}`)])
+  return { branch: base.branch, how: base.how, ahead, behind }
 }
 
 /** Git that never stops to ask for a password, and gives up rather than hang on the network. */

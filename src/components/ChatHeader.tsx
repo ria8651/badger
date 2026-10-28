@@ -1,11 +1,12 @@
 import { Show, createEffect, createSignal, on, onCleanup } from 'solid-js'
-import { Archive, ArchiveRestore, FileDiff, FolderInput, Zap } from '../icons'
+import { Archive, ArchiveRestore, FileDiff, FolderInput, GitMerge, Zap } from '../icons'
 import type { GitStatus, SessionSummary } from '../../shared/protocol.ts'
 import type { ChatAction } from '../actions.ts'
 import { api } from '../api.ts'
 import { basename, worktreeOf } from '../folders.ts'
 import { ago } from '../format.ts'
 import type { Ws } from '../terminals.ts'
+import { BasePicker, baseChanged, howText } from './BasePicker.tsx'
 import { FileChat } from './FileChat.tsx'
 import { RenameChat } from './RenameChat.tsx'
 import { TerminalButton } from './Terminals.tsx'
@@ -49,6 +50,7 @@ export function createGitStatus(target: () => { dir: string; machine: string } |
   const onVisible = () => inView() && void refresh(true)
   document.addEventListener('visibilitychange', onVisible)
   const timer = setInterval(onVisible, 5 * 60_000)
+  createEffect(on(baseChanged, () => void refresh(), { defer: true }))
   onCleanup(() => {
     document.removeEventListener('visibilitychange', onVisible)
     clearInterval(timer)
@@ -159,8 +161,8 @@ export function ChatHeader(props: {
     if (ask && g.base?.behind) {
       items.push({
         label: `Update from ${g.base.branch}`,
-        description: `${g.base.branch} has ${plural(g.base.behind, 'commit')} this worktree doesn't. Claude brings them in.`,
-        run: () => ask(`Bring this worktree up to date with ${g.base!.branch}.`),
+        description: `${g.base.branch} has ${plural(g.base.behind, 'commit')} this branch doesn't. Claude brings them in.`,
+        run: () => ask(`Bring this branch up to date with ${g.base!.branch}.`),
       })
     }
     if (ask && g.changes) {
@@ -186,7 +188,7 @@ export function ChatHeader(props: {
       `${g.branch || 'Detached HEAD'} in ${props.cwd}`,
       g.changes ? `Uncommitted: ${uncommitted(g)}` : 'Nothing uncommitted',
       g.upstream ? `${g.ahead} ahead, ${g.behind} behind ${g.upstream}` : g.remote ? `Not on ${g.remote} yet, ${g.ahead} no remote has` : 'No remote',
-      g.base && `${g.base.ahead} not on ${g.base.branch}, ${g.base.behind} on ${g.base.branch} not here`,
+      g.base && `Base ${g.base.branch}, ${howText[g.base.how]}: ${g.base.ahead} not on it, ${g.base.behind} on it not here`,
       g.fetchedAt ? `Fetched ${ago(g.fetchedAt)}` : 'Never fetched',
     ]
       .filter(Boolean)
@@ -246,6 +248,27 @@ export function ChatHeader(props: {
                 trigger={() => <GitSummary git={g()} branch partClass="hidden @md:inline" hide={primary() === 'push' ? 'ahead' : primary() === 'pull' ? 'behind' : undefined} />}
               />
             </div>
+            {/* What it's compared with, only with room for it; the diff review picks one too. Detached, there's nowhere to keep one. */}
+            <Show when={g().branch && props.cwd}>
+              {(dir) => (
+                <div class="-ml-1 hidden min-w-0 shrink-[5] @3xl:block">
+                  <BasePicker
+                    dir={dir()}
+                    machine={props.machine}
+                    title={g().base ? `Compared with ${g().base!.branch}, ${howText[g().base!.how]}. Pick another` : 'No base to compare with. Pick one'}
+                    triggerClass={(open) => `${button} max-w-full min-w-0 text-fg-3 ${open ? 'bg-surface' : ''}`}
+                    trigger={() => (
+                      <>
+                        <GitMerge class="size-3.5 shrink-0" />
+                        <Show when={g().base} fallback={<span class="truncate">No base</span>}>
+                          {(b) => <span class="truncate font-mono">{b().branch}</span>}
+                        </Show>
+                      </>
+                    )}
+                  />
+                </div>
+              )}
+            </Show>
             <Show when={primary()}>
               {(kind) => (
                 <button

@@ -25,7 +25,7 @@ export function reviewTool(deps: ReviewDeps, sessionId: string, cwd: () => strin
       name: REVIEW_TOOL,
       kind: 'review',
       description: [
-        "Have a fresh chat review the work in this chat's git checkout: uncommitted changes, plus commits not yet on the base (the main checkout's branch in a worktree, otherwise the upstream). Use it when the user asks for a review.",
+        "Have a fresh chat review the work in this chat's git checkout: uncommitted changes, plus commits not yet on the base (a base picked for the branch, else its open pull request's, else the nearest likely one, such as the main checkout's branch or develop). Use it when the user asks for a review.",
         "The reviewer works in this checkout, doesn't change anything, and its report is the result. Tell the user what it found, then act on it as they asked.",
       ].join(' '),
       input: {

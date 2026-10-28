@@ -36,7 +36,8 @@ import { TranscriptSync, writeTranscript } from './sync.ts'
 import { TERMINAL_INSTRUCTIONS, TERMINAL_SERVER, terminalOps } from './terminalTools.ts'
 import { Terminals } from './terminals.ts'
 import { ContextReader, readAccount } from './usage.ts'
-import { excludeWorktrees, gitPull, gitPush, gitStatus, inaccessible, removeWorktree, rootOf, worktreeStatus } from './workspace.ts'
+import { baseChoices, setBase } from './base.ts'
+import { excludeWorktrees,gitPull, gitPush, gitStatus, inaccessible, removeWorktree, rootOf, worktreeStatus } from './workspace.ts'
 
 // Merging only starts a chat in the main checkout, and that chat asks for anything risky itself.
 const MERGE_TOOL_NAME = `mcp__${BOARD_SERVER}__${MERGE_TOOL}`
@@ -302,6 +303,14 @@ export class Runner implements RunnerApi {
 
   gitPush(path: string) {
     return gitPush(path).catch(badRequest)
+  }
+
+  baseChoices(path: string) {
+    return baseChoices(path).catch(badRequest)
+  }
+
+  setBase(path: string, base: string | null) {
+    return setBase(path, base).catch(badRequest)
   }
 
   reviewDiff(path: string, scope: ReviewScope, context: number) {
