@@ -1,5 +1,5 @@
 import { For, Index, Match, Show, Switch, children, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
-import { Globe, Minimize2, MessagesSquare, NotebookPen, Plus, RotateCw, SquareArrowOutUpRight, X } from '../icons'
+import { FileDiff, Globe, Minimize2, MessagesSquare, NotebookPen, Plus, RotateCw, SquareArrowOutUpRight, X } from '../icons'
 import { setOnScreen } from '../activity.ts'
 import { api } from '../api.ts'
 import type { ContextChip } from './Attachments.tsx'
@@ -94,6 +94,8 @@ export interface ChatPanes {
   /** Its side chats: whether one is working, and the panel showing them. */
   btwLive: () => boolean
   renderBtw: (onReady: (focus: () => void) => void) => JSX.Element
+  /** The diff of its checkout. */
+  renderDiff: (onReady: (focus: () => void) => void) => JSX.Element
 }
 
 const BINDINGS: [string, string][] = [
@@ -445,6 +447,7 @@ export function Workspace(props: {
     if (v?.kind === 'task') return props.panes.label(v.id)
     if (v?.kind === 'plan') return 'Plan'
     if (v?.kind === 'btw') return 'Side chats'
+    if (v?.kind === 'diff') return 'Diff'
     if (v?.kind === 'attachment') return props.panes.attachment(v)?.label ?? 'Attachment'
     if (v?.kind === 'preview') return v.name ?? `:${v.id}`
     const t = terminalOf(v)
@@ -453,7 +456,7 @@ export function Workspace(props: {
   const tabTitle = (v?: View) =>
     v?.kind === 'preview'
       ? `${tabLabel(v)}\n${previewUrl(v.id, v.path, machine()) ?? `Port ${v.id}`}`
-      : v?.kind === 'task' || v?.kind === 'plan' || v?.kind === 'attachment' || v?.kind === 'btw'
+      : v?.kind === 'task' || v?.kind === 'plan' || v?.kind === 'attachment' || v?.kind === 'btw' || v?.kind === 'diff'
         ? tabLabel(v)
         : [
             terminalOf(v) ? terminalTooltip(terminalOf(v)!) : tabLabel(v),
@@ -536,6 +539,9 @@ export function Workspace(props: {
                             <Show when={props.panes.planWaiting()}>
                               <span class="size-1.5 shrink-0 rounded-full bg-accent" />
                             </Show>
+                          </Show>
+                          <Show when={v()?.kind === 'diff'}>
+                            <FileDiff class="size-3 shrink-0" />
                           </Show>
                           <Show when={v()?.kind === 'btw'}>
                             <MessagesSquare class="size-3 shrink-0" />
@@ -659,6 +665,7 @@ export function Workspace(props: {
                     <Match when={v().kind === 'plan'}>{props.panes.renderPlan((focus) => ready(key, focus))}</Match>
                     <Match when={attachmentViewOf(v())}>{(a) => props.panes.renderAttachment(a(), (focus) => ready(key, focus))}</Match>
                     <Match when={v().kind === 'btw'}>{props.panes.renderBtw((focus) => ready(key, focus))}</Match>
+                    <Match when={v().kind === 'diff'}>{props.panes.renderDiff((focus) => ready(key, focus))}</Match>
                   </Switch>
                 )}
               </Show>

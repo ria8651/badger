@@ -1,5 +1,5 @@
 import { For, Show, createContext, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack, useContext } from 'solid-js'
-import { Check, ChevronDown, ChevronRight, MessageSquarePlus, RotateCw, Trash2 } from '../icons'
+import { Check, ChevronDown, ChevronRight, MessageSquarePlus, RotateCw, Sparkles, Trash2 } from '../icons'
 import type { ReviewAttention, ReviewDiff, ReviewFile, ReviewGroup, ReviewGuide, ReviewHunk, WireMessage } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { plural } from '../format.ts'
@@ -14,11 +14,12 @@ import { Markdown } from './Markdown.tsx'
 import { Button, DiffCount, GhostButton, LiveDot, inputClass } from './ui.tsx'
 
 /*
- * SPIKE: a review chat's page. Its checkout's changes, every hunk, in the groups and order of the
- * guide Claude writes for them (review_guide_group, then review_guide_done), each group with what a reader needs to
- * follow it. You tick hunks off as you read, ask about lines (Claude answers beside them), and
- * send comments for Claude to act on, after which it updates the guide. What's kept (viewed
- * hunks, comments, questions) is in localStorage, per review chat.
+ * SPIKE: a checkout's changes, every hunk. Two ways: a chat's diff, in a panel beside it, file by file; or a guided
+ * review, a chat of its own whose page this is, in the groups and order of the guide Claude writes for them
+ * (review_guide_group, then review_guide_done), each group with what a reader needs to follow it. Either way you
+ * tick hunks off as you read, ask about lines (Claude answers beside them), and send comments for Claude to act on;
+ * in a guided review, it then updates the guide. What's kept (viewed hunks, comments, questions) is in
+ * localStorage, per chat and way.
  */
 
 const GROUP_TOOL = 'review_guide_group'
@@ -59,16 +60,18 @@ interface Saved {
 
 const EMPTY: Saved = { comments: [], general: '', viewed: [], questions: [] }
 const stores = new Map<string, ReturnType<typeof createSignal<Saved>>>()
-const storeKey = (session: string) => `badger.review2.${session}`
+/** By chat, and whether it's a guided review or a chat's diff, so a chat's diff and its review don't share. */
+const storeKey = (session: string, guided: boolean) => `badger.${guided ? 'review2' : 'diff'}.${session}`
 
-function useReview(session: string) {
-  let s = stores.get(session)
+function useReview(session: string, guided: boolean) {
+  const key = storeKey(session, guided)
+  let s = stores.get(key)
   if (!s) {
     let initial = EMPTY
     try {
-      initial = { ...EMPTY, ...JSON.parse(localStorage.getItem(storeKey(session)) ?? '{}') }
+      initial = { ...EMPTY, ...JSON.parse(localStorage.getItem(key) ?? '{}') }
     } catch {}
-    stores.set(session, (s = createSignal<Saved>(initial)))
+    stores.set(key, (s = createSignal<Saved>(initial)))
   }
   const [saved, setSaved] = s
   // Written once typing pauses, not on every keystroke.
@@ -76,7 +79,7 @@ function useReview(session: string) {
   const update = (f: (s: Saved) => Saved) => {
     setSaved(f)
     clearTimeout(timer)
-    timer = setTimeout(() => localStorage.setItem(storeKey(session), JSON.stringify(saved())), 300)
+    timer = setTimeout(() => localStorage.setItem(key, JSON.stringify(saved())), 300)
   }
   return { saved, update }
 }
@@ -513,7 +516,10 @@ interface Draft {
 }
 
 export function ReviewPage(props: {
+  /** The chat comments and questions go to: the review chat, or the chat a diff is beside. */
   sessionId: string
+  /** A review chat's page, in its guide's groups; otherwise a chat's diff, file by file. */
+  guided: boolean
   /** Where git runs. */
   cwd?: string
   machine: string
@@ -522,12 +528,19 @@ export function ReviewPage(props: {
   running: boolean
   /** Sends a message to the chat; absent when it can't take one. */
   onSend?: (text: string) => void
+  /** A chat's diff: starts a guided review of the changes, or opens the one there is. */
+  onGuide?: () => void
+  /** In a panel: how to focus it. */
+  onReady?: (focus: () => void) => void
   /** What's streaming in, for answers to show as the conversation does. */
   partial: Streaming | null
   bashOutput: Record<string, string>
   children?: Record<string, string>
 }) {
-  const { saved, update } = useReview(untrack(() => props.sessionId))
+  const { saved, update } = useReview(
+    untrack(() => props.sessionId),
+    untrack(() => props.guided),
+  )
   const [diff, setDiff] = createSignal<ReviewDiff>()
   const [error, setError] = createSignal<string>()
   const [loading, setLoading] = createSignal(false)
@@ -558,7 +571,13 @@ export function ReviewPage(props: {
   createEffect(on(baseChanged, () => void load(), { defer: true }))
 
   // Worked out again only when a guide call comes or finishes, not on every message.
-  const told = createMemo(on(createMemo(() => guideCalls(props.index())), () => guideOf(untrack(props.index))))
+  // A chat's diff has none: the chat it's beside wasn't asked for one.
+  const told = createMemo(
+    on(
+      createMemo(() => (props.guided ? guideCalls(props.index()) : '')),
+      () => (props.guided ? guideOf(untrack(props.index)) : { writing: false }),
+    ),
+  )
   const guide = () => told().guide
   // Each part of what's kept on its own, so typing an overall comment or ticking a hunk doesn't redo the rest.
   const comments = createMemo(() => saved().comments)
@@ -716,7 +735,7 @@ export function ReviewPage(props: {
       remember(scrollKey, el && scroller.scrollTop > 0 ? { hunk, offset: top - el.getBoundingClientRect().top } : undefined)
     }
   }
-  const scrollKey = `review:${untrack(() => props.sessionId)}`
+  const scrollKey = `${untrack(() => props.guided) ? 'review' : 'diff'}:${untrack(() => props.sessionId)}`
   let content!: HTMLDivElement
   const spot = recall<{ hunk: string; offset: number }>(scrollKey)
   // Not saved over until it's been gone back to: the page starts at the top while the diff loads.
@@ -729,6 +748,7 @@ export function ReviewPage(props: {
   }
   onMount(() => {
     for (const e of ['wheel', 'touchstart', 'keydown', 'pointerdown']) scroller.addEventListener(e, () => restored || giveUp(), { once: true, passive: true })
+    props.onReady?.(() => scroller.focus({ preventScroll: true }))
   })
   // Back to where it was read to, as soon as that hunk is on the page.
   const tryRestore = () => {
@@ -865,6 +885,13 @@ export function ReviewPage(props: {
         <GhostButton title="Read the changes again" onClick={() => void load()}>
           <RotateCw class={`size-3.5 ${loading() ? 'animate-spin' : ''}`} />
         </GhostButton>
+        <Show when={props.onGuide}>
+          {(guide) => (
+            <Button onClick={guide()} disabled={!total()} class="flex h-7 items-center gap-1.5 text-xs" title="A chat of its own where Claude groups these changes, explains each group, and answers and acts on your comments">
+              <Sparkles class="size-3.5" /> Guided review
+            </Button>
+          )}
+        </Show>
       </div>
 
       <div class="flex min-h-0 flex-1">
@@ -927,7 +954,7 @@ export function ReviewPage(props: {
           </For>
         </nav>
 
-        <div ref={scroller} onScroll={onScroll} class="min-w-0 flex-1 overflow-y-auto">
+        <div ref={scroller} onScroll={onScroll} tabIndex={-1} class="min-w-0 flex-1 overflow-y-auto outline-none">
           <div ref={content} class="mx-auto max-w-[100rem] px-4 pb-10 @3xl:px-6">
             <Show when={!diff() && loading()}>
               <p class="p-10 text-center text-fg-3">Reading the changes…</p>
@@ -938,7 +965,7 @@ export function ReviewPage(props: {
             <Show
               when={guide()}
               fallback={
-                <Show when={diff()}>
+                <Show when={props.guided && diff()}>
                   <p class="mt-4 flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 text-fg-2">
                     <Show when={props.running || told().writing}>
                       <LiveDot />
@@ -1063,23 +1090,28 @@ export function ReviewPage(props: {
       </div>
 
       {/* What goes back to Claude */}
-      <div class="shrink-0 space-y-2 border-t border-line px-3 py-2.5">
+      {/* One row, so it takes no more height than it must: how to comment on lines is in the box until something's typed. */}
+      <div class="flex shrink-0 items-end gap-2 border-t border-line px-3 py-2">
         <textarea
           value={saved().general}
           onInput={(e) => {
             const general = e.currentTarget.value
             update((s) => ({ ...s, general }))
           }}
-          placeholder="Overall comment (optional)"
+          placeholder="Overall comment, or select code to comment on lines"
+          rows={1}
           // Grows with what's typed, as the composer does.
-          class={`${inputClass} h-auto max-h-[calc(8lh+0.75rem)] resize-none py-1.5 [field-sizing:content]`}
+          class={`${inputClass} h-auto max-h-[calc(8lh+0.75rem)] min-w-0 flex-1 resize-none py-1.5 [field-sizing:content]`}
         />
-        <div class="flex flex-wrap items-center gap-2">
-          <Button primary disabled={!props.onSend || (!saved().comments.length && !saved().general.trim())} onClick={send}>
-            {saved().comments.length ? `Send ${plural(saved().comments.length, 'comment')}` : 'Send to Claude'}
-          </Button>
-          <span class="text-xs text-fg-3">Select code, or drag over line numbers, to comment or ask about it. Claude acts on comments, then updates the guide.</span>
-        </div>
+        <Button
+          primary
+          disabled={!props.onSend || (!saved().comments.length && !saved().general.trim())}
+          onClick={send}
+          title={props.guided ? 'Claude acts on them, then updates the guide' : 'To this chat, for Claude to act on'}
+          class="shrink-0"
+        >
+          {saved().comments.length ? `Send ${plural(saved().comments.length, 'comment')}` : props.guided ? 'Send to Claude' : 'Send comments'}
+        </Button>
       </div>
     </div>
     </LiveChatContext.Provider>

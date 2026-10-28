@@ -82,7 +82,9 @@ export function ChatHeader(props: {
   actions: ChatAction[]
   /** Sends a prompt to the chat. Absent before it's started, so the header only does what needs no chat. */
   onAsk?: (prompt: string) => void
-  /** Opens the diff review of this folder's changes, starting one if there isn't one. */
+  /** Shows this folder's changes in a panel beside the chat. */
+  onDiff?: () => void
+  /** Opens the guided review of this folder's changes, starting one if there isn't one. */
   onReview?: () => void
 }) {
   const [busy, setBusy] = createSignal<'push' | 'pull'>()
@@ -124,9 +126,13 @@ export function ChatHeader(props: {
     const g = props.git
     if (!g) return []
     const items: GitItem[] = []
+    const diff = props.onDiff
+    if (diff) {
+      items.push({ label: 'Diff', description: 'Every change, file by file, beside the chat. Comment line by line for this chat to act on.', run: diff })
+    }
     const review = props.onReview
     if (review) {
-      items.push({ label: 'Diff review', description: 'Read every change yourself, grouped and explained by Claude, and comment line by line.', run: review })
+      items.push({ label: 'Guided review', description: 'Read every change yourself, grouped and explained by Claude, and comment line by line.', run: review })
     }
     if (canPush(g) && !g.behind) {
       items.push(
@@ -300,8 +306,8 @@ export function ChatHeader(props: {
         )}
       </Show>
       <div class="ml-auto flex shrink-0 items-center gap-1">
-        <Show when={props.git && props.onReview}>
-          <button type="button" onClick={props.onReview} title="Diff review: read every change, grouped and explained by Claude" class={`${button} text-fg-3`}>
+        <Show when={props.git && props.onDiff}>
+          <button type="button" onClick={props.onDiff} title="Diff: every change, beside the chat" class={`${button} text-fg-3`}>
             <FileDiff class="size-3.5" />
           </button>
         </Show>
