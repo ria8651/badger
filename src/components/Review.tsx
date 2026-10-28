@@ -954,164 +954,167 @@ export function ReviewPage(props: {
           </For>
         </nav>
 
-        <div ref={scroller} onScroll={onScroll} tabIndex={-1} class="min-w-0 flex-1 overflow-y-auto outline-none">
-          <div ref={content} class="mx-auto max-w-[100rem] px-4 pb-10 @3xl:px-6">
-            <Show when={!diff() && loading()}>
-              <p class="p-10 text-center text-fg-3">Reading the changes…</p>
-            </Show>
-            <Show when={error()}>
-              <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">{error()}</p>
-            </Show>
-            <Show
-              when={guide()}
-              fallback={
-                <Show when={props.guided && diff()}>
-                  <p class="mt-4 flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 text-fg-2">
-                    <Show when={props.running || told().writing}>
-                      <LiveDot />
-                    </Show>
-                    {props.running || told().writing
-                      ? 'Claude is reading the changes to write a guide. Meanwhile, here they are file by file.'
-                      : 'No guide yet. Here are the changes file by file.'}
-                  </p>
-                </Show>
-              }
-            >
-              {(g) => (
-                <Show when={g().summary}>
-                  <div class="mt-4 rounded-lg border border-line bg-surface px-4 py-3">
-                    <Markdown text={g().summary} />
-                  </div>
-                </Show>
-              )}
-            </Show>
-            <Show when={loose().length}>
-              <div class="mt-4 rounded-lg border border-line px-3 py-2">
-                <p class="mb-1 text-xs text-fg-3">Comments on lines that aren’t in the diff any more</p>
-                <For each={loose()}>{(c) => <CommentBox note={c} onRemove={() => removeComment(c.id)} />}</For>
-              </div>
-            </Show>
-            <Show when={diff() && !total() && !loading()}>
-              <p class="p-10 text-center text-fg-3">Nothing to review: no changes that aren’t on the base already.</p>
-            </Show>
-
-            <For each={sections()}>
-              {(s) => {
-                const side = () => !!s.explanation || s.attention === 'changed'
-                return (
-                  <section ref={(el) => sectionEls.set(s.id, el)} class="mt-5 scroll-mt-3 rounded-xl border border-line">
-                    {/* Stuck to the top while its group is in view, so you know which one you're in. */}
-                    <header class="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-t-xl border-b border-line bg-bg px-3 py-2">
-                      <AttentionBadge attention={s.attention} />
-                      <h2 class={`min-w-0 ${s.id.startsWith('file:') ? 'font-mono text-xs' : 'text-base'} text-fg`}>{s.title}</h2>
-                      <Show when={s.kind}>
-                        <span class="text-xs text-fg-3">{s.kind}</span>
+        {/* The diff, with what goes back to Claude under it; the outline beside them runs the full height. */}
+        <div class="flex min-w-0 flex-1 flex-col">
+          <div ref={scroller} onScroll={onScroll} tabIndex={-1} class="min-h-0 flex-1 overflow-y-auto outline-none">
+            <div ref={content} class="mx-auto max-w-[100rem] px-4 pb-10 @3xl:px-6">
+              <Show when={!diff() && loading()}>
+                <p class="p-10 text-center text-fg-3">Reading the changes…</p>
+              </Show>
+              <Show when={error()}>
+                <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">{error()}</p>
+              </Show>
+              <Show
+                when={guide()}
+                fallback={
+                  <Show when={props.guided && diff()}>
+                    <p class="mt-4 flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 text-fg-2">
+                      <Show when={props.running || told().writing}>
+                        <LiveDot />
                       </Show>
-                      <div class="flex-1" />
-                      <span class="text-xs text-fg-3 tabular-nums">
-                        {s.hunks.filter((p) => isViewed(p.hunk.id)).length}/{plural(s.hunks.length, 'hunk')}
-                      </span>
-                      <Show when={s.attention === 'changed' && props.onSend}>
-                        <Button class="flex h-7 items-center gap-1 text-xs" disabled={props.running} onClick={() => props.onSend!(UPDATE_GUIDE)}>
-                          Update the guide
-                        </Button>
-                      </Show>
-                      <button
-                        onClick={() => {
-                          const ids = s.hunks.map((p) => p.hunk.id)
-                          setViewed(ids, !ids.every(isViewed))
-                        }}
-                        class="rounded px-1.5 py-0.5 text-xs text-fg-3 hover:bg-surface hover:text-fg-2"
-                      >
-                        {s.hunks.every((p) => isViewed(p.hunk.id)) ? 'Mark unviewed' : s.hunks.length > 1 ? 'Mark all viewed' : 'Mark viewed'}
-                      </button>
-                    </header>
-                    {/* The explanation beside its hunks where there's room, each pinned (see pin); above them where there isn't. */}
-                    <div class={`grid gap-4 p-3 ${side() ? '@4xl:grid-cols-[minmax(16rem,26rem)_minmax(0,1fr)]' : ''}`}>
-                      <Show when={side()}>
-                        <aside ref={pin} class="min-w-0 text-fg-2 @4xl:sticky @4xl:self-start">
-                          <Show when={s.attention === 'changed'}>
-                            <p class="text-fg-3">New or changed since Claude last wrote the guide, so it doesn’t explain these yet.</p>
-                          </Show>
-                          <Show when={s.explanation}>
-                            <Markdown text={s.explanation!} />
-                          </Show>
-                        </aside>
-                      </Show>
-                      <div ref={(el) => side() && pin(el)} class="min-w-0 space-y-2 @4xl:sticky @4xl:self-start">
-                        <For each={s.hunks}>
-                          {(p) => {
-                            const rows = () => rowsFor(p.hunk)
-                            const id = p.hunk.id
-                            return (
-                              <HunkView
-                                ref={(el) => {
-                                  hunkEls.set(id, el)
-                                  if (id === spot?.hunk) queueMicrotask(tryRestore)
-                                }}
-                                file={p.file}
-                                rows={rows()}
-                                open={isOpen(id)}
-                                viewed={isViewed(id)}
-                                comments={commentsIn().get(p.file.path) ?? NO_NOTES}
-                                questions={questionsIn().get(p.file.path) ?? NO_QUESTIONS}
-                                answers={answers()}
-                                running={props.running}
-                                draft={draft()?.hunk === id ? draft() : undefined}
-                                draftText={draftText()}
-                                canAsk={!!props.onSend}
-                                onToggle={() => setOpen((o) => ({ ...o, [id]: !isOpen(id) }))}
-                                onViewed={(on) => setViewed([id], on)}
-                                onSelect={(from, to, start, end) => selectDraft(id, from, to, start, end)}
-                                onDraftText={setDraftText}
-                                onComment={() => saveComment(rows(), p.file.path)}
-                                onAsk={() => ask(rows(), p.file.path)}
-                                onCancel={closeDraft}
-                                onEdit={(c) => {
-                                  const from = rows().findIndex((r) => r.kind !== 'hunk' && anchorOf(r) === c.from)
-                                  const to = rows().findIndex((r) => r.kind !== 'hunk' && anchorOf(r) === c.to)
-                                  setDraft({ hunk: id, from: Math.max(from, 0), to: Math.max(to, 0), id: c.id })
-                                  setDraftText(c.text)
-                                }}
-                                onRemove={removeComment}
-                                onRemoveQuestion={removeQuestion}
-                              />
-                            )
-                          }}
-                        </For>
-                      </div>
+                      {props.running || told().writing
+                        ? 'Claude is reading the changes to write a guide. Meanwhile, here they are file by file.'
+                        : 'No guide yet. Here are the changes file by file.'}
+                    </p>
+                  </Show>
+                }
+              >
+                {(g) => (
+                  <Show when={g().summary}>
+                    <div class="mt-4 rounded-lg border border-line bg-surface px-4 py-3">
+                      <Markdown text={g().summary} />
                     </div>
-                  </section>
-                )
+                  </Show>
+                )}
+              </Show>
+              <Show when={loose().length}>
+                <div class="mt-4 rounded-lg border border-line px-3 py-2">
+                  <p class="mb-1 text-xs text-fg-3">Comments on lines that aren’t in the diff any more</p>
+                  <For each={loose()}>{(c) => <CommentBox note={c} onRemove={() => removeComment(c.id)} />}</For>
+                </div>
+              </Show>
+              <Show when={diff() && !total() && !loading()}>
+                <p class="p-10 text-center text-fg-3">Nothing to review: no changes that aren’t on the base already.</p>
+              </Show>
+
+              <For each={sections()}>
+                {(s) => {
+                  const side = () => !!s.explanation || s.attention === 'changed'
+                  return (
+                    <section ref={(el) => sectionEls.set(s.id, el)} class="mt-5 scroll-mt-3 rounded-xl border border-line">
+                      {/* Stuck to the top while its group is in view, so you know which one you're in. */}
+                      <header class="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-t-xl border-b border-line bg-bg px-3 py-2">
+                        <AttentionBadge attention={s.attention} />
+                        <h2 class={`min-w-0 ${s.id.startsWith('file:') ? 'font-mono text-xs' : 'text-base'} text-fg`}>{s.title}</h2>
+                        <Show when={s.kind}>
+                          <span class="text-xs text-fg-3">{s.kind}</span>
+                        </Show>
+                        <div class="flex-1" />
+                        <span class="text-xs text-fg-3 tabular-nums">
+                          {s.hunks.filter((p) => isViewed(p.hunk.id)).length}/{plural(s.hunks.length, 'hunk')}
+                        </span>
+                        <Show when={s.attention === 'changed' && props.onSend}>
+                          <Button class="flex h-7 items-center gap-1 text-xs" disabled={props.running} onClick={() => props.onSend!(UPDATE_GUIDE)}>
+                            Update the guide
+                          </Button>
+                        </Show>
+                        <button
+                          onClick={() => {
+                            const ids = s.hunks.map((p) => p.hunk.id)
+                            setViewed(ids, !ids.every(isViewed))
+                          }}
+                          class="rounded px-1.5 py-0.5 text-xs text-fg-3 hover:bg-surface hover:text-fg-2"
+                        >
+                          {s.hunks.every((p) => isViewed(p.hunk.id)) ? 'Mark unviewed' : s.hunks.length > 1 ? 'Mark all viewed' : 'Mark viewed'}
+                        </button>
+                      </header>
+                      {/* The explanation beside its hunks where there's room, each pinned (see pin); above them where there isn't. */}
+                      <div class={`grid gap-4 p-3 ${side() ? '@4xl:grid-cols-[minmax(16rem,26rem)_minmax(0,1fr)]' : ''}`}>
+                        <Show when={side()}>
+                          <aside ref={pin} class="min-w-0 text-fg-2 @4xl:sticky @4xl:self-start">
+                            <Show when={s.attention === 'changed'}>
+                              <p class="text-fg-3">New or changed since Claude last wrote the guide, so it doesn’t explain these yet.</p>
+                            </Show>
+                            <Show when={s.explanation}>
+                              <Markdown text={s.explanation!} />
+                            </Show>
+                          </aside>
+                        </Show>
+                        <div ref={(el) => side() && pin(el)} class="min-w-0 space-y-2 @4xl:sticky @4xl:self-start">
+                          <For each={s.hunks}>
+                            {(p) => {
+                              const rows = () => rowsFor(p.hunk)
+                              const id = p.hunk.id
+                              return (
+                                <HunkView
+                                  ref={(el) => {
+                                    hunkEls.set(id, el)
+                                    if (id === spot?.hunk) queueMicrotask(tryRestore)
+                                  }}
+                                  file={p.file}
+                                  rows={rows()}
+                                  open={isOpen(id)}
+                                  viewed={isViewed(id)}
+                                  comments={commentsIn().get(p.file.path) ?? NO_NOTES}
+                                  questions={questionsIn().get(p.file.path) ?? NO_QUESTIONS}
+                                  answers={answers()}
+                                  running={props.running}
+                                  draft={draft()?.hunk === id ? draft() : undefined}
+                                  draftText={draftText()}
+                                  canAsk={!!props.onSend}
+                                  onToggle={() => setOpen((o) => ({ ...o, [id]: !isOpen(id) }))}
+                                  onViewed={(on) => setViewed([id], on)}
+                                  onSelect={(from, to, start, end) => selectDraft(id, from, to, start, end)}
+                                  onDraftText={setDraftText}
+                                  onComment={() => saveComment(rows(), p.file.path)}
+                                  onAsk={() => ask(rows(), p.file.path)}
+                                  onCancel={closeDraft}
+                                  onEdit={(c) => {
+                                    const from = rows().findIndex((r) => r.kind !== 'hunk' && anchorOf(r) === c.from)
+                                    const to = rows().findIndex((r) => r.kind !== 'hunk' && anchorOf(r) === c.to)
+                                    setDraft({ hunk: id, from: Math.max(from, 0), to: Math.max(to, 0), id: c.id })
+                                    setDraftText(c.text)
+                                  }}
+                                  onRemove={removeComment}
+                                  onRemoveQuestion={removeQuestion}
+                                />
+                              )
+                            }}
+                          </For>
+                        </div>
+                      </div>
+                    </section>
+                  )
+                }}
+              </For>
+            </div>
+          </div>
+
+          {/* What goes back to Claude */}
+          {/* One row, so it takes no more height than it must: how to comment on lines is in the box until something's typed. */}
+          <div class="flex shrink-0 items-end gap-2 border-t border-line px-3 py-2">
+            <textarea
+              value={saved().general}
+              onInput={(e) => {
+                const general = e.currentTarget.value
+                update((s) => ({ ...s, general }))
               }}
-            </For>
+              placeholder="Overall comment, or select code to comment on lines"
+              rows={1}
+              // Grows with what's typed, as the composer does.
+              class={`${inputClass} h-auto max-h-[calc(8lh+0.75rem)] min-w-0 flex-1 resize-none py-1.5 [field-sizing:content]`}
+            />
+            <Button
+              primary
+              disabled={!props.onSend || (!saved().comments.length && !saved().general.trim())}
+              onClick={send}
+              title={props.guided ? 'Claude acts on them, then updates the guide' : 'To this chat, for Claude to act on'}
+              class="shrink-0"
+            >
+              {saved().comments.length ? `Send ${plural(saved().comments.length, 'comment')}` : props.guided ? 'Send to Claude' : 'Send comments'}
+            </Button>
           </div>
         </div>
-      </div>
-
-      {/* What goes back to Claude */}
-      {/* One row, so it takes no more height than it must: how to comment on lines is in the box until something's typed. */}
-      <div class="flex shrink-0 items-end gap-2 border-t border-line px-3 py-2">
-        <textarea
-          value={saved().general}
-          onInput={(e) => {
-            const general = e.currentTarget.value
-            update((s) => ({ ...s, general }))
-          }}
-          placeholder="Overall comment, or select code to comment on lines"
-          rows={1}
-          // Grows with what's typed, as the composer does.
-          class={`${inputClass} h-auto max-h-[calc(8lh+0.75rem)] min-w-0 flex-1 resize-none py-1.5 [field-sizing:content]`}
-        />
-        <Button
-          primary
-          disabled={!props.onSend || (!saved().comments.length && !saved().general.trim())}
-          onClick={send}
-          title={props.guided ? 'Claude acts on them, then updates the guide' : 'To this chat, for Claude to act on'}
-          class="shrink-0"
-        >
-          {saved().comments.length ? `Send ${plural(saved().comments.length, 'comment')}` : props.guided ? 'Send to Claude' : 'Send comments'}
-        </Button>
       </div>
     </div>
     </LiveChatContext.Provider>
