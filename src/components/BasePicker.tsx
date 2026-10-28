@@ -21,8 +21,11 @@ export const howText: Record<BaseHow, string> = {
 export function BasePicker(props: {
   dir: string
   machine: string
-  trigger: (open: () => boolean) => JSX.Element
-  triggerClass: (open: boolean) => string
+  /** Or, opened from elsewhere, `anchor` and `opener` as SearchMenu takes them. */
+  trigger?: (open: () => boolean) => JSX.Element
+  triggerClass?: (open: boolean) => string
+  anchor?: () => HTMLElement
+  opener?: (show: () => void) => void
   title?: string
 }) {
   const [choices, setChoices] = createSignal<BaseChoices>()
@@ -67,6 +70,8 @@ export function BasePicker(props: {
       title={props.title}
       trigger={props.trigger}
       triggerClass={props.triggerClass}
+      anchor={props.anchor}
+      opener={props.opener}
       onOpenChange={(open) => {
         if (!open) return
         setChoices(undefined)

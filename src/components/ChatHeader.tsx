@@ -1,5 +1,5 @@
 import { Show, createEffect, createSignal, on, onCleanup } from 'solid-js'
-import { Archive, ArchiveRestore, FileDiff, FolderInput, GitMerge, Zap } from '../icons'
+import { Archive, ArchiveRestore, FileDiff, FolderInput, Zap } from '../icons'
 import type { GitStatus, SessionSummary } from '../../shared/protocol.ts'
 import type { ChatAction } from '../actions.ts'
 import { api } from '../api.ts'
@@ -96,6 +96,7 @@ export function ChatHeader(props: {
   }
 
   let gitMenu!: HTMLDivElement
+  let showBases: (() => void) | undefined
   /** Pushes or pulls, saying what git said by the button or the git menu if it fails. */
   const transfer = async (kind: 'push' | 'pull', from: Element = gitMenu) => {
     const dir = props.cwd
@@ -178,6 +179,16 @@ export function ChatHeader(props: {
         run: () => ask('Commit the changes here.'),
       })
     }
+    // Detached, there's nowhere to keep one.
+    if (g.branch && props.cwd) {
+      items.push({
+        label: g.base ? `Base: ${g.base.branch}` : 'No base',
+        description: g.base
+          ? `${howText[g.base.how][0].toUpperCase()}${howText[g.base.how].slice(1)}. Unmerged, behind and the diff count from it.`
+          : 'Pick a branch to count unmerged commits and the diff from.',
+        run: () => showBases?.(),
+      })
+    }
     items.push({
       label: 'Fetch',
       description: props.fetching ? 'Fetching…' : g.fetchedAt ? `Last fetched ${ago(g.fetchedAt)}.` : 'Never fetched.',
@@ -254,26 +265,9 @@ export function ChatHeader(props: {
                 trigger={() => <GitSummary git={g()} branch partClass="hidden @md:inline" hide={primary() === 'push' ? 'ahead' : primary() === 'pull' ? 'behind' : undefined} />}
               />
             </div>
-            {/* What it's compared with, only with room for it; the diff review picks one too. Detached, there's nowhere to keep one. */}
-            <Show when={g().branch && props.cwd}>
-              {(dir) => (
-                <div class="-ml-1 hidden min-w-0 shrink-[5] @3xl:block">
-                  <BasePicker
-                    dir={dir()}
-                    machine={props.machine}
-                    title={g().base ? `Compared with ${g().base!.branch}, ${howText[g().base!.how]}. Pick another` : 'No base to compare with. Pick one'}
-                    triggerClass={(open) => `${button} max-w-full min-w-0 text-fg-3 ${open ? 'bg-surface' : ''}`}
-                    trigger={() => (
-                      <>
-                        <GitMerge class="size-3.5 shrink-0" />
-                        <Show when={g().base} fallback={<span class="truncate">No base</span>}>
-                          {(b) => <span class="truncate font-mono">{b().branch}</span>}
-                        </Show>
-                      </>
-                    )}
-                  />
-                </div>
-              )}
+            {/* Opened from the git menu's Base item, where the menu was. */}
+            <Show when={props.cwd}>
+              {(dir) => <BasePicker dir={dir()} machine={props.machine} anchor={() => gitMenu} opener={(show) => (showBases = show)} />}
             </Show>
             <Show when={primary()}>
               {(kind) => (

@@ -451,8 +451,12 @@ export function floatBy(trigger: Element | DOMRect, width: number): JSX.CSSPrope
  */
 export function SearchMenu(props: {
   items: (query: string) => SearchItem[]
-  trigger: (open: () => boolean) => JSX.Element
-  triggerClass: (open: boolean) => string
+  /** Without one, it opens only through `opener`, by `anchor`: e.g. from an item in a Menu. */
+  trigger?: (open: () => boolean) => JSX.Element
+  triggerClass?: (open: boolean) => string
+  anchor?: () => HTMLElement
+  /** Given what opens it, for opening it from elsewhere. */
+  opener?: (show: () => void) => void
   placeholder: string
   title?: string
   /** Shown when nothing matches. */
@@ -467,12 +471,15 @@ export function SearchMenu(props: {
   const [place, setPlace] = createSignal<JSX.CSSProperties>({})
   const items = createMemo(() => (open() ? props.items(query().trim()) : []))
   const checkable = () => items().some((o) => o.selected)
-  let trigger!: HTMLButtonElement
+  let trigger: HTMLButtonElement | undefined
   let panel: HTMLDivElement | undefined
   const width = () => props.width ?? 288
+  const anchor = () => trigger ?? props.anchor?.()
 
   const show = () => {
-    setPlace(floatBy(trigger, width()))
+    const at = anchor()
+    if (!at) return
+    setPlace(floatBy(at, width()))
     setQuery('')
     setOpen(true)
     props.onOpenChange?.(true)
@@ -481,8 +488,9 @@ export function SearchMenu(props: {
     if (!open()) return
     setOpen(false)
     props.onOpenChange?.(false)
-    if (refocus) trigger.focus()
+    if (refocus) anchor()?.focus()
   }
+  props.opener?.(show)
   const pick = (item: SearchItem | undefined) => {
     if (!item) return
     close()
@@ -494,7 +502,7 @@ export function SearchMenu(props: {
   createEffect(on(items, (list) => active() >= list.length && setActive(Math.max(0, list.length - 1))))
   createEffect(on(active, (i) => document.getElementById(`${id}-${i}`)?.scrollIntoView({ block: 'nearest' })))
 
-  createDismiss(open, () => [panel, trigger], () => close(false), { resize: true })
+  createDismiss(open, () => [panel, anchor()], () => close(false), { resize: true })
   onCleanup(() => open() && props.onOpenChange?.(false))
 
   const onKey = (e: KeyboardEvent) => {
@@ -514,17 +522,21 @@ export function SearchMenu(props: {
 
   return (
     <>
-      <button
-        ref={trigger}
-        type="button"
-        title={props.title}
-        aria-haspopup="listbox"
-        aria-expanded={open()}
-        onClick={() => (open() ? close() : show())}
-        class={props.triggerClass(open())}
-      >
-        {props.trigger(open)}
-      </button>
+      <Show when={props.trigger}>
+        {(content) => (
+          <button
+            ref={trigger}
+            type="button"
+            title={props.title}
+            aria-haspopup="listbox"
+            aria-expanded={open()}
+            onClick={() => (open() ? close() : show())}
+            class={props.triggerClass?.(open()) ?? ''}
+          >
+            {content()(open)}
+          </button>
+        )}
+      </Show>
       <Show when={open()}>
         <Portal>
           <div
