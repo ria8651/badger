@@ -149,7 +149,7 @@ export class Chats {
         if (childIds.has(live.id) || summaries.some((s) => s.id === live.id)) continue
         summaries.unshift({
           id: live.id,
-          title: reviews.has(live.id) ? 'Diff review' : 'New chat',
+          title: reviews.has(live.id) ? 'Guided review' : 'New chat',
           cwd: live.cwd,
           machine: runner.id,
           lastModified: Date.now(),

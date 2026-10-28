@@ -4,7 +4,7 @@ import type { DraftAttachments, PermissionMode, QueuedMessage } from '../../shar
 import { chatActions } from '../actions.ts'
 import { api, connected } from '../api.ts'
 import { cardWorktreeName, isScratch, worktreeOf } from '../folders.ts'
-import { openTerminal, openView, planView, viewKey, viewShown, wide } from '../layout.ts'
+import { diffView, openTerminal, openView, planView, viewKey, viewShown, wide } from '../layout.ts'
 import { sideChatsOf, startSideChat } from '../btw.ts'
 import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
 import { lastModel, modelValue, models, setLastModel } from '../models.ts'
@@ -205,6 +205,7 @@ export function Chat(props: {
     renderAttachment: (v, onReady) => <AttachmentPane index={index} prompt={v.prompt} part={v.part} onReady={onReady} />,
     btwLive: () => sideChatsOf(props.sessionId).some((s) => s.running),
     renderBtw: (onReady) => <BtwPane parent={props.sessionId} onNew={() => askAside('')} onReady={onReady} />,
+    renderDiff: (onReady) => <div class="flex size-full flex-col">{reviewPage(false, onReady)}</div>,
   }
 
   /** Forks a side chat (/btw) in the panel beside this one, asking it `question` if there is one. */
@@ -260,8 +261,35 @@ export function Chat(props: {
   const startReview = () =>
     void api.startReview({ cwd: cwd()!, machine: machine(), from: props.sessionId, card: card()?.id }).then(
       ({ sessionId }) => openChat(sessionId),
-      (err: Error) => showError("Couldn't start a diff review", err.message),
+      (err: Error) => showError("Couldn't start a guided review", err.message),
     )
+  /** The checkout's changes in a panel beside the chat, to read without Claude; a guided review is a step on from there. */
+  const openDiff = () => {
+    const w = beside()
+    if (w) openView(w, diffView(props.sessionId))
+    else startReview()
+  }
+  /** This chat's changes: its own page if it's a review chat, else its diff, whose comments and questions come here. */
+  const reviewPage = (guided: boolean, onReady?: (focus: () => void) => void) => (
+    <ChildChats.Provider value={children.state}>
+      <Checking.Provider value={(id) => state.checking.includes(id)}>
+        <ReviewPage
+          sessionId={props.sessionId}
+          guided={guided}
+          cwd={cwd()}
+          machine={machine()}
+          index={index}
+          running={state.running}
+          partial={state.partial}
+          bashOutput={state.bashOutput}
+          children={state.children}
+          onSend={state.gone || stranded() ? undefined : (text) => send(text)}
+          onGuide={guided ? undefined : startReview}
+          onReady={onReady}
+        />
+      </Checking.Provider>
+    </ChildChats.Provider>
+  )
 
   /** The end of the turn being forked from, while picking where the fork goes. */
   const [forking, setForking] = createSignal<string>()
@@ -284,6 +312,7 @@ export function Chat(props: {
           fetching={git.fetching()}
           onRefresh={git.refresh}
           actions={actions()}
+          onDiff={isReview() || !cwd() || isScratch(cwd()) ? undefined : openDiff}
           onReview={isReview() || !cwd() || isScratch(cwd()) ? undefined : startReview}
           onAsk={picking() ? undefined : (prompt) => send(prompt)}
         />
@@ -296,7 +325,7 @@ export function Chat(props: {
                 onClick={() => setShowConversation(conversation)}
                 class={`flex items-center gap-1.5 rounded-md px-2 py-1 ${showConversation() === conversation ? 'bg-surface text-fg' : 'text-fg-3 hover:text-fg-2'}`}
               >
-                {conversation ? 'Conversation' : 'Diff review'}
+                {conversation ? 'Conversation' : 'Guided review'}
                 <Show when={conversation && working()}>
                   <span class="size-1.5 animate-pulse rounded-full bg-accent" />
                 </Show>
@@ -305,21 +334,7 @@ export function Chat(props: {
           </For>
         </div>
         <Show when={reviewing()}>
-          <ChildChats.Provider value={children.state}>
-            <Checking.Provider value={(id) => state.checking.includes(id)}>
-              <ReviewPage
-                sessionId={props.sessionId}
-                cwd={cwd()}
-                machine={machine()}
-                index={index}
-                running={state.running}
-                partial={state.partial}
-                bashOutput={state.bashOutput}
-                children={state.children}
-                onSend={state.gone || stranded() ? undefined : (text) => send(text)}
-              />
-            </Checking.Provider>
-          </ChildChats.Provider>
+          {reviewPage(true)}
           {/* Claude asking for something can't wait for you to switch to the conversation. */}
           <Show when={state.permissions.length || state.error}>
             <div class="flex shrink-0 flex-col gap-2 border-t border-line p-3">
