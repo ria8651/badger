@@ -698,6 +698,16 @@ export function ReviewPage(props: {
     if (!props.onSend || (!s.comments.length && !s.general.trim())) return
     props.onSend(commentsMessage(s.comments, s.general))
     update((x) => ({ ...x, comments: [], general: '' }))
+    setWriting(false)
+  }
+
+  /** A comment on the whole being started, before anything's typed. */
+  const [writing, setWriting] = createSignal(false)
+  const commenting = () => writing() || comments().length > 0 || !!saved().general.trim()
+  let generalBox: HTMLTextAreaElement | undefined
+  const startComment = () => {
+    setWriting(true)
+    queueMicrotask(() => generalBox?.focus())
   }
 
   /** Comments whose lines aren't in any hunk now, e.g. after Claude changed them. */
@@ -840,7 +850,8 @@ export function ReviewPage(props: {
     <TranscriptIndex.Provider value={props.index}>
     <LiveChatContext.Provider value={live}>
     <div class="@container flex min-h-0 flex-1 flex-col text-ui">
-      <div class="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-line px-3 py-1.5 text-xs text-fg-3">
+      {/* One row; how much has been viewed is the line along its foot. */}
+      <div class="relative flex h-9 shrink-0 items-center gap-3 border-b border-line px-3 text-xs whitespace-nowrap text-fg-3">
         <Show when={diff()}>
           {(d) => (
             <>
@@ -851,11 +862,11 @@ export function ReviewPage(props: {
                     dir={dir()}
                     machine={props.machine}
                     title={d().base ? `Compared with ${d().base}, ${howText[d().baseHow ?? 'nearest']}. Pick another` : 'Pick a branch to compare with'}
-                    triggerClass={(open) => `-mx-1.5 flex items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors hover:bg-surface ${open ? 'bg-surface' : ''}`}
+                    triggerClass={(open) => `-mx-1.5 flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors hover:bg-surface ${open ? 'bg-surface' : ''}`}
                     trigger={() => (
                       <>
                         <Show when={d().base} fallback="Uncommitted only">
-                          against <span class="font-mono text-fg-2">{d().base}</span>
+                          against <span class="min-w-0 truncate font-mono text-fg-2">{d().base}</span>
                         </Show>
                         <ChevronDown class="size-3" />
                       </>
@@ -873,25 +884,35 @@ export function ReviewPage(props: {
         </Show>
         <div class="flex-1" />
         <Show when={total()}>
-          <div class="flex items-center gap-2">
-            <div class="h-1.5 w-24 overflow-hidden rounded-full bg-surface">
-              <div class="h-full rounded-full bg-ok transition-[width]" style={{ width: `${(viewedCount() / total()) * 100}%` }} />
-            </div>
-            <span class="tabular-nums">
-              {viewedCount()}/{plural(total(), 'hunk')} viewed
-            </span>
+          <span class="tabular-nums" title={`${viewedCount()} of ${plural(total(), 'hunk')} viewed`}>
+            {viewedCount()}/{total()} viewed
+          </span>
+          <div class="absolute inset-x-0 -bottom-px h-0.5">
+            <div class="h-full bg-ok transition-[width]" style={{ width: `${(viewedCount() / total()) * 100}%` }} />
           </div>
         </Show>
-        <GhostButton title="Read the changes again" onClick={() => void load()}>
-          <RotateCw class={`size-3.5 ${loading() ? 'animate-spin' : ''}`} />
-        </GhostButton>
-        <Show when={props.onGuide}>
-          {(guide) => (
-            <Button onClick={guide()} disabled={!total()} class="flex h-7 items-center gap-1.5 text-xs" title="A chat of its own where Claude groups these changes, explains each group, and answers and acts on your comments">
-              <Sparkles class="size-3.5" /> Guided review
-            </Button>
-          )}
-        </Show>
+        <div class="-mr-1.5 flex items-center">
+          <Show when={!commenting()}>
+            <GhostButton title="Comment on the changes as a whole. To comment on lines, select them." onClick={startComment}>
+              <MessageSquarePlus class="size-3.5" />
+            </GhostButton>
+          </Show>
+          <GhostButton title="Read the changes again" onClick={() => void load()}>
+            <RotateCw class={`size-3.5 ${loading() ? 'animate-spin' : ''}`} />
+          </GhostButton>
+          <Show when={props.onGuide}>
+            {(guide) => (
+              <button
+                onClick={guide()}
+                disabled={!total()}
+                class="flex h-7 items-center gap-1.5 rounded-md px-2 text-fg-2 transition-colors hover:bg-surface hover:text-fg disabled:opacity-50"
+                title="A chat of its own where Claude groups these changes, explains each group, and answers and acts on your comments"
+              >
+                <Sparkles class="size-3.5" /> Guided review
+              </button>
+            )}
+          </Show>
+        </div>
       </div>
 
       <div class="flex min-h-0 flex-1">
@@ -957,7 +978,7 @@ export function ReviewPage(props: {
         {/* The diff, with what goes back to Claude under it; the outline beside them runs the full height. */}
         <div class="flex min-w-0 flex-1 flex-col">
           <div ref={scroller} onScroll={onScroll} tabIndex={-1} class="min-h-0 flex-1 overflow-y-auto outline-none">
-            <div ref={content} class="mx-auto max-w-[100rem] px-4 pb-10 @3xl:px-6">
+            <div ref={content} class="mx-auto max-w-[100rem] px-2 pb-10 @3xl:px-4">
               <Show when={!diff() && loading()}>
                 <p class="p-10 text-center text-fg-3">Reading the changes…</p>
               </Show>
@@ -968,7 +989,7 @@ export function ReviewPage(props: {
                 when={guide()}
                 fallback={
                   <Show when={props.guided && diff()}>
-                    <p class="mt-4 flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 text-fg-2">
+                    <p class="mt-3 flex items-center gap-2 px-1 text-fg-3">
                       <Show when={props.running || told().writing}>
                         <LiveDot />
                       </Show>
@@ -981,7 +1002,7 @@ export function ReviewPage(props: {
               >
                 {(g) => (
                   <Show when={g().summary}>
-                    <div class="mt-4 rounded-lg border border-line bg-surface px-4 py-3">
+                    <div class="mt-4 px-1 text-fg-2">
                       <Markdown text={g().summary} />
                     </div>
                   </Show>
@@ -1000,36 +1021,104 @@ export function ReviewPage(props: {
               <For each={sections()}>
                 {(s) => {
                   const side = () => !!s.explanation || s.attention === 'changed'
+                  const ids = () => s.hunks.map((p) => p.hunk.id)
+                  const allViewed = () => ids().every(isViewed)
+                  const hunk = (p: Placed, bare?: { bar: boolean }) => {
+                    const rows = () => rowsFor(p.hunk)
+                    const id = p.hunk.id
+                    return (
+                      <HunkView
+                        ref={(el) => {
+                          hunkEls.set(id, el)
+                          if (id === spot?.hunk) queueMicrotask(tryRestore)
+                        }}
+                        bare={bare}
+                        file={p.file}
+                        rows={rows()}
+                        open={isOpen(id)}
+                        viewed={isViewed(id)}
+                        comments={commentsIn().get(p.file.path) ?? NO_NOTES}
+                        questions={questionsIn().get(p.file.path) ?? NO_QUESTIONS}
+                        answers={answers()}
+                        running={props.running}
+                        draft={draft()?.hunk === id ? draft() : undefined}
+                        draftText={draftText()}
+                        canAsk={!!props.onSend}
+                        onToggle={() => setOpen((o) => ({ ...o, [id]: !isOpen(id) }))}
+                        onViewed={(on) => setViewed([id], on)}
+                        onSelect={(from, to, start, end) => selectDraft(id, from, to, start, end)}
+                        onDraftText={setDraftText}
+                        onComment={() => saveComment(rows(), p.file.path)}
+                        onAsk={() => ask(rows(), p.file.path)}
+                        onCancel={closeDraft}
+                        onEdit={(c) => {
+                          const from = rows().findIndex((r) => r.kind !== 'hunk' && anchorOf(r) === c.from)
+                          const to = rows().findIndex((r) => r.kind !== 'hunk' && anchorOf(r) === c.to)
+                          setDraft({ hunk: id, from: Math.max(from, 0), to: Math.max(to, 0), id: c.id })
+                          setDraftText(c.text)
+                        }}
+                        onRemove={removeComment}
+                        onRemoveQuestion={removeQuestion}
+                      />
+                    )
+                  }
+                  const file = s.id.startsWith('file:') ? s.hunks[0]?.file : undefined
+                  // File by file: the file is the one box, its hunks one after another in it, split by their @@ lines.
+                  if (file)
+                    return (
+                      <section ref={(el) => sectionEls.set(s.id, el)} class="mt-3 scroll-mt-3 overflow-clip rounded-lg border border-line">
+                        {/* Stuck to the top while the file is in view, so you know which one you're in. */}
+                        <header class="sticky top-0 z-10 flex h-9 items-center gap-2 bg-surface px-2">
+                          <button
+                            onClick={() => {
+                              const open = !ids().some(isOpen)
+                              setOpen((o) => ({ ...o, ...Object.fromEntries(ids().map((id) => [id, open])) }))
+                            }}
+                            title={ids().some(isOpen) ? 'Fold' : 'Unfold'}
+                            class="grid size-5 shrink-0 place-items-center rounded text-fg-3 hover:bg-bg hover:text-fg-2"
+                          >
+                            {ids().some(isOpen) ? <ChevronDown class="size-3.5" /> : <ChevronRight class="size-3.5" />}
+                          </button>
+                          <span class={`shrink-0 font-mono text-xs ${STATUS_TONE[file.status]}`}>{STATUS_LETTER[file.status]}</span>
+                          {/* rtl so a long path loses its start, not its file name. */}
+                          <h2 class="min-w-0 truncate font-mono text-xs text-fg" title={file.path} dir="rtl">
+                            <bdi>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</bdi>
+                          </h2>
+                          <Show when={file.added || file.removed}>
+                            <DiffCount files={1} added={file.added} removed={file.removed} class="shrink-0 text-xs" />
+                          </Show>
+                          <div class="flex-1" />
+                          <ViewedBox viewed={allViewed()} onChange={(on) => setViewed(ids(), on)} />
+                        </header>
+                        <For each={s.hunks}>{(p) => hunk(p, { bar: s.hunks.length > 1 })}</For>
+                      </section>
+                    )
+                  // A group of Claude's guide: a heading on the page, not a box, so the hunks are the only boxes.
                   return (
-                    <section ref={(el) => sectionEls.set(s.id, el)} class="mt-5 scroll-mt-3 rounded-xl border border-line">
+                    <section ref={(el) => sectionEls.set(s.id, el)} class="mt-6 scroll-mt-3">
                       {/* Stuck to the top while its group is in view, so you know which one you're in. */}
-                      <header class="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-t-xl border-b border-line bg-bg px-3 py-2">
+                      <header class="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-line bg-bg py-2">
                         <AttentionBadge attention={s.attention} />
-                        <h2 class={`min-w-0 ${s.id.startsWith('file:') ? 'font-mono text-xs' : 'text-base'} text-fg`}>{s.title}</h2>
+                        <h2 class="min-w-0 text-base text-fg">{s.title}</h2>
                         <Show when={s.kind}>
                           <span class="text-xs text-fg-3">{s.kind}</span>
                         </Show>
                         <div class="flex-1" />
-                        <span class="text-xs text-fg-3 tabular-nums">
-                          {s.hunks.filter((p) => isViewed(p.hunk.id)).length}/{plural(s.hunks.length, 'hunk')}
-                        </span>
                         <Show when={s.attention === 'changed' && props.onSend}>
                           <Button class="flex h-7 items-center gap-1 text-xs" disabled={props.running} onClick={() => props.onSend!(UPDATE_GUIDE)}>
                             Update the guide
                           </Button>
                         </Show>
-                        <button
-                          onClick={() => {
-                            const ids = s.hunks.map((p) => p.hunk.id)
-                            setViewed(ids, !ids.every(isViewed))
-                          }}
-                          class="rounded px-1.5 py-0.5 text-xs text-fg-3 hover:bg-surface hover:text-fg-2"
-                        >
-                          {s.hunks.every((p) => isViewed(p.hunk.id)) ? 'Mark unviewed' : s.hunks.length > 1 ? 'Mark all viewed' : 'Mark viewed'}
-                        </button>
+                        {/* With one hunk, its own tick is all it needs. */}
+                        <Show when={s.hunks.length > 1}>
+                          <span class="text-xs text-fg-3 tabular-nums">
+                            {s.hunks.filter((p) => isViewed(p.hunk.id)).length}/{s.hunks.length}
+                          </span>
+                          <ViewedBox viewed={allViewed()} onChange={(on) => setViewed(ids(), on)} label="All viewed" />
+                        </Show>
                       </header>
                       {/* The explanation beside its hunks where there's room, each pinned (see pin); above them where there isn't. */}
-                      <div class={`grid gap-4 p-3 ${side() ? '@4xl:grid-cols-[minmax(16rem,26rem)_minmax(0,1fr)]' : ''}`}>
+                      <div class={`grid gap-4 pt-3 ${side() ? '@4xl:grid-cols-[minmax(16rem,26rem)_minmax(0,1fr)]' : ''}`}>
                         <Show when={side()}>
                           <aside ref={pin} class="min-w-0 text-fg-2 @4xl:sticky @4xl:self-start">
                             <Show when={s.attention === 'changed'}>
@@ -1041,46 +1130,7 @@ export function ReviewPage(props: {
                           </aside>
                         </Show>
                         <div ref={(el) => side() && pin(el)} class="min-w-0 space-y-2 @4xl:sticky @4xl:self-start">
-                          <For each={s.hunks}>
-                            {(p) => {
-                              const rows = () => rowsFor(p.hunk)
-                              const id = p.hunk.id
-                              return (
-                                <HunkView
-                                  ref={(el) => {
-                                    hunkEls.set(id, el)
-                                    if (id === spot?.hunk) queueMicrotask(tryRestore)
-                                  }}
-                                  file={p.file}
-                                  rows={rows()}
-                                  open={isOpen(id)}
-                                  viewed={isViewed(id)}
-                                  comments={commentsIn().get(p.file.path) ?? NO_NOTES}
-                                  questions={questionsIn().get(p.file.path) ?? NO_QUESTIONS}
-                                  answers={answers()}
-                                  running={props.running}
-                                  draft={draft()?.hunk === id ? draft() : undefined}
-                                  draftText={draftText()}
-                                  canAsk={!!props.onSend}
-                                  onToggle={() => setOpen((o) => ({ ...o, [id]: !isOpen(id) }))}
-                                  onViewed={(on) => setViewed([id], on)}
-                                  onSelect={(from, to, start, end) => selectDraft(id, from, to, start, end)}
-                                  onDraftText={setDraftText}
-                                  onComment={() => saveComment(rows(), p.file.path)}
-                                  onAsk={() => ask(rows(), p.file.path)}
-                                  onCancel={closeDraft}
-                                  onEdit={(c) => {
-                                    const from = rows().findIndex((r) => r.kind !== 'hunk' && anchorOf(r) === c.from)
-                                    const to = rows().findIndex((r) => r.kind !== 'hunk' && anchorOf(r) === c.to)
-                                    setDraft({ hunk: id, from: Math.max(from, 0), to: Math.max(to, 0), id: c.id })
-                                    setDraftText(c.text)
-                                  }}
-                                  onRemove={removeComment}
-                                  onRemoveQuestion={removeQuestion}
-                                />
-                              )
-                            }}
-                          </For>
+                          <For each={s.hunks}>{(p) => hunk(p)}</For>
                         </div>
                       </div>
                     </section>
@@ -1090,16 +1140,20 @@ export function ReviewPage(props: {
             </div>
           </div>
 
-          {/* What goes back to Claude */}
-          {/* One row, so it takes no more height than it must: how to comment on lines is in the box until something's typed. */}
+          {/* What goes back to Claude: only once there's something to send, or a comment on the whole is being started. */}
+          <Show when={commenting()}>
           <div class="flex shrink-0 items-end gap-2 border-t border-line px-3 py-2">
             <textarea
+              ref={generalBox}
               value={saved().general}
               onInput={(e) => {
                 const general = e.currentTarget.value
                 update((s) => ({ ...s, general }))
               }}
-              placeholder="Overall comment, or select code to comment on lines"
+              // Left empty, with nothing else to send, it goes away again.
+              onBlur={() => setWriting(false)}
+              onKeyDown={(e) => e.key === 'Escape' && !saved().general.trim() && e.currentTarget.blur()}
+              placeholder={comments().length ? `Anything to add to the ${plural(comments().length, 'comment')} on lines? Optional` : 'A comment on the changes as a whole'}
               rows={1}
               // Grows with what's typed, as the composer does.
               class={`${inputClass} h-auto max-h-[calc(8lh+0.75rem)] min-w-0 flex-1 resize-none py-1.5 [field-sizing:content]`}
@@ -1111,9 +1165,10 @@ export function ReviewPage(props: {
               title={props.guided ? 'Claude acts on them, then updates the guide' : 'To this chat, for Claude to act on'}
               class="shrink-0"
             >
-              {saved().comments.length ? `Send ${plural(saved().comments.length, 'comment')}` : props.guided ? 'Send to Claude' : 'Send comments'}
+              {saved().comments.length ? `Send ${plural(saved().comments.length, 'comment')}` : props.guided ? 'Send to Claude' : 'Send'}
             </Button>
           </div>
+          </Show>
         </div>
       </div>
     </div>
@@ -1143,11 +1198,25 @@ function AttentionBadge(props: { attention?: Section['attention'] }) {
   )
 }
 
+function ViewedBox(props: { viewed: boolean; onChange: (on: boolean) => void; label?: string }) {
+  return (
+    <label class="flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-xs text-fg-3 hover:text-fg-2">
+      <input type="checkbox" checked={props.viewed} onChange={(e) => props.onChange(e.currentTarget.checked)} class="accent-(--color-primary)" />
+      {props.label ?? 'Viewed'}
+    </label>
+  )
+}
+
 const STATUS_LETTER = { added: 'A', modified: 'M', deleted: 'D', renamed: 'R' } as const
 const STATUS_TONE = { added: 'text-ok', modified: 'text-fg-3', deleted: 'text-danger', renamed: 'text-accent' } as const
 
 function HunkView(props: {
   ref: (el: HTMLElement) => void
+  /**
+   * In its file's box, under the file's header, rather than a box of its own: `bar` splits it from the one before
+   * with its @@ line, folding and a tick of its own; without, the file's header folds and ticks it.
+   */
+  bare?: { bar: boolean }
   file: ReviewFile
   rows: Row[]
   open: boolean
@@ -1414,8 +1483,30 @@ function HunkView(props: {
         props.ref(el)
       }}
       style={{ 'content-visibility': 'auto', 'contain-intrinsic-size': `auto ${Math.min(props.rows.length, 400) * 20 + 30}px` }}
-      class={`scroll-mt-14 overflow-hidden rounded-lg border ${props.viewed ? 'border-line/60' : 'border-line'}`}>
-      <div class="flex items-center gap-2 bg-surface/60 px-2 py-1">
+      class={
+        props.bare
+          ? `scroll-mt-10 border-t border-line ${!props.bare.bar && !props.open ? 'hidden' : ''}`
+          : `scroll-mt-14 overflow-hidden rounded-lg border ${props.viewed ? 'border-line/60' : 'border-line'}`
+      }>
+      <Show when={props.bare?.bar}>
+        <div class="flex h-7 items-center gap-2 px-2 text-xs text-fg-3">
+          <button onClick={props.onToggle} title={props.open ? 'Fold' : 'Unfold'} class="grid size-5 shrink-0 place-items-center rounded hover:bg-surface hover:text-fg-2">
+            {props.open ? <ChevronDown class="size-3.5" /> : <ChevronRight class="size-3.5" />}
+          </button>
+          <button onClick={props.onToggle} class="flex min-w-0 items-center gap-2 text-left font-mono">
+            <Show when={startLine()}>
+              <span class="shrink-0 tabular-nums">line {startLine()}</span>
+            </Show>
+            <Show when={context()}>
+              <span class="min-w-0 truncate">{context()}</span>
+            </Show>
+          </button>
+          <div class="flex-1" />
+          <ViewedBox viewed={props.viewed} onChange={props.onViewed} />
+        </div>
+      </Show>
+      <Show when={!props.bare}>
+      <div class="flex items-center gap-2 bg-surface px-2 py-1">
         <button onClick={props.onToggle} class="grid size-5 shrink-0 place-items-center rounded text-fg-3 hover:bg-surface hover:text-fg-2">
           {props.open ? <ChevronDown class="size-3.5" /> : <ChevronRight class="size-3.5" />}
         </button>
@@ -1431,11 +1522,9 @@ function HunkView(props: {
           <span class="hidden min-w-0 truncate font-mono text-xs text-fg-3 @2xl:block">{context()}</span>
         </Show>
         <div class="flex-1" />
-        <label class="flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-xs text-fg-3 hover:bg-surface hover:text-fg-2">
-          <input type="checkbox" checked={props.viewed} onChange={(e) => props.onViewed(e.currentTarget.checked)} class="accent-(--color-primary)" />
-          Viewed
-        </label>
+        <ViewedBox viewed={props.viewed} onChange={props.onViewed} />
       </div>
+      </Show>
 
       <Show when={props.open}>
         <Show
