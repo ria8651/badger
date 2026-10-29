@@ -61,9 +61,6 @@ export function createGitStatus(target: () => { dir: string; machine: string } |
 /** e.g. "+126 −38 in 4 files". */
 const uncommitted = (g: GitStatus) => `+${g.added} −${g.removed} in ${plural(g.changes, 'file')}`
 
-/** A row under a `joined` header, as its second line: the header's colours, and the edge and shadow it left off. */
-export const UNDER_HEADER = 'bar relative z-10 border-b border-line shadow-(--shadow-bar)'
-
 /** Something the git menu can do: run git here, or ask Claude to. */
 type GitItem = MenuItem & { run: () => void }
 

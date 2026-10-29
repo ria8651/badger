@@ -1,7 +1,8 @@
 import { For, Show, createContext, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack, useContext, type JSX } from 'solid-js'
-import { Check, ChevronDown, ChevronRight, MessageSquarePlus, RotateCw, Trash2 } from '../icons'
+import { Check, ChevronDown, ChevronRight, FileText, MessageSquarePlus, RotateCw, Trash2 } from '../icons'
 import type { ReviewAttention, ReviewDiff, ReviewFile, ReviewGroup, ReviewGuide, ReviewHunk, WireMessage } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
+import { SIGN, anchorOf, rowsFor, startOf, type Line, type Row } from '../diffRows.ts'
 import { plural } from '../format.ts'
 import { highlight, languageOf } from '../highlight.ts'
 import { recall, remember, settle } from '../scrollMemory.ts'
@@ -10,10 +11,10 @@ import { itemsFor, type Block, type Index } from '../transcript/model.ts'
 import type { Partial as Streaming } from '../useChat.ts'
 import { Messages } from './Transcript.tsx'
 import { BasePicker, baseChanged, howText } from './BasePicker.tsx'
-import { UNDER_HEADER } from './ChatHeader.tsx'
 import { useOpenFile } from '../fileLinks.ts'
+import { CodeRow } from './CodeRow.tsx'
 import { Markdown } from './Markdown.tsx'
-import { Button, DiffCount, GhostButton, LiveDot, inputClass } from './ui.tsx'
+import { Button, DiffCount, GhostButton, LiveDot, PaneBar, PathLabel, inputClass } from './ui.tsx'
 
 /*
  * SPIKE: a checkout's changes, every hunk. Two ways: a chat's diff, in a panel beside it, file by file; or a guided
@@ -92,125 +93,6 @@ const byPath = <T extends Note>(notes: T[]) => {
   const out = new Map<string, T[]>()
   for (const n of notes) out.set(n.path, [...(out.get(n.path) ?? []), n])
   return out
-}
-
-// ── The diff, as rows ──
-
-type Line = { kind: 'ctx' | 'add' | 'del'; old?: number; new?: number; text: string; /** The characters that changed, from..to: against its pair, or all of it. */ marks?: [number, number][] }
-type Row = { kind: 'hunk'; text: string } | Line
-
-const anchorOf = (r: Line) => (r.kind === 'del' ? `o${r.old}` : `n${r.new}`)
-const SIGN = { ctx: ' ', add: '+', del: '-' } as const
-
-/** A hunk's rows, worked out once per hunk: hunks keep their identity while their lines don't change. */
-const rowCache = new WeakMap<ReviewHunk, Row[]>()
-function rowsFor(hunk: ReviewHunk): Row[] {
-  let rows = rowCache.get(hunk)
-  if (!rows) rowCache.set(hunk, (rows = rowsOf(hunk.patch)))
-  return rows
-}
-
-function rowsOf(patch: string): Row[] {
-  const rows: Row[] = []
-  let o = 0
-  let n = 0
-  for (const l of patch.split('\n')) {
-    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@ ?(.*)$/.exec(l)
-    if (h) {
-      o = Number(h[1])
-      n = Number(h[2])
-      rows.push({ kind: 'hunk', text: h[3] })
-    } else if (l.startsWith('+')) rows.push({ kind: 'add', new: n++, text: l.slice(1) })
-    else if (l.startsWith('-')) rows.push({ kind: 'del', old: o++, text: l.slice(1) })
-    else if (l.startsWith(' ')) rows.push({ kind: 'ctx', old: o++, new: n++, text: l.slice(1) })
-  }
-  markChanges(rows)
-  return rows
-}
-
-/** Words, runs of spaces, and each other character: what a line's changes are found in. */
-const TOKEN = /\w+|\s+|[^\w\s]/g
-/** Past this many token pairs, or a line this long, comparing two lines isn't worth it: they're marked whole. */
-const MAX_COMPARE = 250_000
-const MAX_LINE = 2000
-
-/** All of a line but its indentation and trailing spaces, or nothing for a blank one. */
-const whole = (text: string): [number, number][] => {
-  const from = text.length - text.trimStart().length
-  const to = text.trimEnd().length
-  return from < to ? [[from, to]] : []
-}
-
-/**
- * What changed between a removed line and the added one it became, as ranges of each: the tokens that aren't in their
- * longest common subsequence, with ranges only spaces apart joined. Undefined when they have too little in common to be
- * one line edited, rather than one line swapped for another.
- */
-function lineDiff(a: string, b: string): { a: [number, number][]; b: [number, number][] } | undefined {
-  if (a.length > MAX_LINE || b.length > MAX_LINE) return
-  const x = a.match(TOKEN) ?? []
-  const y = b.match(TOKEN) ?? []
-  if (!x.length || !y.length || x.length * y.length > MAX_COMPARE) return
-  // lcs[i][j]: the longest common subsequence of x from i and y from j.
-  const lcs = Array.from({ length: x.length + 1 }, () => new Uint16Array(y.length + 1))
-  for (let i = x.length - 1; i >= 0; i--) for (let j = y.length - 1; j >= 0; j--) lcs[i][j] = x[i] === y[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1])
-  const keepX = new Array<boolean>(x.length).fill(false)
-  const keepY = new Array<boolean>(y.length).fill(false)
-  let same = 0
-  for (let i = 0, j = 0; i < x.length && j < y.length; ) {
-    if (x[i] === y[j]) {
-      keepX[i] = keepY[j] = true
-      if (x[i].trim()) same += x[i].length
-      i++
-      j++
-    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) i++
-    else j++
-  }
-  const longest = Math.max(a.replace(/\s/g, '').length, b.replace(/\s/g, '').length)
-  if (same < longest * 0.3) return
-  const ranges = (tokens: string[], keep: boolean[]) => {
-    const out: [number, number][] = []
-    let at = 0
-    // Whether everything kept since the last change was spaces, so the two join.
-    let onlySpaces = true
-    tokens.forEach((t, i) => {
-      const end = at + t.length
-      if (!keep[i]) {
-        const last = out.at(-1)
-        // Joined across spaces kept between them: "foo bar" to "baz qux" is one change, not two.
-        if (last && onlySpaces) last[1] = end
-        else out.push([at, end])
-        onlySpaces = true
-      } else if (t.trim()) onlySpaces = false
-      at = end
-    })
-    return out.filter(([f, t]) => t > f)
-  }
-  return { a: ranges(x, keepX), b: ranges(y, keepY) }
-}
-
-/**
- * Every changed character, so the strong colour always means changed and the row's tint alone means part of a change.
- * In a run of removed lines then added ones, each pair in order is compared, if they're alike enough to be a line edited;
- * any other line, removed or added, changed whole.
- */
-function markChanges(rows: Row[]) {
-  for (let i = 0; i < rows.length; ) {
-    let d = i
-    while (d < rows.length && rows[d].kind === 'del') d++
-    let a = d
-    while (a < rows.length && rows[a].kind === 'add') a++
-    const removed = rows.slice(i, d) as Line[]
-    const added = rows.slice(d, a) as Line[]
-    removed.forEach((x, k) => {
-      const y = added[k]
-      const diff = y && lineDiff(x.text, y.text)
-      x.marks = diff ? diff.a : whole(x.text)
-      if (y) y.marks = diff ? diff.b : whole(y.text)
-    })
-    for (const y of added.slice(removed.length)) y.marks = whole(y.text)
-    i = Math.max(a, i + 1)
-  }
 }
 
 // ── Marks drawn as one shape ──
@@ -536,7 +418,7 @@ export function ReviewPage(props: {
   onReady?: (focus: () => void) => void
   /** Put first in the toolbar's row, e.g. a review chat's tabs. */
   lead?: JSX.Element
-  /** The toolbar's row is the second line of the chat's header (see UNDER_HEADER). */
+  /** The toolbar's row is the second line of the chat's header (see PaneBar). */
   underHeader?: boolean
   /** Only this file's changes, by its path in the checkout: a file's own diff. */
   only?: string
@@ -551,6 +433,12 @@ export function ReviewPage(props: {
   )
   const openFile = useOpenFile()
   const [diff, setDiff] = createSignal<ReviewDiff>()
+  /** Opens a file of the changes whole, at a line if given; not one that's been deleted, which has nothing to show. */
+  const openerFor = (f: ReviewFile) => {
+    const root = diff()?.root
+    if (!openFile || !root || f.status === 'deleted') return
+    return (line?: number) => openFile.open(`${root}/${f.path}`, line)
+  }
   const [error, setError] = createSignal<string>()
   const [loading, setLoading] = createSignal(false)
   /** Hunks opened or folded by hand, overriding whether they're viewed. */
@@ -928,11 +816,11 @@ export function ReviewPage(props: {
     <TranscriptIndex.Provider value={props.index}>
     <LiveChatContext.Provider value={live}>
     <div class="@container flex min-h-0 flex-1 flex-col text-ui">
-      {/* One row, after whatever leads it, like the review's tabs; under a chat's header, the second line of it. */}
-      <div class={`flex h-9 shrink-0 items-center gap-3 px-3 ${props.underHeader ? `${UNDER_HEADER} md:px-4` : 'border-b border-line'}`}>
+      {/* After whatever leads it, like the review's tabs. */}
+      <PaneBar underHeader={props.underHeader}>
         {props.lead}
         {tools()}
-      </div>
+      </PaneBar>
       {/* How much has been viewed, as a line along the foot of what's above, over its edge. */}
       <Show when={total()}>
         <div class="relative z-20 h-0">
@@ -1072,6 +960,7 @@ export function ReviewPage(props: {
                         draftText={draftText()}
                         canAsk={!!props.onSend}
                         onToggle={() => setOpen((o) => ({ ...o, [id]: !isOpen(id) }))}
+                        onOpen={openerFor(p.file)}
                         onViewed={(on) => setViewed([id], on)}
                         onSelect={(from, to, start, end) => selectDraft(id, from, to, start, end)}
                         onDraftText={setDraftText}
@@ -1089,42 +978,29 @@ export function ReviewPage(props: {
                       />
                     )
                   }
+                  const foldAll = () => {
+                    const open = !ids().some(isOpen)
+                    setOpen((o) => ({ ...o, ...Object.fromEntries(ids().map((id) => [id, open])) }))
+                  }
                   const file = s.id.startsWith('file:') ? s.hunks[0]?.file : undefined
                   // File by file: the file is the one box, its hunks one after another in it, split by their @@ lines.
                   if (file)
                     return (
                       <section ref={(el) => sectionEls.set(s.id, el)} class="mt-3 scroll-mt-3 overflow-clip rounded-lg border border-line">
                         {/* Stuck to the top while the file is in view, so you know which one you're in. */}
-                        <header class="sticky top-0 z-10 flex h-9 items-center gap-2 bg-surface px-2">
-                          <button
-                            onClick={() => {
-                              const open = !ids().some(isOpen)
-                              setOpen((o) => ({ ...o, ...Object.fromEntries(ids().map((id) => [id, open])) }))
-                            }}
-                            title={ids().some(isOpen) ? 'Fold' : 'Unfold'}
-                            class="grid size-5 shrink-0 place-items-center rounded text-fg-3 hover:bg-bg hover:text-fg-2"
-                          >
-                            {ids().some(isOpen) ? <ChevronDown class="size-3.5" /> : <ChevronRight class="size-3.5" />}
-                          </button>
-                          <span class={`shrink-0 font-mono text-xs ${STATUS_TONE[file.status]}`}>{STATUS_LETTER[file.status]}</span>
-                          {/* rtl so a long path loses its start, not its file name. */}
-                          <h2 class="min-w-0 truncate font-mono text-xs text-fg" dir="rtl">
-                            {/* A file's own diff is already beside it; anywhere else, the path opens the whole file. */}
-                            <Show
-                              when={openFile && !props.only && file.status !== 'deleted' && diff()?.root}
-                              fallback={<bdi title={file.path}>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</bdi>}
-                            >
-                              {(root) => (
-                                <button onClick={() => openFile!.open(`${root()}/${file.path}`)} title={`Open ${file.path}`} class="hover:underline">
-                                  <bdi>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</bdi>
-                                </button>
-                              )}
-                            </Show>
+                        <header class="sticky top-0 z-10 flex h-9 items-center gap-2 bg-surface px-2 text-xs">
+                          <FoldButton open={ids().some(isOpen)} onClick={foldAll} />
+                          <span class={`shrink-0 font-mono ${STATUS_TONE[file.status]}`}>{STATUS_LETTER[file.status]}</span>
+                          <h2 class="flex min-w-0">
+                            <button onClick={foldAll} class="flex min-w-0 text-left text-fg">
+                              <PathLabel path={file.path} oldPath={file.oldPath} />
+                            </button>
                           </h2>
                           <Show when={file.added || file.removed}>
-                            <DiffCount files={1} added={file.added} removed={file.removed} class="shrink-0 text-xs" />
+                            <DiffCount files={1} added={file.added} removed={file.removed} class="shrink-0" />
                           </Show>
                           <div class="flex-1" />
+                          <OpenFileButton onOpen={openerFor(file)} />
                           <ViewedBox viewed={allViewed()} onChange={(on) => setViewed(ids(), on)} />
                         </header>
                         <For each={s.hunks}>{(p) => hunk(p, { bar: s.hunks.length > 1 })}</For>
@@ -1235,6 +1111,28 @@ function AttentionBadge(props: { attention?: Section['attention'] }) {
   )
 }
 
+/** Folds or unfolds a file or hunk. */
+function FoldButton(props: { open: boolean; onClick: () => void }) {
+  return (
+    <GhostButton size="sm" title={props.open ? 'Fold' : 'Unfold'} onClick={props.onClick}>
+      {props.open ? <ChevronDown class="size-3.5" /> : <ChevronRight class="size-3.5" />}
+    </GhostButton>
+  )
+}
+
+/** Opens the whole file, at `line` if given. Nothing where files can't be opened. */
+function OpenFileButton(props: { onOpen?: (line?: number) => void; line?: number }) {
+  return (
+    <Show when={props.onOpen}>
+      {(open) => (
+        <GhostButton size="sm" title={props.line ? `Open the whole file at line ${props.line}` : 'Open the whole file'} onClick={() => open()(props.line)}>
+          <FileText class="size-3.5" />
+        </GhostButton>
+      )}
+    </Show>
+  )
+}
+
 function ViewedBox(props: { viewed: boolean; onChange: (on: boolean) => void; label?: string }) {
   return (
     <label class="flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-xs text-fg-3 hover:text-fg-2">
@@ -1267,6 +1165,8 @@ function HunkView(props: {
   draftText: string
   canAsk: boolean
   onToggle: () => void
+  /** Opens the whole file beside the chat, at the line given; absent where there's nowhere to. */
+  onOpen?: (line?: number) => void
   onViewed: (on: boolean) => void
   /** Comment on what's selected: rows from..to, from `start` in the first to `end` in the last. */
   onSelect: (from: number, to: number, start?: number, end?: number) => void
@@ -1280,7 +1180,7 @@ function HunkView(props: {
 }) {
   const f = () => props.file
   const context = () => (props.rows[0]?.kind === 'hunk' ? props.rows[0].text : '')
-  const startLine = () => props.rows.find((r): r is Line => r.kind !== 'hunk')?.new
+  const startLine = () => startOf(props.rows)
   const [shown, setShown] = createSignal(false)
   const nothing = () => !props.rows.length
   const folded = () => f().generated && !shown()
@@ -1527,41 +1427,32 @@ function HunkView(props: {
       }>
       <Show when={props.bare?.bar}>
         <div class="flex h-7 items-center gap-2 px-2 text-xs text-fg-3">
-          <button onClick={props.onToggle} title={props.open ? 'Fold' : 'Unfold'} class="grid size-5 shrink-0 place-items-center rounded hover:bg-surface hover:text-fg-2">
-            {props.open ? <ChevronDown class="size-3.5" /> : <ChevronRight class="size-3.5" />}
-          </button>
+          <FoldButton open={props.open} onClick={props.onToggle} />
           <button onClick={props.onToggle} class="flex min-w-0 items-center gap-2 text-left font-mono">
-            {/* A hunk that starts by removing lines has no new line to start at: it starts where they were. */}
-            <Show when={startLine() ?? props.rows.find((r): r is Line => r.kind !== 'hunk')?.old}>
-              {(n) => <span class="shrink-0 tabular-nums">line {n()}</span>}
-            </Show>
+            <Show when={startLine()}>{(n) => <span class="shrink-0 tabular-nums">line {n()}</span>}</Show>
             <Show when={context()}>
               <span class="min-w-0 truncate">{context()}</span>
             </Show>
           </button>
           <div class="flex-1" />
+          <OpenFileButton onOpen={props.onOpen} line={startLine()} />
           <ViewedBox viewed={props.viewed} onChange={props.onViewed} />
         </div>
       </Show>
       <Show when={!props.bare}>
-      <div class="flex items-center gap-2 bg-surface px-2 py-1">
-        <button onClick={props.onToggle} class="grid size-5 shrink-0 place-items-center rounded text-fg-3 hover:bg-surface hover:text-fg-2">
-          {props.open ? <ChevronDown class="size-3.5" /> : <ChevronRight class="size-3.5" />}
-        </button>
-        <span class={`shrink-0 font-mono text-xs ${STATUS_TONE[f().status]}`}>{STATUS_LETTER[f().status]}</span>
-        <button onClick={props.onToggle} class="min-w-0 truncate text-left font-mono text-xs text-fg" title={f().path} dir="rtl">
-          {/* rtl so a long path loses its start, not its file name. */}
-          <bdi>
-            {f().oldPath ? `${f().oldPath} → ${f().path}` : f().path}
-            <Show when={startLine()}>:{startLine()}</Show>
-          </bdi>
-        </button>
-        <Show when={context()}>
-          <span class="hidden min-w-0 truncate font-mono text-xs text-fg-3 @2xl:block">{context()}</span>
-        </Show>
-        <div class="flex-1" />
-        <ViewedBox viewed={props.viewed} onChange={props.onViewed} />
-      </div>
+        <div class="flex items-center gap-2 bg-surface px-2 py-1 text-xs">
+          <FoldButton open={props.open} onClick={props.onToggle} />
+          <span class={`shrink-0 font-mono ${STATUS_TONE[f().status]}`}>{STATUS_LETTER[f().status]}</span>
+          <button onClick={props.onToggle} class="flex min-w-0 text-left text-fg">
+            <PathLabel path={f().path} oldPath={f().oldPath} suffix={<Show when={startLine()}>:{startLine()}</Show>} />
+          </button>
+          <Show when={context()}>
+            <span class="hidden min-w-0 truncate font-mono text-fg-3 @2xl:block">{context()}</span>
+          </Show>
+          <div class="flex-1" />
+          <OpenFileButton onOpen={props.onOpen} line={startLine()} />
+          <ViewedBox viewed={props.viewed} onChange={props.onViewed} />
+        </div>
       </Show>
 
       <Show when={props.open}>
@@ -1610,20 +1501,22 @@ function HunkView(props: {
                 const editing = () => props.draft && props.draft.to === i()
                 return (
                   <>
-                    <div
+                    <CodeRow
                       data-row={i()}
-                      class={`group relative flex ${r.kind === 'add' ? 'bg-ok/10' : r.kind === 'del' ? 'bg-danger/10' : ''}`}
+                      kind={r.kind}
+                      numbers={[r.old, r.new]}
+                      sign
+                      gutter={{
+                        onPointerDown: (e) => selectFrom(e, i()),
+                        title: 'Select this line: drag to select more, shift-click to extend',
+                        class: 'cursor-pointer',
+                      }}
                     >
-                      <span onPointerDown={(e) => selectFrom(e, i())} title="Select this line: drag to select more, shift-click to extend" class="flex shrink-0 cursor-pointer select-none">
-                        <span class="w-10 pr-1.5 text-right text-fg-3/70 tabular-nums">{r.old ?? ''}</span>
-                        <span class="w-10 pr-1.5 text-right text-fg-3/70 tabular-nums">{r.new ?? ''}</span>
-                      </span>
-                      <span class={`w-4 shrink-0 select-none text-center ${r.kind === 'add' ? 'text-ok' : r.kind === 'del' ? 'text-danger' : 'text-fg-3'}`}>{SIGN[r.kind]}</span>
                       {/* The browser's own selection colour is hidden on the code: it's drawn with the marks, as a shape. */}
                       <span class="min-w-0 flex-1 whitespace-pre-wrap break-all pr-3 text-fg selection:bg-transparent">
                         <Code line={r} html={lineHtml(i())} ref={(el) => (codeEls[i()] = el)} onDrawn={redraw} />
                       </span>
-                    </div>
+                    </CodeRow>
                     <Show when={editing()}>
                       <DraftBox
                         text={props.draftText}

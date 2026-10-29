@@ -2,8 +2,11 @@ import { For, Show, createEffect, createMemo, createResource, createSignal, on, 
 import { RotateCw } from '../icons'
 import type { ReviewDiff } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
+import { changedLines } from '../diffRows.ts'
+import { plural } from '../format.ts'
 import { highlight, languageOf } from '../highlight.ts'
-import { DiffCount, GhostButton } from './ui.tsx'
+import { CodeRow } from './CodeRow.tsx'
+import { DiffCount, GhostButton, PaneBar, PathLabel, Segmented } from './ui.tsx'
 
 /** Lines drawn per block; blocks off screen skip layout, so a long file costs little until it's scrolled through. */
 const BLOCK = 200
@@ -20,22 +23,10 @@ async function readText(path: string, machine: string): Promise<{ text: string }
   return { text: new TextDecoder().decode(bytes) }
 }
 
-/** The lines added, by their number in the file now, and where lines were taken out, by the line they were before. */
+/** This file in the checkout's changes, if it's there, and its lines changed. */
 function changesIn(diff: ReviewDiff | undefined, path: string) {
-  const added = new Set<number>()
-  const removed = new Map<number, number>()
   const file = diff?.files.find((f) => `${diff.root}/${f.path}` === path)
-  for (const h of file?.hunks ?? []) {
-    let line = 0
-    for (const l of h.patch.split('\n')) {
-      const at = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(l)
-      if (at) line = Number(at[1])
-      else if (l.startsWith('+')) added.add(line++)
-      else if (l.startsWith('-')) removed.set(line, (removed.get(line) ?? 0) + 1)
-      else if (l.startsWith(' ')) line++
-    }
-  }
-  return { file, added, removed }
+  return { file, ...changedLines(file?.hunks ?? []) }
 }
 
 /**
@@ -120,33 +111,14 @@ export function FileView(props: {
   )
 
   const toggle = () => (
-    <div class="flex shrink-0 items-center rounded-md bg-surface p-0.5 text-xs">
-      <For each={['file', 'diff'] as const}>
-        {(m) => (
-          <button
-            onClick={() => props.onMode(m)}
-            class={`rounded px-1.5 py-0.5 ${props.mode === m ? 'bg-bg text-fg shadow-(--shadow-control)' : 'text-fg-3 hover:text-fg-2'}`}
-          >
-            {m === 'file' ? 'File' : 'Diff'}
-          </button>
-        )}
-      </For>
-    </div>
-  )
-  const tools = () => (
-    <div class="flex min-w-0 flex-1 items-center gap-3 text-xs whitespace-nowrap text-fg-3">
-      {toggle()}
-      <span class="min-w-0 truncate font-mono" dir="rtl" title={props.path}>
-        <bdi>{relative() ?? props.path}</bdi>
-      </span>
-      <Show when={changed().file}>{(f) => <DiffCount files={1} added={f().added} removed={f().removed} class="shrink-0" />}</Show>
-      <div class="flex-1" />
-      <div class="-mr-1.5 flex shrink-0 items-center">
-        <GhostButton title="Read it again" onClick={reload}>
-          <RotateCw class={`size-3.5 ${content.loading ? 'animate-spin' : ''}`} />
-        </GhostButton>
-      </div>
-    </div>
+    <Segmented
+      value={props.mode}
+      onChange={props.onMode}
+      options={[
+        { value: 'file', label: 'File', title: 'All of it, its changes marked' },
+        { value: 'diff', label: 'Diff', title: 'Only its changes' },
+      ]}
+    />
   )
 
   return (
@@ -159,7 +131,15 @@ export function FileView(props: {
       }
     >
       <div class="flex min-h-0 flex-1 flex-col text-ui">
-        <div class="flex h-9 shrink-0 items-center border-b border-line px-3">{tools()}</div>
+        <PaneBar class="whitespace-nowrap text-fg-3">
+          {toggle()}
+          <PathLabel path={relative() ?? props.path} />
+          <Show when={changed().file}>{(f) => <DiffCount files={1} added={f().added} removed={f().removed} class="shrink-0" />}</Show>
+          <div class="flex-1" />
+          <GhostButton title="Read it again" onClick={reload} class="-mr-1.5">
+            <RotateCw class={`size-3.5 ${content.loading ? 'animate-spin' : ''}`} />
+          </GhostButton>
+        </PaneBar>
         <div ref={scroller} tabIndex={-1} class="min-h-0 flex-1 overflow-auto outline-none">
           <Show when={image()}>
             <div class="grid min-h-full place-items-center p-4">
@@ -179,19 +159,21 @@ export function FileView(props: {
                             const added = () => changed().added.has(n)
                             const removed = () => changed().removed.get(n)
                             return (
-                              <div data-line={n} class={`flex transition-colors ${lit() === n ? 'bg-accent/20' : added() ? 'bg-ok/10' : ''}`}>
-                                <span
-                                  class={`w-12 shrink-0 select-none border-l-2 pr-3 text-right tabular-nums ${
-                                    added() ? 'border-ok text-fg-3' : 'border-transparent text-fg-3/70'
-                                  } ${removed() ? 'shadow-[inset_0_2px_0_var(--color-danger)]' : ''}`}
-                                  title={removed() ? `${removed()} line${removed() === 1 ? '' : 's'} taken out above this one` : undefined}
-                                >
-                                  {n}
-                                </span>
-                                <Show when={html()?.[n - 1]} fallback={<span class="whitespace-pre pr-4 text-fg">{text}</span>}>
-                                  {(h) => <span class="whitespace-pre pr-4 text-fg" innerHTML={h()} />}
+                              <CodeRow
+                                data-line={n}
+                                kind={added() ? 'add' : 'ctx'}
+                                numbers={[n]}
+                                lit={lit() === n}
+                                // Where lines were taken out: a red edge along the top of the number after them.
+                                gutter={{
+                                  class: removed() ? 'shadow-[inset_0_2px_0_var(--color-danger)]' : '',
+                                  title: removed() ? `${plural(removed()!, 'line')} taken out above this one` : undefined,
+                                }}
+                              >
+                                <Show when={html()?.[n - 1]} fallback={<span class="whitespace-pre pr-4 pl-2 text-fg">{text}</span>}>
+                                  {(h) => <span class="whitespace-pre pr-4 pl-2 text-fg" innerHTML={h()} />}
                                 </Show>
-                              </div>
+                              </CodeRow>
                             )
                           }}
                         </For>

@@ -383,6 +383,53 @@ export function Menu(props: {
   )
 }
 
+/** A tab or one of a set of choices in a pane's toolbar: the side chats', a review's, a file's File and Diff. */
+export const tabClass = (active: boolean) =>
+  `flex h-7 min-w-0 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs transition-colors ${active ? 'bg-surface text-fg' : 'text-fg-3 hover:bg-surface hover:text-fg-2'}`
+
+/** One of a few ways to see something, side by side, the one shown marked. */
+export function Segmented<T extends string>(props: { value: T; options: { value: T; label: JSX.Element; title?: string }[]; onChange: (value: T) => void }) {
+  return (
+    <div class="-ml-1 flex shrink-0 items-center gap-0.5">
+      <For each={props.options}>
+        {(o) => (
+          <button type="button" onClick={() => props.onChange(o.value)} title={o.title} aria-pressed={props.value === o.value} class={tabClass(props.value === o.value)}>
+            {o.label}
+          </button>
+        )}
+      </For>
+    </div>
+  )
+}
+
+/**
+ * A pane's toolbar, one row under its tab strip. `underHeader`: the second line of a chat's header instead, in its
+ * colours, with the edge and shadow the header leaves off (see ChatHeader's `joined`).
+ */
+export function PaneBar(props: { underHeader?: boolean; class?: string; children: JSX.Element }) {
+  return (
+    <div
+      class={`flex h-9 shrink-0 items-center gap-3 px-3 text-xs ${
+        props.underHeader ? 'bar relative z-10 border-b border-line shadow-(--shadow-bar) md:px-4' : 'border-b border-line'
+      } ${props.class ?? ''}`}
+    >
+      {props.children}
+    </div>
+  )
+}
+
+/** A file's path, in monospace, losing its start rather than its name when there's no room; a rename shows both. */
+export function PathLabel(props: { path: string; oldPath?: string; suffix?: JSX.Element; class?: string }) {
+  return (
+    <span class={`min-w-0 truncate font-mono ${props.class ?? ''}`} dir="rtl" title={props.oldPath ? `${props.oldPath} → ${props.path}` : props.path}>
+      <bdi>
+        {props.oldPath ? `${props.oldPath} → ${props.path}` : props.path}
+        {props.suffix}
+      </bdi>
+    </span>
+  )
+}
+
 export interface Option<T extends string> {
   value: T
   label: string

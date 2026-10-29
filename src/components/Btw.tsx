@@ -3,7 +3,7 @@ import { forkingSideChat, pickSideChat, shownSideChat, sideChatsOf } from '../bt
 import { Plus, SquareArrowOutUpRight } from '../icons'
 import { navigate } from '../router.tsx'
 import { Chat } from './Chat.tsx'
-import { LiveDot, Loading } from './ui.tsx'
+import { GhostButton, LiveDot, Loading, PaneBar, tabClass } from './ui.tsx'
 
 const forkedLabel = (at?: number) => (at ? `Forked ${new Date(at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}` : '')
 
@@ -16,10 +16,10 @@ export function BtwPane(props: { parent: string; onNew: () => void; onReady: (fo
   let focusChat: (() => void) | undefined
   props.onReady(() => focusChat?.())
   const shown = () => shownSideChat(props.parent)
-  const tab = 'flex h-7 min-w-0 max-w-56 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs transition-colors'
   return (
     <div class="flex size-full flex-col">
-      <div class="flex shrink-0 items-center gap-1 border-b border-line px-2 py-1.5">
+      <PaneBar class="gap-1 px-2">
+
         <div class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
           <For each={sideChatsOf(props.parent)}>
             {(s) => (
@@ -27,7 +27,7 @@ export function BtwPane(props: { parent: string; onNew: () => void; onReady: (fo
                 type="button"
                 onClick={() => pickSideChat(props.parent, s.id)}
                 title={[s.title, forkedLabel(s.forkedAt)].filter(Boolean).join('\n')}
-                class={`${tab} ${s.id === shown() ? 'bg-surface text-fg' : 'text-fg-3 hover:bg-surface hover:text-fg-2'}`}
+                class={`${tabClass(s.id === shown())} max-w-56`}
               >
                 <Show when={s.running}>
                   <LiveDot />
@@ -39,25 +39,15 @@ export function BtwPane(props: { parent: string; onNew: () => void; onReady: (fo
         </div>
         <Show when={shown()}>
           {(id) => (
-            <button
-              type="button"
-              onClick={() => navigate({ kind: 'chat', id: id() })}
-              title="Open as a chat of its own"
-              class="grid size-7 shrink-0 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg-2"
-            >
+            <GhostButton onClick={() => navigate({ kind: 'chat', id: id() })} title="Open as a chat of its own">
               <SquareArrowOutUpRight class="size-3.5" />
-            </button>
+            </GhostButton>
           )}
         </Show>
-        <button
-          type="button"
-          onClick={() => props.onNew()}
-          title="New side chat"
-          class="grid size-7 shrink-0 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg-2"
-        >
+        <GhostButton onClick={() => props.onNew()} title="New side chat">
           <Plus class="size-3.5" />
-        </button>
-      </div>
+        </GhostButton>
+      </PaneBar>
       <div class="relative min-h-0 flex-1">
         <Show
           when={!forkingSideChat(props.parent) && shown()}

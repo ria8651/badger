@@ -16,7 +16,7 @@ import { cardOf } from '../stores/cards.ts'
 import { sessionById } from '../stores/sessions.ts'
 import { knownRoot, workspaceOf, type Ws } from '../terminals.ts'
 import { Checking, ChildChats, NO_ATTACHMENTS, createChat, createChildChats } from '../useChat.ts'
-import { ChatHeader, UNDER_HEADER, createGitStatus } from './ChatHeader.tsx'
+import { ChatHeader, createGitStatus } from './ChatHeader.tsx'
 import { Composer, type ComposerControls } from './Composer.tsx'
 import { FolderPicker } from './FolderPicker.tsx'
 import { ForkDialog } from './ForkDialog.tsx'
@@ -33,7 +33,7 @@ import { BtwPane } from './Btw.tsx'
 import { createIndex } from '../transcript/context.ts'
 import { UserMessage } from '../transcript/items.tsx'
 import { Workspace, type ChatPanes } from './Workspace.tsx'
-import { Loading, Notice, touch, type Option } from './ui.tsx'
+import { Loading, Notice, PaneBar, Segmented, touch, type Option } from './ui.tsx'
 
 export function Chat(props: {
   sessionId: string
@@ -148,7 +148,8 @@ export function Chat(props: {
     cwd: () => cwd(),
     open: (path: string, line?: number) => {
       const w = beside()
-      if (w) openFile(w, { kind: 'file', session: props.sessionId, path, line })
+      // Opening it is asking for the file, so a tab showing its diff switches back.
+      if (w) openFile(w, { kind: 'file', session: props.sessionId, path, line, mode: 'file' })
       else showError("Couldn't open it", 'Files open in a panel beside the chat, and there’s none here.')
     },
   }
@@ -330,21 +331,24 @@ export function Chat(props: {
 
   /** A review chat's two ways of being seen. */
   const reviewTabs = () => (
-    <div class="-ml-2 flex shrink-0 items-center gap-1 text-xs">
-      <For each={[false, true]}>
-        {(conversation) => (
-          <button
-            onClick={() => setShowConversation(conversation)}
-            class={`flex items-center gap-1.5 rounded-md px-2 py-1 ${showConversation() === conversation ? 'bg-surface text-fg' : 'text-fg-3 hover:text-fg-2'}`}
-          >
-            {conversation ? 'Conversation' : 'Guided review'}
-            <Show when={conversation && working()}>
-              <span class="size-1.5 animate-pulse rounded-full bg-accent" />
-            </Show>
-          </button>
-        )}
-      </For>
-    </div>
+    <Segmented
+      value={showConversation() ? 'conversation' : 'review'}
+      onChange={(v) => setShowConversation(v === 'conversation')}
+      options={[
+        { value: 'review', label: 'Guided review' },
+        {
+          value: 'conversation',
+          label: (
+            <>
+              Conversation
+              <Show when={working()}>
+                <span class="size-1.5 animate-pulse rounded-full bg-accent" />
+              </Show>
+            </>
+          ),
+        },
+      ]}
+    />
   )
 
   /** The end of the turn being forked from, while picking where the fork goes. */
@@ -379,7 +383,7 @@ export function Chat(props: {
       <Show when={isReview() && !props.embedded}>
         {/* On the review, the first thing in its toolbar; on the conversation, a row of their own. */}
         <Show when={!reviewing()}>
-          <div class={`${UNDER_HEADER} flex h-9 shrink-0 items-center px-3 md:px-4`}>{reviewTabs()}</div>
+          <PaneBar underHeader>{reviewTabs()}</PaneBar>
         </Show>
         <Show when={reviewing()}>
           {reviewPage(true, { lead: reviewTabs(), underHeader: true })}
