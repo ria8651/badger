@@ -900,7 +900,7 @@ export function ReviewPage(props: {
         {/* The diff, with what goes back to Claude under it; the outline beside them runs the full height. */}
         <div class="flex min-w-0 flex-1 flex-col">
           <div ref={scroller} onScroll={onScroll} tabIndex={-1} class="min-h-0 flex-1 overflow-y-auto outline-none">
-            <div ref={content} class="mx-auto max-w-[100rem] px-2 pb-10 @3xl:px-4">
+            <div ref={content} class={props.whole ? 'pb-10' : 'mx-auto max-w-[100rem] px-2 pb-10 @3xl:px-4'}>
               <Show when={!diff() && loading()}>
                 <p class="p-10 text-center text-fg-3">Reading the changes…</p>
               </Show>
@@ -990,10 +990,10 @@ export function ReviewPage(props: {
                     setOpen((o) => ({ ...o, ...Object.fromEntries(ids().map((id) => [id, open])) }))
                   }
                   const file = s.id.startsWith('file:') ? s.hunks[0]?.file : undefined
-                  // All of one file: its one hunk in a box, with nothing over it but the file's toolbar.
+                  // All of one file: its one hunk edge to edge under the file's toolbar, as the File view has it.
                   if (file && props.whole)
                     return (
-                      <section ref={(el) => sectionEls.set(s.id, el)} class="mt-2 overflow-clip rounded-lg border border-line [&>div:first-child]:border-t-0">
+                      <section ref={(el) => sectionEls.set(s.id, el)} class="[&>div]:border-t-0">
                         <For each={s.hunks}>{(p) => hunk(p, { bar: false })}</For>
                       </section>
                     )
