@@ -44,7 +44,7 @@
  *
  *   --shadow-pane     the panes, when the frame makes them tiles
  *   --shadow-sidebar  the sidebar, which sits over the panes beside it: the frame's pane shadow by default
- *   --shadow-bar      a chat's header, over its transcript
+ *   --shadow-bar      a pane's title bar, over what scrolls under it
  *   --shadow-card    cards and the composer, sitting on a pane
  *   --shadow-control  filled buttons
  *   --shadow-pop      menus, popovers, tooltips
