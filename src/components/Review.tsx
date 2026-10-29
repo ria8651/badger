@@ -622,11 +622,13 @@ export function ReviewPage(props: {
     for (const p of placed().values()) for (const r of rowsFor(p.hunk)) if (r.kind !== 'hunk') out.add(`${p.file.path}:${anchorOf(r)}`)
     return out
   })
-  const loose = createMemo(() => comments().filter((c) => !shown().has(`${c.path}:${c.to}`)))
+  // Only the files shown: a file's own diff isn't where the rest of the chat's comments belong.
+  const loose = createMemo(() => comments().filter((c) => (!props.only || c.path === props.only) && !shown().has(`${c.path}:${c.to}`)))
 
   const sectionEls = new Map<string, HTMLElement>()
   const hunkEls = new Map<string, HTMLElement>()
-  const jumpTo = (el?: HTMLElement) => el?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  /** To a hunk, or, folded into its file's box with no bar of its own to show, to the box. */
+  const jumpTo = (el?: HTMLElement) => (el && !el.offsetParent ? el.closest('section') : el)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
   /** The section being read, the last whose top has scrolled up past the pinned header, and its hunk at the top of the view. */
   const [current, setCurrent] = createSignal<string>()
   const [currentHunk, setCurrentHunk] = createSignal<string>()
@@ -674,8 +676,9 @@ export function ReviewPage(props: {
     restored = true
     requestAnimationFrame(() => {
       const stop = settle(scroller, content, () => {
+        // A hunk folded away has no place on the page to measure: nothing to go back to.
         const el = hunkEls.get(spot.hunk)
-        if (el) scroller.scrollTop += el.getBoundingClientRect().top - (scroller.getBoundingClientRect().top + PINNED_TOP + 8) + spot.offset
+        if (el?.offsetParent) scroller.scrollTop += el.getBoundingClientRect().top - (scroller.getBoundingClientRect().top + PINNED_TOP + 8) + spot.offset
       })
       // Saving again once it's settled, or the user takes over.
       setTimeout(() => {
@@ -957,7 +960,8 @@ export function ReviewPage(props: {
                         bare={bare}
                         file={p.file}
                         rows={rows()}
-                        open={isOpen(id)}
+                        // All of a file is the whole page: nothing to unfold it by if it were folded.
+                        open={props.whole || isOpen(id)}
                         viewed={isViewed(id)}
                         comments={commentsIn().get(p.file.path) ?? NO_NOTES}
                         questions={questionsIn().get(p.file.path) ?? NO_QUESTIONS}
@@ -990,6 +994,8 @@ export function ReviewPage(props: {
                     setOpen((o) => ({ ...o, ...Object.fromEntries(ids().map((id) => [id, open])) }))
                   }
                   const file = s.id.startsWith('file:') ? s.hunks[0]?.file : undefined
+                  // As read last: a hunk that didn't change keeps the file it came with, and its counts from then.
+                  const fresh = () => files().find((f) => f.path === file?.path) ?? file!
                   // All of one file: its one hunk edge to edge under the file's toolbar, as the File view has it.
                   if (file && props.whole)
                     return (
@@ -1010,8 +1016,8 @@ export function ReviewPage(props: {
                               <PathLabel path={file.path} oldPath={file.oldPath} />
                             </button>
                           </h2>
-                          <Show when={file.added || file.removed}>
-                            <DiffCount files={1} added={file.added} removed={file.removed} class="shrink-0" />
+                          <Show when={fresh().added || fresh().removed}>
+                            <DiffCount files={1} added={fresh().added} removed={fresh().removed} class="shrink-0" />
                           </Show>
                           <div class="flex-1" />
                           <OpenFileButton onOpen={openerFor(file)} />

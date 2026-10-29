@@ -1,5 +1,5 @@
 import { For, Match, Show, Switch, createEffect, createSignal, on, onCleanup, type JSX } from 'solid-js'
-import { fileLink, useOpenFile } from '../fileLinks.ts'
+import { resolvePath, useOpenFile } from '../fileLinks.ts'
 import { highlightWhenSeen, languageOf } from '../highlight.ts'
 import { Check, ChevronRight, CircleAlert, Loader2, Shield, Webhook } from '../icons'
 import type { Task } from '../tasks.ts'
@@ -341,11 +341,11 @@ export function ToolCard(props: ToolProps) {
   /** The file a call read or wrote, to open beside the chat: where a Read started, if it said. */
   const openTarget = () => {
     if (!files || !['Read', 'Write', 'Edit', 'MultiEdit'].includes(props.name)) return
-    // Worked out the way a link to it is, so a relative path is from the same folder.
-    const to = fileLink(str(props.input.file_path), props.cwd ?? files.cwd())
-    if (!to) return
+    // A path as it is, not a link: nothing in it is an escape, an anchor or a line number.
+    const path = resolvePath(str(props.input.file_path), props.cwd ?? files.cwd())
+    if (!path) return
     const line = props.name === 'Read' && typeof props.input.offset === 'number' ? props.input.offset : undefined
-    return () => files.open(to.path, line)
+    return () => files.open(path, line)
   }
   const checking = useChecking()
   const status = () =>

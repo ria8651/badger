@@ -290,9 +290,9 @@ export function ChatHeader(props: {
                 trigger={() => <GitSummary git={g()} branch hide={primary() === 'push' ? 'ahead' : primary() === 'pull' ? 'behind' : undefined} />}
               />
             </div>
-            {/* Opened from the git menu's Base item, where the menu was. */}
+            {/* Opened from the git menu's Base item, where the menu was, and back to its button when closed. */}
             <Show when={props.cwd}>
-              {(dir) => <BasePicker dir={dir()} machine={props.machine} anchor={() => gitMenu} opener={(show) => (showBases = show)} />}
+              {(dir) => <BasePicker dir={dir()} machine={props.machine} anchor={() => gitMenu.querySelector('button') ?? gitMenu} opener={(show) => (showBases = show)} />}
             </Show>
             <Show when={primary()}>
               {(kind) => (

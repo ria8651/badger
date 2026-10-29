@@ -19,7 +19,6 @@ export function BtwPane(props: { parent: string; onNew: () => void; onReady: (fo
   return (
     <div class="flex size-full flex-col">
       <PaneBar class="gap-1 px-2">
-
         <div class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
           <For each={sideChatsOf(props.parent)}>
             {(s) => (

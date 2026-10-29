@@ -174,16 +174,30 @@ export function reviewDiff(path: string, scope: ReviewScope, context = 3, only?:
   return diff
 }
 
-/** The most lines of patch one file asked for alone may have. */
-const ONLY_LINES = 50_000
+/**
+ * Where a file was before, if it was renamed: a diff of just its path would show it all added, with nothing to pair
+ * it with. Names only, so cheap however big the changes.
+ */
+async function renamedFrom(path: string, from: string, to: string, file: string): Promise<string[]> {
+  const out = await git(path, 'diff', '--name-status', '-z', '-M', '--diff-filter=R', from, to).catch(() => '')
+  // Each rename is its status, then where it was, then where it is.
+  const parts = out.split('\0')
+  for (let i = 0; i + 2 < parts.length; i += 3) if (parts[i + 2] === file) return [parts[i + 1]]
+  return []
+}
+
+/** The most lines of patch one file asked for alone may have: as many as a file shown whole draws. */
+const ONLY_LINES = 20_000
 
 async function readDiff(path: string, scope: ReviewScope, context: number, only?: string): Promise<ReviewDiff> {
-  const [branch, { tree, big }, base, root] = await Promise.all([
+  const [branch, { tree, big }, base, up] = await Promise.all([
     git(path, 'branch', '--show-current'),
     snapshot(path),
     baseOf(path, true).catch(() => undefined),
-    git(path, 'rev-parse', '--show-toplevel'),
+    git(path, 'rev-parse', '--show-cdup'),
   ])
+  // From the folder as it was given, not git's own path to it, which follows symlinks: files are opened by the former.
+  const root = resolve(path, up || '.')
   const head = await git(path, 'rev-parse', '-q', '--verify', 'HEAD').catch(() => '')
   const forkPoint = base && head ? await git(path, 'merge-base', head, base.sha).catch(() => '') : ''
   const commits = forkPoint ? await commitsSince(path, forkPoint) : []
@@ -219,7 +233,7 @@ async function readDiff(path: string, scope: ReviewScope, context: number, only?
       from,
       to,
       // From the top of the checkout, and taken as it is, whatever folder git runs in and whatever's in the name.
-      ...(only ? ['--', `:(top,literal)${only}`] : []),
+      ...(only ? ['--', ...[only, ...(await renamedFrom(path, from, to, only))].map((p) => `:(top,literal)${p}`)] : []),
     ],
     { cwd: path, maxBuffer: MAX_OUTPUT },
   ).catch((err) => {
