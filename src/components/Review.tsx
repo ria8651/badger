@@ -1,4 +1,5 @@
 import { For, Show, createContext, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack, useContext, type JSX } from 'solid-js'
+import { createStore } from 'solid-js/store'
 import { Check, ChevronDown, ChevronRight, FileText, MessageSquarePlus, RotateCw, Trash2 } from '../icons'
 import type { ReviewAttention, ReviewDiff, ReviewFile, ReviewGroup, ReviewGuide, ReviewHunk, WireMessage } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
@@ -447,7 +448,7 @@ export function ReviewPage(props: {
   const [error, setError] = createSignal<string>()
   const [loading, setLoading] = createSignal(false)
   /** Hunks opened or folded by hand, overriding whether they're viewed. */
-  const [open, setOpen] = createSignal<Record<string, boolean>>({})
+  const [open, setOpen] = createStore<Record<string, boolean>>({})
   const [draft, setDraft] = createSignal<Draft>()
   const [draftText, setDraftText] = createSignal('')
 
@@ -552,10 +553,10 @@ export function ReviewPage(props: {
   const isViewed = (id: string) => viewed().has(id)
   const total = () => placed().size
   const viewedCount = () => [...placed().keys()].filter(isViewed).length
-  const isOpen = (id: string) => open()[id] ?? !isViewed(id)
+  const isOpen = (id: string) => open[id] ?? !isViewed(id)
   const setViewed = (ids: string[], on: boolean) => {
     update((s) => ({ ...s, viewed: on ? [...new Set([...s.viewed, ...ids])] : s.viewed.filter((v) => !ids.includes(v)) }))
-    setOpen((o) => ({ ...o, ...Object.fromEntries(ids.map((id) => [id, !on])) }))
+    setOpen(Object.fromEntries(ids.map((id) => [id, !on])))
   }
 
   // ── Comments and questions ──
@@ -971,7 +972,7 @@ export function ReviewPage(props: {
                         draft={draft()?.hunk === id ? draft() : undefined}
                         draftText={draftText()}
                         canAsk={!!props.onSend}
-                        onToggle={() => setOpen((o) => ({ ...o, [id]: !isOpen(id) }))}
+                        onToggle={() => setOpen(id, !isOpen(id))}
                         onOpen={openerFor(p.file)}
                         onViewed={(on) => setViewed([id], on)}
                         onSelect={(from, to, start, end) => selectDraft(id, from, to, start, end)}
@@ -992,7 +993,7 @@ export function ReviewPage(props: {
                   }
                   const foldAll = () => {
                     const open = !ids().some(isOpen)
-                    setOpen((o) => ({ ...o, ...Object.fromEntries(ids().map((id) => [id, open])) }))
+                    setOpen(Object.fromEntries(ids().map((id) => [id, open])))
                   }
                   const file = s.id.startsWith('file:') ? s.hunks[0]?.file : undefined
                   // As read last: a hunk that didn't change keeps the file it came with, and its counts from then.
@@ -1205,6 +1206,8 @@ function HunkView(props: {
   const [shown, setShown] = createSignal(false)
   const nothing = () => !props.rows.length
   const folded = () => f().generated && !shown()
+  /** Open at some point: from then on its rows stay on the page, hidden while it's folded, so unfolding doesn't build them again. */
+  const opened = createMemo((was: boolean) => was || props.open, false)
   // Highlighted once it's open and near the screen, so a long review only highlights what's looked at.
   const [near, setNear] = createSignal(false)
   let box!: HTMLDivElement
@@ -1214,7 +1217,7 @@ function HunkView(props: {
     onCleanup(() => seen.disconnect())
   })
   const [html] = createResource(
-    () => near() && props.open && !folded() && props.rows.length > 0 && { rows: props.rows, lang: languageOf(f().path) },
+    () => near() && opened() && !folded() && props.rows.length > 0 && { rows: props.rows, lang: languageOf(f().path) },
     async ({ rows, lang }) => ({ rows, lines: await highlightRows(rows, lang) }),
   )
   // What changed, drawn as shapes behind the text once the rows are on the page, and again whenever they move.
@@ -1224,8 +1227,9 @@ function HunkView(props: {
   let queued = 0
   const draw = () => {
     queued = 0
-    // Not until it's near the screen: measuring a hunk lays it out, which is what skipping off-screen ones saves.
-    if (!near()) return
+    // Not until it's near the screen: measuring a hunk lays it out, which is what skipping off-screen ones saves. Nor while
+    // it's folded: its marks stay as they were, and its rows resizing as it unfolds draws them again.
+    if (!near() || !props.open) return
     const el = body()
     if (!el || !marks || !el.isConnected) return
     const at = el.getBoundingClientRect()
@@ -1476,96 +1480,98 @@ function HunkView(props: {
         </div>
       </Show>
 
-      <Show when={props.open}>
-        <Show
-          when={!nothing() && !folded()}
-          fallback={
-            <p class="px-4 py-2 text-xs text-fg-3">
-              {f().binary
-                ? 'Binary file.'
-                : f().truncated
-                  ? 'Too big to show here.'
-                  : folded()
-                    ? 'Generated file, folded. '
-                    : f().status === 'renamed'
-                      ? 'Renamed, with no changes to its lines.'
-                      : 'No lines changed.'}
-              <Show when={folded()}>
-                <button onClick={() => setShown(true)} class="underline-offset-2 hover:text-fg-2 hover:underline">
-                  Show it
-                </button>
+      <Show when={opened()}>
+        <div classList={{ hidden: !props.open }}>
+          <Show
+            when={!nothing() && !folded()}
+            fallback={
+              <p class="px-4 py-2 text-xs text-fg-3">
+                {f().binary
+                  ? 'Binary file.'
+                  : f().truncated
+                    ? 'Too big to show here.'
+                    : folded()
+                      ? 'Generated file, folded. '
+                      : f().status === 'renamed'
+                        ? 'Renamed, with no changes to its lines.'
+                        : 'No lines changed.'}
+                <Show when={folded()}>
+                  <button onClick={() => setShown(true)} class="underline-offset-2 hover:text-fg-2 hover:underline">
+                    Show it
+                  </button>
+                </Show>
+              </p>
+            }
+          >
+            {/* Its own stacking context, so the marks can go under the rows' text but stay above the page. */}
+            <div ref={setBody} class="relative isolate font-mono text-xs leading-5">
+              <svg ref={marks} class="pointer-events-none absolute inset-0 -z-10 size-full overflow-visible" aria-hidden="true" />
+              <Show when={offer()}>
+                {(o) => (
+                  <button
+                    onPointerDown={(e) => e.preventDefault()}
+                    onClick={commentOnSelection}
+                    style={{ left: `${Math.max(0, o().x - 40)}px`, top: `${o().y + 4}px` }}
+                    class="absolute z-10 flex items-center gap-1 rounded-md bg-primary px-2 py-1 font-sans text-xs text-on-primary shadow-(--shadow-pop)"
+                  >
+                    <MessageSquarePlus class="size-3" /> Comment
+                  </button>
+                )}
               </Show>
-            </p>
-          }
-        >
-          {/* Its own stacking context, so the marks can go under the rows' text but stay above the page. */}
-          <div ref={setBody} class="relative isolate font-mono text-xs leading-5">
-            <svg ref={marks} class="pointer-events-none absolute inset-0 -z-10 size-full overflow-visible" aria-hidden="true" />
-            <Show when={offer()}>
-              {(o) => (
-                <button
-                  onPointerDown={(e) => e.preventDefault()}
-                  onClick={commentOnSelection}
-                  style={{ left: `${Math.max(0, o().x - 40)}px`, top: `${o().y + 4}px` }}
-                  class="absolute z-10 flex items-center gap-1 rounded-md bg-primary px-2 py-1 font-sans text-xs text-on-primary shadow-(--shadow-pop)"
-                >
-                  <MessageSquarePlus class="size-3" /> Comment
-                </button>
-              )}
-            </Show>
-            <For each={props.rows}>
-              {(r, i) => {
-                if (r.kind === 'hunk') return null
-                const anchor = anchorOf(r)
-                const comments = () => props.comments.filter((c) => c.to === anchor)
-                const questions = () => props.questions.filter((q) => q.to === anchor)
-                const editing = () => props.draft && props.draft.to === i()
-                return (
-                  <>
-                    <CodeRow
-                      data-row={i()}
-                      kind={r.kind}
-                      numbers={[r.old, r.new]}
-                      sign
-                      gutter={{
-                        onPointerDown: (e) => selectFrom(e, i()),
-                        title: 'Select this line: drag to select more, shift-click to extend',
-                        class: 'cursor-pointer',
-                      }}
-                    >
-                      {/* The browser's own selection colour is hidden on the code: it's drawn with the marks, as a shape. */}
-                      <span class="min-w-0 flex-1 whitespace-pre-wrap break-all pr-3 text-fg selection:bg-transparent">
-                        <Code line={r} html={lineHtml(i())} ref={(el) => (codeEls[i()] = el)} onDrawn={redraw} />
-                      </span>
-                    </CodeRow>
-                    <Show when={editing()}>
-                      <DraftBox
-                        text={props.draftText}
-                        editing={!!props.draft?.id}
-                        lines={props.draft!.to - props.draft!.from + 1}
-                        canAsk={props.canAsk}
-                        onText={props.onDraftText}
-                        onComment={props.onComment}
-                        onAsk={props.onAsk}
-                        onCancel={props.onCancel}
-                      />
-                    </Show>
-                    <For each={questions()}>
-                      {(q) => <QuestionBox question={q} answer={props.answers.get(q.id)} onRemove={() => props.onRemoveQuestion(q.id)} />}
-                    </For>
-                    <For each={comments()}>
-                      {(c) => (
-                        <Show when={props.draft?.id !== c.id}>
-                          <CommentBox note={c} onEdit={() => props.onEdit(c)} onRemove={() => props.onRemove(c.id)} />
-                        </Show>
-                      )}
-                    </For>
-                  </>
-                )
-              }}
-            </For>
-          </div>
-        </Show>
+              <For each={props.rows}>
+                {(r, i) => {
+                  if (r.kind === 'hunk') return null
+                  const anchor = anchorOf(r)
+                  const comments = () => props.comments.filter((c) => c.to === anchor)
+                  const questions = () => props.questions.filter((q) => q.to === anchor)
+                  const editing = () => props.draft && props.draft.to === i()
+                  return (
+                    <>
+                      <CodeRow
+                        data-row={i()}
+                        kind={r.kind}
+                        numbers={[r.old, r.new]}
+                        sign
+                        gutter={{
+                          onPointerDown: (e) => selectFrom(e, i()),
+                          title: 'Select this line: drag to select more, shift-click to extend',
+                          class: 'cursor-pointer',
+                        }}
+                      >
+                        {/* The browser's own selection colour is hidden on the code: it's drawn with the marks, as a shape. */}
+                        <span class="min-w-0 flex-1 whitespace-pre-wrap break-all pr-3 text-fg selection:bg-transparent">
+                          <Code line={r} html={lineHtml(i())} ref={(el) => (codeEls[i()] = el)} onDrawn={redraw} />
+                        </span>
+                      </CodeRow>
+                      <Show when={editing()}>
+                        <DraftBox
+                          text={props.draftText}
+                          editing={!!props.draft?.id}
+                          lines={props.draft!.to - props.draft!.from + 1}
+                          canAsk={props.canAsk}
+                          onText={props.onDraftText}
+                          onComment={props.onComment}
+                          onAsk={props.onAsk}
+                          onCancel={props.onCancel}
+                        />
+                      </Show>
+                      <For each={questions()}>
+                        {(q) => <QuestionBox question={q} answer={props.answers.get(q.id)} onRemove={() => props.onRemoveQuestion(q.id)} />}
+                      </For>
+                      <For each={comments()}>
+                        {(c) => (
+                          <Show when={props.draft?.id !== c.id}>
+                            <CommentBox note={c} onEdit={() => props.onEdit(c)} onRemove={() => props.onRemove(c.id)} />
+                          </Show>
+                        )}
+                      </For>
+                    </>
+                  )
+                }}
+              </For>
+            </div>
+          </Show>
+        </div>
       </Show>
     </div>
   )
