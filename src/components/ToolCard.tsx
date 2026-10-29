@@ -1,5 +1,5 @@
-import { For, Match, Show, Switch, createEffect, createSignal, on, onCleanup, type JSX } from 'solid-js'
-import { highlightWhenSeen, languageOf } from '../highlight.ts'
+import { For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, type JSX } from 'solid-js'
+import { highlightWhenSeen, highlighted, languageOf } from '../highlight.ts'
 import { Check, ChevronRight, CircleAlert, Loader2, Shield, Webhook } from '../icons'
 import type { Task } from '../tasks.ts'
 import { useChecking } from '../useChat.ts'
@@ -196,17 +196,29 @@ function Answers(props: { questions: Question[]; answers: (string | undefined)[]
   )
 }
 
-export function ToolInput(props: { name: string; input: Input }) {
+export function ToolInput(props: {
+  name: string
+  input: Input
+  /** Still being written: code follows its newest line, highlighted as that catches up. */
+  live?: boolean
+}) {
+  const Code = (p: { text: string; lang?: string }) =>
+    props.live ? <LiveOutput text={p.text} lang={p.lang} class="max-h-96" /> : <Pre text={p.text} lang={p.lang} />
   return (
-    <Switch fallback={<Pre text={JSON.stringify(props.input, null, 2)} lang="json" />}>
+    <Switch fallback={<Code text={JSON.stringify(props.input, null, 2)} lang="json" />}>
       <Match when={props.name === 'Bash'}>
-        <Pre text={str(props.input.command)} lang="shellscript" />
+        <Code text={str(props.input.command)} lang="shellscript" />
       </Match>
       <Match when={props.name === 'Edit'}>
-        <Diff before={str(props.input.old_string)} after={str(props.input.new_string)} />
+        <Diff
+          before={str(props.input.old_string)}
+          after={props.live && props.input.new_string === undefined ? undefined : str(props.input.new_string)}
+          lang={languageOf(str(props.input.file_path))}
+          live={props.live}
+        />
       </Match>
       <Match when={props.name === 'Write'}>
-        <Pre text={str(props.input.content)} lang={languageOf(str(props.input.file_path))} />
+        <Code text={str(props.input.content)} lang={languageOf(str(props.input.file_path))} />
       </Match>
       <Match when={props.name === 'SendMessage' && typeof props.input.message === 'string'}>
         <Markdown text={str(props.input.message)} />
@@ -530,17 +542,36 @@ function Plain(props: ToolProps & { fill?: boolean }) {
 
 const preClass = 'overflow-auto rounded-lg bg-surface px-3 py-2.5 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-fg-2'
 
-/** Streaming output that stays scrolled to the bottom unless the user scrolls up. */
-function LiveOutput(props: { text: string; class: string }) {
+/**
+ * Text still arriving, staying scrolled to its newest line unless the user scrolls up. Given a language, it's
+ * highlighted as far as that has caught up.
+ */
+function LiveOutput(props: { text: string; class: string; lang?: string }) {
   let el!: HTMLPreElement
+  let code!: HTMLElement
   let pinned = true
+  const lit = highlighted(() => props.text, () => props.lang, false)
+  /** What arrived after the highlighted part, plain. */
+  let tail = new Text()
+  let shown: string | undefined
+  // Filled by hand rather than by Solid, since highlighting replaces what's inside.
   createEffect(() => {
-    void props.text
+    const l = lit()
+    const text = props.text
+    const from = l && text.startsWith(l.code) ? l : undefined
+    if (from?.code !== shown || !tail.parentNode) {
+      if (from) code.innerHTML = from.html
+      else code.textContent = ''
+      tail = new Text()
+      code.append(tail)
+      shown = from?.code
+    }
+    tail.data = text.slice(from?.code.length ?? 0)
     if (pinned) el.scrollTop = el.scrollHeight
   })
   return (
     <pre ref={el} onScroll={() => (pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 8)} class={`${preClass} ${props.class}`}>
-      {props.text}
+      <code ref={code} />
     </pre>
   )
 }
@@ -606,17 +637,48 @@ export function Pre(props: {
   )
 }
 
-function Diff(props: { before: string; after: string }) {
-  const line = (sign: string, l: string, tone: string) => (
+/**
+ * An edit: the old text, then the new. `after` undefined: the new text hasn't started arriving. Each side is
+ * highlighted whole, so a string or comment that spans lines is still one; a line shows plain until it's caught up.
+ */
+function Diff(props: { before: string; after?: string; lang?: string; live?: boolean }) {
+  /**
+   * Each line of a side, with its HTML once highlighting has caught up with all of it. Memos, and lines that didn't
+   * change kept as they were, since while it streams the input changes every frame but mostly at its end.
+   */
+  const side = (text: () => string) => {
+    const code = createMemo(text)
+    const lit = highlighted(code, () => props.lang, !props.live)
+    let last: { text: string; html?: string }[] = []
+    return createMemo(() => {
+      const t = code()
+      const l = lit()
+      const html = l && t.startsWith(l.code) ? l.html.split('<br>') : []
+      // The last highlighted line may have been cut off part way, unless the highlight is of the whole text.
+      const whole = l?.code === t ? html.length : html.length - 1
+      last = t.split('\n').map((text, i) => {
+        const h = i < whole ? html[i] : undefined
+        return last[i]?.text === text && last[i].html === h ? last[i] : { text, html: h }
+      })
+      return last
+    })
+  }
+  const before = side(() => props.before)
+  const after = side(() => props.after ?? '')
+  const line = (sign: string, l: () => { text: string; html?: string }, tone: string) => (
     <div class={`flex px-3 ${tone}`}>
       <span class="w-4 shrink-0 select-none opacity-70">{sign}</span>
-      <span class="min-w-0 whitespace-pre-wrap break-words text-fg-2">{l}</span>
+      <Show when={l().html !== undefined} fallback={<span class="min-w-0 whitespace-pre-wrap break-words text-fg-2">{l().text}</span>}>
+        <span class="min-w-0 whitespace-pre-wrap break-words text-fg-2" innerHTML={l().html} />
+      </Show>
     </div>
   )
   return (
     <div class="overflow-auto rounded-lg bg-surface py-2 font-mono text-xs leading-relaxed">
-      <For each={props.before.split('\n')}>{(l) => line('−', l, 'bg-danger/10 text-danger')}</For>
-      <For each={props.after.split('\n')}>{(l) => line('+', l, 'bg-ok/10 text-ok')}</For>
+      <Index each={before()}>{(l) => line('−', l, 'bg-danger/10 text-danger')}</Index>
+      <Show when={props.after !== undefined}>
+        <Index each={after()}>{(l) => line('+', l, 'bg-ok/10 text-ok')}</Index>
+      </Show>
     </div>
   )
 }
