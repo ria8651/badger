@@ -55,6 +55,8 @@ export function Composer(props: {
   canBackground: () => boolean
   onSubmit: (text: string, attachments: DraftAttachments) => void
   ref?: (controls: ComposerControls) => void
+  /** What the empty box says, if not that it messages Claude. */
+  placeholder?: string
 }) {
   const state = props.chat.state
   const [text, setText] = createSignal(state.draft)
@@ -215,7 +217,7 @@ export function Composer(props: {
           }
         }}
         rows={Math.min(10, Math.max(2, text().split('\n').length))}
-        placeholder={state.running ? 'Queue a message' : 'Message Claude'}
+        placeholder={props.placeholder ?? (state.running ? 'Queue a message' : 'Message Claude')}
         class="block max-h-[calc(10lh+0.875rem)] min-h-[calc(2lh+0.875rem)] w-full resize-none bg-transparent px-4 pt-3.5 text-message leading-relaxed outline-none pointer-coarse:text-base [field-sizing:content] placeholder:text-fg-3"
       />
       {/* A narrow composer keeps attaching and sending in the bar and puts the rest in a panel; wide ones show it all.

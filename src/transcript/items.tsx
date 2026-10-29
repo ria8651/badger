@@ -1,5 +1,5 @@
 import { For, Show, createSignal, onCleanup, type JSX } from 'solid-js'
-import { BookOpen, ChevronRight, CircleAlert, Columns3, FileText, KeyRound, Scissors, Webhook } from '../icons'
+import { BookOpen, Bot, ChevronRight, CircleAlert, Columns3, FileText, KeyRound, Scissors, Webhook } from '../icons'
 import type { CardContext } from '../../shared/cardContext.ts'
 import type { Move } from '../../shared/forkNote.ts'
 import type { CardStatus } from '../../shared/protocol.ts'
@@ -235,6 +235,8 @@ export function UserMessage(props: {
   context?: ContextChip[]
   /** Given, an open paste or context offers to open in a panel. */
   onOpenAttachment?: (part: string) => void
+  /** The subagent it was sent to, if it went to one through the chat. */
+  to?: string
   /** Replaces the spacing it has in the transcript. */
   class?: string
   /** How tall it gets before it's clamped. */
@@ -247,6 +249,12 @@ export function UserMessage(props: {
   return (
     <div class={`flex items-center justify-start gap-1 ${props.class ?? 'mt-8 mb-4 first:mt-0'}`}>
       <div class="-ml-4 max-w-[80%] min-w-0 bg-surface rounded-2xl px-4 py-2.5 text-message leading-relaxed">
+        <Show when={props.to}>
+          <div class="mb-1 flex min-w-0 items-center gap-1 text-xs text-fg-3">
+            <Bot class="size-3.5 shrink-0" />
+            <span class="truncate">To {props.to}</span>
+          </div>
+        </Show>
         <Show when={props.pastes?.length || props.images?.length || props.card || props.move || props.context?.length}>
           <Attachments
             pastes={props.pastes ?? []}

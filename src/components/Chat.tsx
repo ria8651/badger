@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack, type Accessor, type JSX } from 'solid-js'
 import { FolderX, GitBranch, MonitorOff, Pencil, TextQuote, WifiOff, X } from '../icons'
 import type { DraftAttachments, PermissionMode, QueuedMessage } from '../../shared/protocol.ts'
 import { chatActions } from '../actions.ts'
@@ -10,10 +10,11 @@ import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '.
 import { lastModel, modelValue, models, setLastModel } from '../models.ts'
 import { navigate } from '../router.tsx'
 import { createStickyScroll } from '../stickyScroll.ts'
+import { sentToSubagentBy } from '../../shared/toSubagent.ts'
 import { cardOf } from '../stores/cards.ts'
 import { sessionById } from '../stores/sessions.ts'
 import { knownRoot, workspaceOf, type Ws } from '../terminals.ts'
-import { Checking, ChildChats, NO_ATTACHMENTS, createChat, createChildChats } from '../useChat.ts'
+import { Checking, ChildChats, NO_ATTACHMENTS, createChat, createChildChats, type Chat as ChatHandle } from '../useChat.ts'
 import { ChatHeader, createGitStatus } from './ChatHeader.tsx'
 import { Composer, type ComposerControls } from './Composer.tsx'
 import { FolderPicker } from './FolderPicker.tsx'
@@ -25,10 +26,12 @@ import { showError } from './Popover.tsx'
 import { TaskTray, trayItems, waitingOnTask } from './TaskTray.tsx'
 import { reveal, revealed, toolLabel } from './ToolCard.tsx'
 import { Transcript } from './Transcript.tsx'
-import { TaskPane } from '../transcript/agents.tsx'
+import { AgentConversation, OpenNested, TaskPane, type Agent } from '../transcript/agents.tsx'
 import { AttachmentPane, attachmentOf } from '../transcript/attachments.tsx'
 import { BtwPane } from './Btw.tsx'
-import { createIndex } from '../transcript/context.ts'
+import { TranscriptIndex, createIndex } from '../transcript/context.ts'
+import { within, type Index } from '../transcript/model.ts'
+import { NestedPane } from './NestedPane.tsx'
 import { UserMessage } from '../transcript/items.tsx'
 import { Workspace, type ChatPanes } from './Workspace.tsx'
 import { Loading, Notice, touch, type Option } from './ui.tsx'
@@ -51,8 +54,13 @@ export function Chat(props: {
   embedded?: boolean
   /** Called once, with a way to put the cursor in its composer. */
   onReady?: (focus: () => void) => void
+  /**
+   * Shown as one of this chat's subagents, by the chat's own view, which has the chat's index and the subagent as a
+   * chat of its own (see agentChat). Embedded: it's in a panel beside the chat.
+   */
+  host?: { chat: ChatHandle; index: Accessor<Index>; agent: Agent; id: string }
 }) {
-  const chat = createChat(props.sessionId)
+  const chat = props.host?.chat ?? createChat(props.sessionId)
   const state = chat.state
   /** The chat as the sidebar lists it, for the header's title, move, rename and archive. Absent until it's listed. */
   const session = () => sessionById(props.sessionId)
@@ -115,11 +123,13 @@ export function Chat(props: {
   const where = () => (isScratch(cwd()) ? 'No folder' : (cwd() ?? ''))
 
   // Shared by the transcript and the task tray, so both read the chat's messages once.
-  const index = createIndex(() => state.messages, () => props.sessionId)
-  const tasks = createMemo(() => trayItems(index(), state.running, state.background, cwd()))
-  const children = createChildChats(state)
+  const index = props.host?.index ?? createIndex(() => state.messages, () => props.sessionId)
+  // A subagent's own tasks show in its conversation, and the chat's with the chat.
+  const tasks = createMemo(() => (props.host ? [] : trayItems(index(), state.running, state.background, cwd())))
+  // A subagent's panel shows none of the chat's child chats, so it needn't follow them a second time.
+  const children = props.host ? { state: () => undefined, prompts: () => [] } : createChildChats(state)
 
-  const sticky = createStickyScroll(`chat:${untrack(() => props.sessionId)}`)
+  const sticky = createStickyScroll(`chat:${untrack(() => props.sessionId)}${untrack(() => (props.host ? `:${props.host.id}` : ''))}`)
   let content!: HTMLDivElement
   let bottom!: HTMLDivElement
   let scroller!: HTMLDivElement
@@ -157,6 +167,8 @@ export function Chat(props: {
     if (w) openView(w, { kind: 'task', session: props.sessionId, id: toolUseId })
     else jump(toolUseId)
   }
+  /** What's waiting on the user here: the chat's prompts, or a subagent's, from its own work. */
+  const prompts = () => (props.host ? state.permissions.filter((p) => !!p.toolUseId && within(index(), p.toolUseId, props.host!.id)) : state.permissions)
   /** The plan waiting on the user, if Claude has proposed one. */
   const planPrompt = () => state.permissions.find((p) => p.toolName === 'ExitPlanMode')
   const openPlan = () => {
@@ -180,22 +192,35 @@ export function Chat(props: {
     if (fresh.length && wide()) untrack(openPlan)
   })
 
+  /** Whether a call started a nested chat, a subagent or a child chat, which open beside the chat as chats. */
+  const isNested = (id: string) => !!state.children[id] || ['Agent', 'Task'].includes(index().uses.get(id)?.name ?? '')
   const panes: ChatPanes = {
     label: (id) => {
       const t = tasks().find((t) => t.toolUseId === id)
-      return t?.description || t?.label || 'Task'
+      const use = index().uses.get(id)
+      return t?.description || String(use?.input.description ?? '') || (use && toolLabel(use.name)) || t?.label || 'Task'
     },
-    live: (id) => tasks().find((t) => t.toolUseId === id)?.status === 'running',
+    live: (id) => (state.children[id] ? !!children.state(state.children[id])?.running : tasks().find((t) => t.toolUseId === id)?.status === 'running'),
     render: (id, onReady) => (
-      <TaskPane
-        id={id}
-        index={index}
-        bashOutput={state.bashOutput}
-        running={state.running}
-        cwd={cwd()}
-        onShowInChat={() => jump(id)}
-        onReady={onReady}
-      />
+      <Show
+        when={isNested(id)}
+        fallback={<TaskPane id={id} index={index} bashOutput={state.bashOutput} running={state.running} cwd={cwd()} onShowInChat={() => jump(id)} onReady={onReady} />}
+      >
+        <ChildChats.Provider value={children.state}>
+          <NestedPane
+            sessionId={props.sessionId}
+            id={id}
+            chat={chat}
+            index={index}
+            child={state.children[id]}
+            bashOutput={state.bashOutput}
+            running={state.running}
+            cwd={cwd()}
+            onShowInChat={() => jump(id)}
+            onReady={onReady}
+          />
+        </ChildChats.Provider>
+      </Show>
     ),
     planWaiting: () => !!planPrompt(),
     renderPlan: (onReady) => (
@@ -254,7 +279,7 @@ export function Chat(props: {
   }
 
   /** A diff review chat shows the review in place of the conversation, until you switch. */
-  const isReview = () => !!session()?.review
+  const isReview = () => !props.host && !!session()?.review
   const [showConversation, setShowConversation] = createSignal(false)
   const reviewing = () => isReview() && !showConversation()
   const startReview = () =>
@@ -382,35 +407,48 @@ export function Chat(props: {
                   </Show>
                 }
               >
-                <ChildChats.Provider value={children.state}>
-                  <Checking.Provider value={(id) => state.checking.includes(id)}>
-                    <Transcript
-                      sessionId={props.sessionId}
-                      index={index}
-                      messages={state.messages}
-                      partial={state.partial}
-                      bashOutput={state.bashOutput}
-                      running={working()}
-                      working={working() && state.permissions.length === 0 && children.prompts().length === 0}
-                      cwd={cwd()}
-                      children={state.children}
-                      onFork={setForking}
-                      onOpenAttachment={beside() ? openAttachment : undefined}
-                      compacting={state.compacting}
-                      onLogin={() => {
-                        const w = ws()
-                        const dir = cwd()
-                        if (w && dir) void openTerminal(w, props.sessionId, dir, undefined, 'claude auth login').catch((e: Error) => showError("Couldn't open a terminal", e.message))
-                      }}
-                      onRetry={(retry) =>
-                        void api.fork(props.sessionId, { at: retry.at, draft: retry.text }).then(
-                          ({ sessionId }) => openChat(sessionId),
-                          (err: Error) => showError("Couldn't fork the chat", err.message),
-                        )
-                      }
-                    />
-                  </Checking.Provider>
-                </ChildChats.Provider>
+                <OpenNested.Provider value={() => (beside() ? openTask : undefined)}>
+                  <ChildChats.Provider value={children.state}>
+                    <Checking.Provider value={(id) => state.checking.includes(id)}>
+                      <Show
+                        when={props.host}
+                        fallback={
+                          <Transcript
+                            sessionId={props.sessionId}
+                            index={index}
+                            messages={state.messages}
+                            partial={state.partial}
+                            bashOutput={state.bashOutput}
+                            running={working()}
+                            working={working() && prompts().length === 0 && children.prompts().length === 0}
+                            cwd={cwd()}
+                            children={state.children}
+                            onFork={setForking}
+                            onOpenAttachment={beside() ? openAttachment : undefined}
+                            compacting={state.compacting}
+                            onLogin={() => {
+                              const w = ws()
+                              const dir = cwd()
+                              if (w && dir) void openTerminal(w, props.sessionId, dir, undefined, 'claude auth login').catch((e: Error) => showError("Couldn't open a terminal", e.message))
+                            }}
+                            onRetry={(retry) =>
+                              void api.fork(props.sessionId, { at: retry.at, draft: retry.text }).then(
+                                ({ sessionId }) => openChat(sessionId),
+                                (err: Error) => showError("Couldn't fork the chat", err.message),
+                              )
+                            }
+                          />
+                        }
+                      >
+                        {(host) => (
+                          <TranscriptIndex.Provider value={index}>
+                            <AgentConversation agent={host().agent} bashOutput={state.bashOutput} cwd={cwd()} />
+                          </TranscriptIndex.Provider>
+                        )}
+                      </Show>
+                    </Checking.Provider>
+                  </ChildChats.Provider>
+                </OpenNested.Provider>
                 <Show when={forking()}>
                   {(at) => (
                     <ForkDialog
@@ -444,11 +482,23 @@ export function Chat(props: {
           >
             {/* Laid out like the transcript's own messages, since that's where they're headed. */}
             <For each={state.queued}>
-              {(m) => <Queued message={m} onEdit={() => unqueue(m.id, true)} onRemove={() => unqueue(m.id)} />}
+              {(m) => {
+                // One for a subagent says so, and can't be edited here: it would go back in as what Claude is asked to pass on.
+                const to = props.host ? undefined : sentToSubagentBy(m.text)
+                const relayed = !!props.host || !!to
+                return (
+                  <Queued
+                    message={to ? { ...m, text: to.text } : m}
+                    to={to?.description}
+                    onEdit={relayed ? undefined : () => unqueue(m.id, true)}
+                    onRemove={() => unqueue(m.id)}
+                  />
+                )
+              }}
             </For>
             {/* Everything here hangs out as far as the composer, so prompts and notices read as part of it, not the transcript. */}
             <div class="-mx-[calc(1rem+1px)] flex min-h-0 flex-col gap-2">
-              <For each={state.permissions}>
+              <For each={prompts()}>
                 {(p) => (
                   <PermissionPrompt
                     sessionId={props.sessionId}
@@ -460,7 +510,7 @@ export function Chat(props: {
                   />
                 )}
               </For>
-              <For each={children.prompts()}>
+              <For each={props.host ? [] : children.prompts()}>
                 {({ child, tool, permission }) => (
                   <PermissionPrompt sessionId={child.id} permission={permission} cwd={child.state.cwd} from={toolLabel(tool) || 'Another chat'} />
                 )}
@@ -509,15 +559,18 @@ export function Chat(props: {
                 chat={chat}
                 machine={machine()}
                 cwd={cwd()}
-                disabled={state.gone || stranded()}
+                // A subagent is reached by its id, which isn't known until it has started.
+                disabled={state.gone || stranded() || (!!props.host && !props.host.agent.agentId())}
                 working={working()}
                 mode={mode()}
                 onMode={changeMode}
-                model={models()?.length ? modelValue(model(), models()!) : undefined}
+                // A subagent's model is its own; switching here would switch the chat's.
+                model={!props.host && models()?.length ? modelValue(model(), models()!) : undefined}
                 models={modelOptions()}
                 onModel={changeModel}
                 pendingCard={pendingCard()}
-                canBackground={() => state.running && waitingOnTask(index())}
+                canBackground={() => !props.host && state.running && waitingOnTask(index())}
+                placeholder={props.host ? 'Message the agent' : undefined}
                 onSubmit={send}
               />
             </div>
@@ -542,14 +595,18 @@ export function Chat(props: {
 }
 
 /** A message waiting for Claude's next break: your message as it'll appear, with ways to take it back. */
-function Queued(props: { message: QueuedMessage; onEdit: () => void; onRemove: () => void }) {
+function Queued(props: { message: QueuedMessage; to?: string; onEdit?: () => void; onRemove: () => void }) {
   const button = 'grid size-7 shrink-0 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:size-9'
   return (
     // Clamped shorter than in the transcript so a long one doesn't push the chat out of view above the composer.
-    <UserMessage text={props.message.text} pastes={props.message.pastes} images={props.message.images} class="mb-2" maxHeight="6lh">
-      <button type="button" onClick={props.onEdit} title="Edit" class={button}>
-        <Pencil class="size-3.5" />
-      </button>
+    <UserMessage text={props.message.text} to={props.to} pastes={props.message.pastes} images={props.message.images} class="mb-2" maxHeight="6lh">
+      <Show when={props.onEdit}>
+        {(edit) => (
+          <button type="button" onClick={edit()} title="Edit" class={button}>
+            <Pencil class="size-3.5" />
+          </button>
+        )}
+      </Show>
       <button type="button" onClick={props.onRemove} title="Remove" class={button}>
         <X class="size-3.5" />
       </button>

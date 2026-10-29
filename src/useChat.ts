@@ -1,6 +1,7 @@
 import { createContext, createMemo, mapArray, onCleanup, useContext } from 'solid-js'
 import { createStore, produce } from 'solid-js/store'
 import type { BackgroundTask, ClientEvent, ContextUsage, DraftAttachments, PendingPermission, PermissionMode, QueuedMessage, ServerEvent, WireMessage } from '../shared/protocol.ts'
+import { sentToSubagentBy, toSubagent } from '../shared/toSubagent.ts'
 import { socket } from './api.ts'
 
 export const NO_ATTACHMENTS: DraftAttachments = { pastes: [], images: [] }
@@ -245,6 +246,58 @@ export function createChat(sessionId: string) {
 }
 
 export type Chat = ReturnType<typeof createChat>
+
+/** What's typed to subagents and not sent, by chat and Agent call. Only in this tab: a subagent's chat is its parent's. */
+const [agentDrafts, setAgentDrafts] = createStore<Record<string, { text: string; attachments: DraftAttachments }>>({})
+
+/**
+ * A subagent as a chat of its own, inside the chat running it: it reads that chat's state, its own conversation
+ * being the messages from its call, and what's sent to it goes to that chat's Claude to pass on, since only Claude
+ * can reach a subagent. Stopping it stops just it.
+ */
+export function agentChat(
+  parent: Chat,
+  sessionId: string,
+  agent: { toolUseId: string; id: () => string | undefined; description: () => string; running: () => boolean; stop: () => void },
+): Chat {
+  const key = `${sessionId}:${agent.toolUseId}`
+  const draft = () => agentDrafts[key] ?? { text: '', attachments: NO_ATTACHMENTS }
+  const own: { [K in keyof ChatState]?: () => unknown } = {
+    draft: () => draft().text,
+    draftAttachments: () => draft().attachments,
+    running: agent.running,
+    partial: () => null,
+    makingWorktree: () => false,
+    compacting: () => undefined,
+    // The parent's: its context window and its errors.
+    // What's waiting to go to it, of the parent's queue.
+    queued: () =>
+      parent.state.queued.flatMap((q) => {
+        const sent = sentToSubagentBy(q.text)
+        return sent && sent.id === agent.id() ? [{ ...q, text: sent.text }] : []
+      }),
+    context: () => undefined,
+    error: () => null,
+  }
+  const state = new Proxy(parent.state, {
+    get: (target, prop, receiver) => (Object.hasOwn(own, prop) ? own[prop as keyof ChatState]!() : Reflect.get(target, prop, receiver)),
+  })
+  return {
+    ...parent,
+    state,
+    interrupt: agent.stop,
+    background: () => parent.background(agent.toolUseId),
+    send: (message: Outgoing) => {
+      const id = agent.id()
+      // SendMessage takes text, so big pastes go in it; images can't go.
+      const text = [message.text, ...(message.pastes ?? [])].filter(Boolean).join('\n\n')
+      if (id && text) parent.send({ text: toSubagent({ id, description: agent.description() }, text) })
+    },
+    clearDraft: () => setAgentDrafts(key, undefined!),
+    saveDraft: (text: string) => setAgentDrafts(key, { text, attachments: draft().attachments }),
+    attach: (change: (a: DraftAttachments) => DraftAttachments) => setAgentDrafts(key, { text: draft().text, attachments: change(draft().attachments) }),
+  }
+}
 
 /**
  * Chats this one started and waits on, subscribed once for its lifetime, so a child's tool call and its

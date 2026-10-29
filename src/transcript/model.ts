@@ -1,6 +1,7 @@
 import { parseCardContext, type CardContext } from '../../shared/cardContext.ts'
 import { splitMoveNote, splitSideNote, type Move } from '../../shared/forkNote.ts'
 import { unwrapPaste } from '../../shared/pastes.ts'
+import { sentToSubagentBy } from '../../shared/toSubagent.ts'
 import type { ImageAttachment, WireMessage } from '../../shared/protocol.ts'
 import type { ShownImage } from '../images.ts'
 import type { Task } from '../tasks.ts'
@@ -16,7 +17,8 @@ export type Block = { type: string; text?: string; thinking?: string; id?: strin
 export type ContentBlock = Block & { tool_use_id?: string; content?: unknown; is_error?: boolean; source?: { type: string; media_type: string; data?: string; url?: string } }
 
 export type Item =
-  | { kind: 'user'; text: string; pastes?: string[]; images?: ShownImage[] }
+  /** `to`: the subagent it went to, for one the user sent a subagent through the chat. */
+  | { kind: 'user'; text: string; pastes?: string[]; images?: ShownImage[]; to?: string }
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; id: string; name: string; input: Record<string, unknown> }
@@ -71,6 +73,8 @@ export function messageItems(m: WireMessage): Item[] {
     if (m.isMeta || m.isSynthetic) return []
     // The turn's last line says it was interrupted.
     if (raw.startsWith('[Request interrupted by user')) return []
+    const relayed = sentToSubagentBy(raw)
+    if (relayed) return [{ kind: 'user', text: relayed.text, to: relayed.description }]
     const output = commandOutput(raw)
     if (output !== undefined) return output ? [{ kind: 'output', text: output }] : []
     const { text, pastes, images } = userText(m)
@@ -167,6 +171,8 @@ export interface Index {
   uses: Map<string, { name: string; input: Record<string, unknown> }>
   /** What Claude Code added about calls, by tool_use_id: a Skill call's instructions, hooks' context and failures. */
   context: Map<string, ToolContext>
+  /** Subagents' Agent calls, by agent id. */
+  agents: Map<string, string>
 }
 
 /** Adds context about a call to the index's. */
@@ -270,14 +276,22 @@ export function buildView(messages: WireMessage[], nested: boolean) {
   // A refused reply is withdrawn when another model answers instead.
   const retracted = new Set(messages.flatMap((m) => (m.subtype === 'model_refusal_fallback' && Array.isArray(m.retracted_message_uuids) ? m.retracted_message_uuids : [])))
   let items = messages
-    .filter((m) => !retracted.has(m.uuid))
+    .filter((m) => !retracted.has(m.uuid) && !(nested && isNoise(m, messages)))
     .flatMap(itemsFor)
     .filter((i) => !attached.has(i))
   items = tidyCompactions(items)
-  // A subagent's prompt is shown with the call that started it; only messages sent to it later stay.
-  const prompt = nested ? items.find((i) => i.kind === 'user') : undefined
+  // A subagent's prompt is shown with the call that started it, so it goes from its first message; ones sent to it later stay.
+  const prompt = nested && messages[0]?.type === 'user' ? itemsFor(messages[0]).find((i) => i.kind === 'user') : undefined
   return { items: prompt ? items.filter((i) => i !== prompt) : items, idleUntil, extras, promptIds, forkAt, interrupted, shownError, answeredBy, summaries }
 }
+
+/**
+ * In a subagent's conversation, something that reads as a message to it but isn't: only its prompt and what's sent
+ * to it are. The rest is Claude Code talking to it, e.g. a background task's notification, which neither the SDK's
+ * stream nor its reader of subagents' transcripts marks as meta.
+ */
+const isNoise = (m: WireMessage, messages: WireMessage[]) =>
+  m.type === 'user' && m !== messages[0] && sentToSubagent(m) === undefined && itemsFor(m).some((i) => i.kind === 'user')
 
 /** What went in with a prompt besides what the user typed. */
 export interface PromptExtras {
@@ -356,9 +370,7 @@ export function collectResults(m: WireMessage, results: Map<string, ToolResult>)
 
 /** A message Claude sent a subagent while it worked, without the framing Claude Code wraps it in. Claude Code marks these meta. */
 export function sentToSubagent(m: WireMessage): string | undefined {
-  const content = (m.message as { content?: unknown })?.content
-  if (typeof content !== 'string') return
-  const sent = content.match(/^The coordinator sent a message while you were working:\n([\s\S]*?)(?:\n+Address this before completing your current task\.)?$/)
+  const sent = plainText(m).match(/^The coordinator sent a message while you were working:\n([\s\S]*?)(?:\n+Address this before completing your current task\.)?$/)
   return sent?.[1].trim() || undefined
 }
 
@@ -435,6 +447,13 @@ export function agentLabel(input: Record<string, unknown>): string {
   return type && type !== 'general-purpose' ? type : 'Agent'
 }
 
+
+/** The agent id in an Agent call's result, which Claude Code adds for SendMessage. */
+export function agentIdIn(content: unknown): string | undefined {
+  const text = typeof content === 'string' ? content : Array.isArray(content) ? content.map((b) => (b?.type === 'text' ? b.text : '')).join('\n') : ''
+  // The last: Claude Code adds it after the report, which could mention one too.
+  return [...text.matchAll(/\bagentId: ([\w-]+)/g)].at(-1)?.[1]
+}
 
 /** A foreground agent's report as Claude received it, without the framing around it. */
 export function handBack(text: string): string {

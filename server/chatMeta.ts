@@ -81,10 +81,15 @@ export class ChatMeta {
       .run(child.sessionId, child.parentId, child.toolUseId, child.kind, Date.now())
   }
 
-  /** Every child chat's id, to keep them out of the sidebar. */
-  childIds(): Set<string> {
-    const rows = this.db.sql.prepare('SELECT session_id FROM child_sessions').all() as { session_id: string }[]
-    return new Set(rows.map((r) => r.session_id))
+  /** Every child chat: its parent, the call that started it there, and what it's for, e.g. merge. */
+  allChildren(): { sessionId: string; parentId: string; toolUseId: string; kind: string }[] {
+    const rows = this.db.sql.prepare('SELECT session_id, parent_session, tool_use_id, kind FROM child_sessions').all() as {
+      session_id: string
+      parent_session: string
+      tool_use_id: string
+      kind: string
+    }[]
+    return rows.map((r) => ({ sessionId: r.session_id, parentId: r.parent_session, toolUseId: r.tool_use_id, kind: r.kind }))
   }
 
   /** A chat's children by the tool call that started each one. */

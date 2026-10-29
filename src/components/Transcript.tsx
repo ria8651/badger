@@ -121,6 +121,7 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
         return (
           <UserMessage
             text={item.text}
+            to={item.to}
             pastes={item.pastes}
             images={item.images}
             card={view().extras.get(item)?.card}
@@ -140,7 +141,7 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
         return <Thinking text={item.text} />
       case 'tool': {
         const child = props.children?.[item.id]
-        if (child) return <ChildRun sessionId={child} name={item.name} result={index().results.get(item.id)} />
+        if (child) return <ChildRun id={item.id} sessionId={child} name={item.name} result={index().results.get(item.id)} />
         if (item.name === 'Agent' || item.name === 'Task') {
           return <AgentRun id={item.id} input={item.input} bashOutput={props.bashOutput} running={props.running} cwd={props.cwd} />
         }

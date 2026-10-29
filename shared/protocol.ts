@@ -100,6 +100,21 @@ export interface SessionSummary {
   sideOf?: string
   /** For a side chat, when it was forked: it knows its parent as it was then. */
   forkedAt?: number
+  /** Its subagents and child chats running now. */
+  nested?: NestedChat[]
+}
+
+/**
+ * A conversation running inside a chat, listed under it while it runs: a subagent Claude started, or a chat a
+ * tool call started and waits on, like a merge. Either shows inside the call that started it.
+ */
+export interface NestedChat {
+  /** The tool call that started it. */
+  toolUseId: string
+  /** What it's doing: a subagent's description, or what a child chat is for. */
+  title: string
+  /** A child chat's own id. A subagent runs in its parent's process, so it has none. */
+  sessionId?: string
 }
 
 /** How full a chat's context window is, as Claude Code's /context counts it. */
@@ -135,18 +150,6 @@ export interface WorktreeStatus {
   unmerged: number
   /** The main checkout's branch (or short hash, detached), which `unmerged` is counted against. */
   base: string
-}
-
-/** Work in any git checkout that hasn't landed anywhere yet: what a review looks at. */
-export interface ChangesStatus {
-  /** Its branch, or its commit's short hash when HEAD is detached. */
-  branch: string
-  /** Files with uncommitted changes. */
-  changes: number
-  /** What `ahead` is counted against: the main checkout's branch for a worktree, otherwise the branch's upstream, if it has one. */
-  base?: string
-  /** Commits on HEAD that `base` doesn't have. */
-  ahead: number
 }
 
 /** Where a checkout stands, for the bar above a chat: what's uncommitted, and how it compares with its upstream and, in a worktree, the main checkout. */

@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { accessSync, constants, existsSync, mkdirSync, writeFileSync, statSync } from 'node:fs'
 import { appendFile, mkdir, open, readFile, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import type { ChangesStatus, GitStatus, WorktreeStatus } from '../shared/protocol.ts'
+import type { GitStatus, WorktreeStatus } from '../shared/protocol.ts'
 import { run } from './proc.ts'
 
 /** The git root of a directory (each worktree has its own), or the directory itself outside a repo. */
@@ -73,22 +73,6 @@ export async function worktreeStatus(path: string): Promise<WorktreeStatus> {
   const [branch, status, base] = await Promise.all([headName(path), git(path, 'status', '--porcelain'), headName(main)])
   const unmerged = await count(path, `${await git(main, 'rev-parse', 'HEAD')}..HEAD`)
   return { path, branch, changes: changed(status), unmerged, base }
-}
-
-/** Uncommitted changes and commits not yet on the base, for any git checkout. Undefined outside a repo. */
-export async function changesStatus(path: string): Promise<ChangesStatus | undefined> {
-  if (WORKTREE_PATH.test(path)) {
-    const wt = await worktreeStatus(path)
-    return { branch: wt.branch, changes: wt.changes, base: wt.base, ahead: wt.unmerged }
-  }
-  const status = await git(path, 'status', '--porcelain').catch(() => undefined)
-  if (status === undefined) return undefined
-  const [branch, upstream] = await Promise.all([
-    headName(path),
-    git(path, 'rev-parse', '--abbrev-ref', '@{upstream}').catch(() => ''),
-  ])
-  const ahead = upstream ? await count(path, '@{upstream}..HEAD') : 0
-  return { branch, changes: changed(status), base: upstream || undefined, ahead }
 }
 
 /**

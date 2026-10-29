@@ -25,9 +25,9 @@ export function chatActions(git?: GitStatus, cwd?: string): ChatAction[] {
     actions.push({
       label: 'Review changes',
       description: pending.length
-        ? `${pending.join(', ')}. A fresh chat reviews them and reports back here.`
+        ? `${pending.join(', ')}. A subagent reviews them and reports back here.`
         : `Nothing to review: no uncommitted changes${base ? `, and everything is already on ${base}` : ''}.`,
-      prompt: 'Have the changes here reviewed.',
+      prompt: 'Have a subagent review the changes here and report back.',
     })
   }
   if (git?.base && worktreeOf(cwd)) {

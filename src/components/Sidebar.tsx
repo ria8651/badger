@@ -1,12 +1,13 @@
 import { For, Show, createMemo, createSignal, type Component, type JSX } from 'solid-js'
 import { Dynamic } from 'solid-js/web'
-import { Archive, ArchiveRestore, Bell, BellOff, ChevronDown, ChevronRight, Columns3, FolderInput, Pencil, Plus, Radar as RadarIcon, Search, Settings as SettingsIcon, Trash2, X } from '../icons'
-import type { Card, SessionSummary } from '../../shared/protocol.ts'
+import { Archive, ArchiveRestore, Bell, BellOff, Bot, ChevronDown, ChevronRight, Columns3, FolderInput, MessagesSquare, Pencil, Plus, Radar as RadarIcon, Search, Settings as SettingsIcon, Trash2, X } from '../icons'
+import type { Card, NestedChat, SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { attention, needsYou, notifications, toggleNotifications } from '../attention.ts'
 import { basename, folderLabel } from '../folders.ts'
 import { focus, focusId, inFocus, setFocusId, unfiled } from '../focus.ts'
-import { onMachine } from '../machines.ts'
+import { openView, viewKey, viewShown } from '../layout.ts'
+import { LOCAL, onMachine } from '../machines.ts'
 import { navigate, route } from '../router.tsx'
 import { cardOf, cards, cardsLoaded, projectOfChat, projects } from '../stores/cards.ts'
 import { sessions, sessionsLoaded, toggleArchived } from '../stores/sessions.ts'
@@ -18,7 +19,7 @@ import { showError } from './Popover.tsx'
 import { RenameChat } from './RenameChat.tsx'
 import { StatusDot } from './Terminals.tsx'
 import { AccountLimits } from './Usage.tsx'
-import { GhostButton, Menu, ghostClass, inputClass } from './ui.tsx'
+import { GhostButton, LiveDot, Menu, ghostClass, inputClass } from './ui.tsx'
 
 /**
  * What's in the sidebar: the project switcher and pages, terminals, and the chats in focus, or every chat that
@@ -275,55 +276,102 @@ function SessionRow(props: {
 }) {
   const s = () => props.session
   return (
-    <div class="group relative mb-px">
-      <button
-        onClick={() => navigate({ kind: 'chat', id: s().id })}
-        class={`block w-full rounded-lg px-2 py-1.5 text-left transition-colors pointer-coarse:py-2.5 ${
-          props.current ? 'bg-surface' : 'hover:bg-surface/60'
-        }`}
-      >
-        <ChatSummary
-          session={s()}
-          card={cardOf(s().id)}
-          titleClass={
-            props.current || attention()[s().id]
-              ? 'text-fg'
-              : s().archived
-                ? 'text-fg-3 group-hover:text-fg'
-                : 'text-fg-2 group-hover:text-fg'
-          }
-          // The buttons sit over the end of this line, so while they show it stops short of them rather than running under.
-          timeClass={`group-hover:hidden ${props.filing ? 'hidden' : ''} ${props.current ? 'pointer-coarse:hidden' : ''}`}
-          metaClass={`group-hover:pr-17 ${props.filing ? 'pr-17 pointer-coarse:pr-20' : props.current ? 'pointer-coarse:pr-20' : ''}`}
-        />
-      </button>
-      {/* Touch has no hover, so there the open chat's row shows them instead. */}
-      <div
-        class={`absolute right-1.5 bottom-1 gap-0.5 group-hover:flex ${props.current ? 'pointer-coarse:flex' : ''} ${
-          props.filing ? 'flex' : 'hidden'
-        }`}
-      >
-        <FileChat
-          session={s()}
-          title={cardOf(s().id) ? 'Move to another project or card' : 'Put in a project'}
-          onOpenChange={props.onOpenChange}
-          triggerClass={(open) => ghostClass('sm', open)}
-          trigger={() => <FolderInput class="size-3.5" />}
-        />
-        <RenameChat
-          session={s()}
-          title="Rename"
-          onOpenChange={props.onOpenChange}
-          triggerClass={(open) => ghostClass('sm', open)}
-          trigger={() => <Pencil class="size-3.5" />}
-        />
-        <GhostButton size="sm" onClick={() => toggleArchived(s()).catch((e: Error) => showError("Couldn't change it", e.message))} title={s().archived ? 'Unarchive' : 'Archive'}>
-          <Show when={s().archived} fallback={<Archive class="size-3.5" />}>
-            <ArchiveRestore class="size-3.5" />
-          </Show>
-        </GhostButton>
+    <>
+      <div class="group relative mb-px">
+        <button
+          onClick={() => navigate({ kind: 'chat', id: s().id })}
+          class={`block w-full rounded-lg px-2 py-1.5 text-left transition-colors pointer-coarse:py-2.5 ${
+            props.current ? 'bg-surface' : 'hover:bg-surface/60'
+          }`}
+        >
+          <ChatSummary
+            session={s()}
+            card={cardOf(s().id)}
+            titleClass={
+              props.current || attention()[s().id]
+                ? 'text-fg'
+                : s().archived
+                  ? 'text-fg-3 group-hover:text-fg'
+                  : 'text-fg-2 group-hover:text-fg'
+            }
+            // The buttons sit over the end of this line, so while they show it stops short of them rather than running under.
+            timeClass={`group-hover:hidden ${props.filing ? 'hidden' : ''} ${props.current ? 'pointer-coarse:hidden' : ''}`}
+            metaClass={`group-hover:pr-17 ${props.filing ? 'pr-17 pointer-coarse:pr-20' : props.current ? 'pointer-coarse:pr-20' : ''}`}
+          />
+        </button>
+        {/* Touch has no hover, so there the open chat's row shows them instead. */}
+        <div
+          class={`absolute right-1.5 bottom-1 gap-0.5 group-hover:flex ${props.current ? 'pointer-coarse:flex' : ''} ${
+            props.filing ? 'flex' : 'hidden'
+          }`}
+        >
+          <FileChat
+            session={s()}
+            title={cardOf(s().id) ? 'Move to another project or card' : 'Put in a project'}
+            onOpenChange={props.onOpenChange}
+            triggerClass={(open) => ghostClass('sm', open)}
+            trigger={() => <FolderInput class="size-3.5" />}
+          />
+          <RenameChat
+            session={s()}
+            title="Rename"
+            onOpenChange={props.onOpenChange}
+            triggerClass={(open) => ghostClass('sm', open)}
+            trigger={() => <Pencil class="size-3.5" />}
+          />
+          <GhostButton size="sm" onClick={() => toggleArchived(s()).catch((e: Error) => showError("Couldn't change it", e.message))} title={s().archived ? 'Unarchive' : 'Archive'}>
+            <Show when={s().archived} fallback={<Archive class="size-3.5" />}>
+              <ArchiveRestore class="size-3.5" />
+            </Show>
+          </GhostButton>
+        </div>
       </div>
-    </div>
+      <NestedRows session={s()} current={props.current} />
+    </>
+  )
+}
+
+/** Nested chats seen running, by chat and call, so one still open beside its chat keeps its row once it's done. */
+const seenNested = new Map<string, NestedChat>()
+
+/**
+ * A chat's subagents and child chats under it: the ones running, and for the chat on screen, any open in a panel
+ * beside it, which are lit while they are. Each opens there.
+ */
+function NestedRows(props: { session: SessionSummary; current: boolean }) {
+  const s = () => props.session
+  const ws = () => (s().root ? { machine: s().machine ?? LOCAL, root: s().root! } : undefined)
+  const viewOf = (n: NestedChat) => ({ kind: 'task' as const, session: s().id, id: n.toolUseId })
+  const shown = (n: NestedChat) => props.current && !!ws() && viewShown(ws()!, s().id, viewKey(viewOf(n)))
+  const rows = createMemo(() => {
+    const running = s().nested ?? []
+    for (const n of running) seenNested.set(`${s().id}:${n.toolUseId}`, n)
+    const open = [...seenNested].filter(([key, n]) => key.startsWith(`${s().id}:`) && !running.some((r) => r.toolUseId === n.toolUseId) && shown(n))
+    return [...running.map((n) => ({ n, running: true })), ...open.map(([, n]) => ({ n, running: false }))]
+  })
+  const open = (n: NestedChat) => {
+    if (!props.current) navigate({ kind: 'chat', id: s().id })
+    const w = ws()
+    if (w) openView(w, viewOf(n))
+  }
+  return (
+    <For each={rows()}>
+      {({ n, running }) => (
+        <button
+          onClick={() => open(n)}
+          title={n.sessionId ? n.title : `Subagent: ${n.title}`}
+          class={`mb-px ml-4 flex h-7 w-[calc(100%-1rem)] items-center gap-2 rounded-lg px-2 text-left text-ui transition-colors pointer-coarse:h-9 ${
+            shown(n) ? 'bg-surface text-fg' : 'text-fg-3 hover:bg-surface/60 hover:text-fg-2'
+          }`}
+        >
+          <Dynamic component={n.sessionId ? MessagesSquare : Bot} class="size-3.5 shrink-0" />
+          <span class="min-w-0 flex-1 truncate">{n.title}</span>
+          <Show when={running}>
+            <LiveDot />
+          </Show>
+        </button>
+      )}
+    </For>
   )
 }
 

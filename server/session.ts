@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { getSessionInfo, query, type McpServerConfig, type Query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { BackgroundTask, ChatCommand, ChatCommandReply, ChatStatus, ImageAttachment, PermissionMode, QueuedMessage, ServerEvent, WireMessage } from '../shared/protocol.ts'
+import type { BackgroundTask, ChatCommand, ChatCommandReply, ChatStatus, ImageAttachment, NestedChat, PermissionMode, QueuedMessage, ServerEvent, WireMessage } from '../shared/protocol.ts'
 import { wrapPaste } from '../shared/pastes.ts'
 import { BashStreams } from './bashStream.ts'
 import { readContext, readLimits } from './claudeProbe.ts'
@@ -68,8 +68,8 @@ export class LiveSession {
   /** Until the first init: only that one says where --worktree put us. */
   private awaitingInit = true
   private afterTurnCallbacks: (() => void)[] = []
-  /** Subagents' descriptions by agent id, to say which one is asking for permission. */
-  private agents = new Map<string, string>()
+  /** Subagents by agent id: to say which one is asking for permission, and which are running. */
+  private agents = new Map<string, Agent>()
   /** Started from the chat itself and running now. They outlive the turn that started them. */
   private background: BackgroundTask[] = []
   private tools: SessionTools
@@ -102,7 +102,7 @@ export class LiveSession {
     this.outbox = new Outbox((messages) => this.emit({ type: 'queued', sessionId: this.id, messages }))
     this.permissions = new Permissions(this.id, (e) => this.emit(e), {
       asked: (toolUseId) => this.checks.done(toolUseId),
-      agent: (agentId) => this.agents.get(agentId),
+      agent: (agentId) => this.agents.get(agentId)?.description,
     })
     this.bash = new BashStreams(
       this.id,
@@ -359,7 +359,7 @@ export class LiveSession {
       // Claude Code doesn't save a failed compaction, so only this process's chat shows it.
       if (msg.compact_result === 'failed') this.record({ type: 'compact_failed', uuid: msg.uuid, error: msg.compact_error, timestamp: new Date().toISOString() })
     }
-    if (msg.type === 'system' && msg.subtype === 'task_started' && msg.task_type === 'local_agent') this.agents.set(msg.task_id, msg.description)
+    if (msg.type === 'system' && (msg.subtype === 'task_started' || msg.subtype === 'task_updated' || msg.subtype === 'task_notification')) this.trackAgent(msg)
     if (msg.type === 'system' && msg.subtype === 'background_tasks_changed') {
       const tasks = msg.tasks.filter((t) => !t.ambient)
       const busy = tasks.length > 0
@@ -387,6 +387,7 @@ export class LiveSession {
     }
     if (msg.type === 'system' && msg.subtype === 'task_notification') this.bash.taskEnded(msg.task_id)
     if (msg.type === 'result') {
+      this.endForegroundAgents()
       this.bash.finishAll()
       this.checks.done()
       wire.ended_at = Date.now()
@@ -399,6 +400,40 @@ export class LiveSession {
       this.setRunning(false)
       this.onTurnEnd()
     } else if (msg.type === 'assistant') this.setRunning(true)
+  }
+
+  /** Its subagents running now, each by the call that first started it. */
+  runningAgents(): NestedChat[] {
+    return [...this.agents.values()].flatMap((a) => (a.running && a.toolUseId ? [{ toolUseId: a.toolUseId, title: a.description.slice(0, 200) }] : []))
+  }
+
+  /** Follows a subagent's task events: the chat list shows the ones running under their chat. */
+  private trackAgent(msg: Extract<SDKMessage, { subtype: 'task_started' | 'task_updated' | 'task_notification' }>): void {
+    const before = this.runningAgents().length
+    const agent = this.agents.get(msg.task_id)
+    if (msg.subtype === 'task_started') {
+      if (msg.task_type !== 'local_agent') return
+      // One sent a message after it finished starts again with the same id, from the SendMessage call; it stays with the call that started it.
+      this.agents.set(msg.task_id, { description: msg.description, toolUseId: agent?.toolUseId ?? msg.tool_use_id, running: true, background: !!msg.is_backgrounded })
+    } else if (!agent) return
+    else if (msg.subtype === 'task_notification') agent.running = false
+    else {
+      const { status, is_backgrounded } = msg.patch
+      if (status) agent.running = status === 'running' || status === 'pending' || status === 'paused'
+      if (is_backgrounded !== undefined) agent.background = is_backgrounded
+    }
+    if (this.runningAgents().length !== before) this.onChange()
+  }
+
+  /** The turn's over, so any subagent it was waiting on is too. */
+  private endForegroundAgents(): void {
+    let ended = false
+    for (const a of this.agents.values()) {
+      if (!a.running || a.background) continue
+      a.running = false
+      ended = true
+    }
+    if (ended) this.onChange()
   }
 
   private record(message: WireMessage): void {
@@ -445,6 +480,15 @@ export class LiveSession {
   private emit(event: ServerEvent): void {
     for (const listener of this.listeners) listener(event)
   }
+}
+
+interface Agent {
+  description: string
+  /** The Agent call that started it. */
+  toolUseId?: string
+  running: boolean
+  /** Its call returned and it carries on, so the turn ending doesn't end it. */
+  background: boolean
 }
 
 /** Messages the client renders; everything else (hooks, rate limits, lifecycle) is dropped. */
