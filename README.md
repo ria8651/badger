@@ -23,7 +23,7 @@ Badger is a web UI for [Claude Code](https://claude.com/claude-code) that runs o
 - **Runners on other machines.** One Badger (the hub, e.g. on a NAS) can run chats and terminals on your laptops too, next to their files, so everyone shares one board while big builds stay local.
 - **Tools and scripts.** Everything Claude can do in Badger is both a tool and a function it can script with the `run_script` tool: `await badger.cards.list({ status: "review" })`, so bulk changes are one loop instead of dozens of calls.
 - **Worktrees.** Run several chats on one repo side by side, each in its own git worktree, and merge one back with a button.
-- **Subagents and background tasks.** See what each agent is doing as it happens, and stop or background them.
+- **Subagents and background tasks.** Each subagent is a chat nested in yours: watch it work, open it beside the chat to message it, and stop or background it. Running ones are listed under their chat in the sidebar.
 - **Permissions in the browser.** Approve tool calls, answer Claude's questions and review plans from any tab or your phone, with notifications when something's waiting.
 
 ## Screenshots

@@ -114,8 +114,16 @@ export class Chats {
 
   async list(): Promise<SessionSummary[]> {
     const { meta, transcripts, machines, placement } = this.d
-    // Children show inside the chat that started them.
-    const childIds = meta.childIds()
+    // Children show inside the chat that started them, and under it in the list while they run, as its subagents do.
+    const children = meta.allChildren()
+    const childIds = new Set(children.map((c) => c.sessionId))
+    const nested = (id: string) => {
+      const running = [
+        ...(machines.live(id)?.agents ?? []),
+        ...children.filter((c) => c.parentId === id && machines.live(c.sessionId)?.running).map((c) => ({ toolUseId: c.toolUseId, title: childTitle(c.kind), sessionId: c.sessionId })),
+      ]
+      return running.length ? { nested: running } : {}
+    }
     const side = meta.sideChats()
     const under = (id: string) => {
       const s = side.get(id)
@@ -141,6 +149,7 @@ export class Chats {
         gone: !live && !!s.cwd && !!gone.get(machine ?? '')?.has(s.cwd),
         ...(reviews.has(s.sessionId) ? { review: true } : {}),
         ...under(s.sessionId),
+        ...nested(s.sessionId),
       }
     })
     // A brand-new live session may not have a transcript here yet.
@@ -157,6 +166,7 @@ export class Chats {
           archived: false,
           ...(reviews.has(live.id) ? { review: true } : {}),
           ...under(live.id),
+          ...nested(live.id),
         })
       }
     }
@@ -710,6 +720,9 @@ export class Chats {
 }
 
 const hasAttachments = (a: DraftAttachments) => a.pastes.length > 0 || a.images.length > 0
+
+/** What a child chat is listed as under its parent, from what it's for, e.g. Merge. */
+const childTitle = (kind: string) => (kind ? kind[0].toUpperCase() + kind.slice(1) : 'Chat')
 
 /** How much of what a chat was asked a review chat is told: each message, and all of them. */
 const ASKED_EACH = 1500

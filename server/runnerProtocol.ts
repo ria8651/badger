@@ -15,6 +15,7 @@ import type {
   Listing,
   LiveState,
   ModelOption,
+  NestedChat,
   PermissionMode,
   QueuedMessage,
   ServerEvent,
@@ -71,6 +72,8 @@ export interface LiveInfo {
   waiting: boolean
   /** How many of its turns have ended (not counting ones queued messages carried on), since the runner started. */
   turns: number
+  /** Its subagents running now. */
+  agents?: NestedChat[]
 }
 
 /** A live chat's state that only its process has: its messages since it started, prompts, running Bash output. */
@@ -367,7 +370,15 @@ const terminalInfo = z.object({
   createdAt: z.number(),
 }) satisfies ZodType<TerminalInfo>
 
-const liveInfo = z.object({ id: chatId, cwd: text(4096), running: z.boolean(), waiting: z.boolean(), turns: count }) satisfies ZodType<LiveInfo>
+const nestedChat = z.object({ toolUseId: text(256), title: text(1000) }) satisfies ZodType<NestedChat>
+const liveInfo = z.object({
+  id: chatId,
+  cwd: text(4096),
+  running: z.boolean(),
+  waiting: z.boolean(),
+  turns: count,
+  agents: z.array(nestedChat).max(1000).optional(),
+}) satisfies ZodType<LiveInfo>
 
 /** Every event a runner may send. Anything else is dropped. */
 export const RUNNER_EVENT = z.discriminatedUnion('type', [

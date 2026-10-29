@@ -1,4 +1,5 @@
-import { Show, createMemo, useContext, type Accessor } from 'solid-js'
+import { Show, createContext, createMemo, useContext, type Accessor, type JSX } from 'solid-js'
+import { PanelRight } from '../icons'
 import { Link } from '../router.tsx'
 import { createStickyScroll } from '../stickyScroll.ts'
 import { ChildChats, chatCommands } from '../useChat.ts'
@@ -8,39 +9,108 @@ import { LiveDot, compact, plural } from '../components/ui.tsx'
 // Each nests the other: a subagent's run shows its conversation, and a conversation shows the subagents it ran.
 import { Messages, Transcript } from '../components/Transcript.tsx'
 import { NONE, TranscriptIndex, useIndex } from './context.ts'
-import { agentLabel, buildView, handBack, hasToolUse, within, type Block, type Index } from './model.ts'
+import { UserMessage } from './items.tsx'
+import { agentIdIn, agentLabel, buildView, handBack, hasToolUse, within, type Block, type Index } from './model.ts'
 
-/* Other conversations inside a chat's: subagents Claude started, and chats a tool call runs and waits on. */
+/*
+ * Other conversations inside a chat's: subagents Claude started, and chats a tool call runs and waits on, like a
+ * merge. Both are nested chats, shown alike: a row in the call that started them that opens to their conversation,
+ * and a panel of their own beside the chat, where you can write to them too.
+ */
+
+/** Opens a nested chat in a panel beside its chat, by the call that started it; undefined while there's nowhere to. */
+export const OpenNested = createContext<() => ((toolUseId: string) => void) | undefined>(() => undefined)
+
+/** A nested chat's row in the call that started it: how it's going, opening to its conversation. */
+function NestedRun(props: {
+  id: string
+  label: string
+  detail: string
+  running: boolean
+  /** It runs on its own while the chat gets on, so it stays folded. */
+  background?: boolean
+  waiting?: boolean
+  steps: number
+  tokens?: number
+  outcome?: 'failed' | 'stopped'
+  /** What it's doing now, under the row while it's folded. */
+  peek?: JSX.Element
+  holds?: (id: string) => boolean
+  /** What else can be done with it, after opening it beside the chat. */
+  actions?: JSX.Element
+  children: JSX.Element
+}) {
+  const open = useContext(OpenNested)
+  const action = 'text-xs text-fg-3 transition-colors hover:text-fg-2'
+  return (
+    <Disclosure
+      id={props.id}
+      label={props.label}
+      holds={props.holds}
+      detail={props.waiting ? 'Waiting for you' : props.detail}
+      trailing={
+        <>
+          <Show when={props.running && props.background}>
+            <span class="shrink-0 text-xs text-fg-3">In background</span>
+          </Show>
+          <Show when={props.steps}>
+            <span class="shrink-0 text-xs text-fg-3 tabular-nums">
+              {plural(props.steps, 'step')}
+              {!props.running && props.tokens ? ` · ${compact(props.tokens)} tokens` : ''}
+            </span>
+          </Show>
+          <Show when={props.running}>
+            <LiveDot />
+          </Show>
+          <Show when={!props.running && props.outcome === 'failed'}>
+            <span class="shrink-0 text-xs text-danger">Failed</span>
+          </Show>
+          <Show when={!props.running && props.outcome === 'stopped'}>
+            <span class="shrink-0 text-xs text-fg-3">Stopped</span>
+          </Show>
+        </>
+      }
+      live={props.running && !props.background}
+      peek={props.peek}
+    >
+      {props.children}
+      <div class="flex flex-wrap gap-x-4 gap-y-1">
+        <Show when={open()}>
+          {(open) => (
+            <button onClick={() => open()(props.id)} class={`flex items-center gap-1 ${action}`}>
+              <PanelRight class="size-3" /> Open beside the chat
+            </button>
+          )}
+        </Show>
+        {props.actions}
+      </div>
+    </Disclosure>
+  )
+}
 
 /**
  * A tool call that runs another chat and waits on it, e.g. a merge in the
  * main checkout: that chat's transcript, nested. Its permission prompts show
  * with the parent's, by the composer.
  */
-export function ChildRun(props: { sessionId: string; name: string; result?: ToolResult }) {
+export function ChildRun(props: { id: string; sessionId: string; name: string; result?: ToolResult }) {
   const child = useContext(ChildChats)
   const state = () => child(props.sessionId)
-  const live = () => !!state()?.running
   const steps = () => state()?.messages.filter((m) => m.type === 'assistant' && !m.parent_tool_use_id && hasToolUse(m)).length ?? 0
   return (
-    <Disclosure
-      id={props.sessionId}
+    <NestedRun
+      id={props.id}
       label={toolLabel(props.name)}
-      detail={state()?.permissions.length ? 'Waiting for you' : live() ? 'Working' : ''}
-      trailing={
-        <>
-          <Show when={steps()}>
-            <span class="shrink-0 text-xs text-fg-3 tabular-nums">{plural(steps(), 'step')}</span>
-          </Show>
-          <Show when={live()}>
-            <LiveDot />
-          </Show>
-          <Show when={props.result?.isError}>
-            <span class="shrink-0 text-xs text-danger">Failed</span>
-          </Show>
-        </>
+      detail={state()?.running ? 'Working' : ''}
+      running={!!state()?.running}
+      waiting={!!state()?.permissions.length}
+      steps={steps()}
+      outcome={props.result?.isError ? 'failed' : undefined}
+      actions={
+        <Link to={{ kind: 'chat', id: props.sessionId }} class="text-xs text-fg-3 transition-colors hover:text-fg-2">
+          Open as a chat
+        </Link>
       }
-      live={live()}
     >
       <Show when={state()?.loaded && state()} fallback={<p class="py-1 text-xs text-fg-3">Loading…</p>}>
         {(s) => (
@@ -56,10 +126,7 @@ export function ChildRun(props: { sessionId: string; name: string; result?: Tool
         )}
       </Show>
       <Show when={props.result?.isError && props.result}>{(r) => <Pre text={resultText(r().content)} class="text-danger" />}</Show>
-      <Link to={{ kind: 'chat', id: props.sessionId }} class="inline-block text-xs text-fg-3 transition-colors hover:text-fg-2">
-        Open as a chat
-      </Link>
-    </Disclosure>
+    </NestedRun>
   )
 }
 
@@ -81,6 +148,9 @@ export function agentState(props: { id: string; input: Record<string, unknown>; 
   const status = () => task()?.status ?? (result()?.isError ? 'failed' : undefined)
   const steps = () => Math.max(items().filter((i) => i.kind === 'tool').length, task()?.toolUses ?? 0)
   const prompt = () => (typeof props.input.prompt === 'string' ? props.input.prompt : '')
+  const description = () => String(props.input.description ?? '') || agentLabel(props.input)
+  /** Its id, which SendMessage reaches it by: from its task, or what its call returned. */
+  const agentId = () => task()?.id ?? agentIdIn(result()?.content) ?? [...index().agents].find(([, call]) => call === props.id)?.[0]
 
   /** The report, when its own transcript doesn't already end with it (live, a foreground agent's last message isn't sent). */
   const report = () => {
@@ -96,43 +166,49 @@ export function agentState(props: { id: string; input: Record<string, unknown>; 
     const t = task()
     if (sessionId && t) chatCommands(sessionId).stopTask(t.id)
   }
+  const toBackground = () => {
+    const sessionId = index().sessionId
+    if (sessionId) chatCommands(sessionId).background(props.id)
+  }
 
-  return { index, messages, items, task, background, running, status, steps, prompt, report, stop }
+  return { index, messages, items, task, background, running, status, steps, prompt, description, agentId, report, stop, toBackground }
 }
 
-type Agent = ReturnType<typeof agentState>
+export type Agent = ReturnType<typeof agentState>
 
-/** A subagent's prompt, its own work and its report, with what can be done while it runs. */
-export function AgentBody(props: { id: string; agent: Agent; bashOutput: Record<string, string>; cwd?: string }) {
+/** A subagent's conversation: what it was asked, as a message to it, its work and anything sent to it since, then its report. */
+export function AgentConversation(props: { agent: Agent; bashOutput: Record<string, string>; cwd?: string }) {
   const a = props.agent
   return (
-    <>
-      <Show when={a.prompt()}>{(p) => <Markdown text={p()} />}</Show>
-      <Show when={a.items().length || a.report()}>
-        <div>
-          <Messages messages={a.messages()} nested partial={null} bashOutput={props.bashOutput} running={a.running()} working={a.running()} cwd={props.cwd} />
-          <Show when={a.report()}>
-            {(r) => (
-              <div class="my-4">
-                <Markdown text={r()} />
-              </div>
-            )}
-          </Show>
-        </div>
+    <div>
+      <Show when={a.prompt()}>{(p) => <UserMessage text={p()} />}</Show>
+      <Messages messages={a.messages()} nested partial={null} bashOutput={props.bashOutput} running={a.running()} working={a.running()} cwd={props.cwd} />
+      <Show when={a.report()}>
+        {(r) => (
+          <div class="my-4">
+            <Markdown text={r()} />
+          </div>
+        )}
       </Show>
-      <Show when={a.running() && a.task() && a.index().sessionId}>
-        <div class="flex gap-4">
-          <Show when={!a.background()}>
-            <button onClick={() => chatCommands(a.index().sessionId!).background(props.id)} class="text-xs text-fg-3 transition-colors hover:text-fg-2">
-              Run in background
-            </button>
-          </Show>
-          <button onClick={a.stop} class="text-xs text-fg-3 transition-colors hover:text-fg-2">
-            Stop agent
-          </button>
-        </div>
+    </div>
+  )
+}
+
+/** What can be done with a running subagent: let the chat get on without it, or stop it. */
+export function AgentActions(props: { agent: Agent }) {
+  const a = props.agent
+  const action = 'text-xs text-fg-3 transition-colors hover:text-fg-2'
+  return (
+    <Show when={a.running() && a.task() && a.index().sessionId}>
+      <Show when={!a.background()}>
+        <button onClick={a.toBackground} class={action}>
+          Run in background
+        </button>
       </Show>
-    </>
+      <button onClick={a.stop} class={action}>
+        Stop agent
+      </button>
+    </Show>
   )
 }
 
@@ -144,46 +220,28 @@ export function AgentBody(props: { id: string; agent: Agent; bashOutput: Record<
 export function AgentRun(props: { id: string; input: Record<string, unknown>; bashOutput: Record<string, string>; running: boolean; cwd?: string }) {
   const a = agentState(props)
   return (
-    <Disclosure
+    <NestedRun
       id={props.id}
       label={agentLabel(props.input)}
       holds={(id) => within(a.index(), id, props.id)}
       detail={String(props.input.description ?? '')}
-      trailing={
-        <>
-          <Show when={a.running() && a.background()}>
-            <span class="shrink-0 text-xs text-fg-3">In background</span>
-          </Show>
-          <Show when={a.steps()}>
-            <span class="shrink-0 text-xs text-fg-3 tabular-nums">
-              {plural(a.steps(), 'step')}
-              {!a.running() && a.task()?.tokens ? ` · ${compact(a.task()!.tokens!)} tokens` : ''}
-            </span>
-          </Show>
-          <Show when={a.running()}>
-            <LiveDot />
-          </Show>
-          <Show when={!a.running() && a.status() === 'failed'}>
-            <span class="shrink-0 text-xs text-danger">Failed</span>
-          </Show>
-          <Show when={!a.running() && a.status() === 'stopped'}>
-            <span class="shrink-0 text-xs text-fg-3">Stopped</span>
-          </Show>
-        </>
-      }
-      // One in the background can run for a long while alongside everything else, so it stays folded.
-      live={a.running() && !a.background()}
+      running={a.running()}
+      background={a.background()}
+      steps={a.steps()}
+      tokens={a.task()?.tokens}
+      outcome={a.status() === 'failed' || a.status() === 'stopped' ? a.status() as 'failed' | 'stopped' : undefined}
       peek={a.running() && a.task()?.activity && <p class="truncate text-xs text-fg-3">{a.task()!.activity}</p>}
+      actions={<AgentActions agent={a} />}
     >
-      <AgentBody id={props.id} agent={a} bashOutput={props.bashOutput} cwd={props.cwd} />
-    </Disclosure>
+      <AgentConversation agent={a} bashOutput={props.bashOutput} cwd={props.cwd} />
+    </NestedRun>
   )
 }
 
 /**
- * A subagent or background task in a panel of its own: everything its row in
- * the transcript holds, opened out, staying at the bottom as it grows unless
- * scrolled up.
+ * A background task other than a subagent, e.g. a shell, in a panel of its
+ * own: everything its row in the transcript holds, opened out, staying at the
+ * bottom as it grows unless scrolled up.
  */
 export function TaskPane(props: {
   id: string
@@ -196,7 +254,6 @@ export function TaskPane(props: {
 }) {
   const sticky = createStickyScroll()
   const use = () => props.index().uses.get(props.id)
-  const isAgent = () => use()?.name === 'Agent' || use()?.name === 'Task'
   return (
     <TranscriptIndex.Provider value={props.index}>
       <div
@@ -209,10 +266,7 @@ export function TaskPane(props: {
         onWheel={sticky.onWheel}
         class="size-full overflow-y-auto outline-none [overflow-anchor:none]"
       >
-        <div
-          ref={(el) => sticky.follow(el)}
-          class="space-y-2 px-5 pt-2 pb-6 text-ui"
-        >
+        <div ref={(el) => sticky.follow(el)} class="space-y-2 px-5 pt-2 pb-6 text-ui">
           <Show when={use()} fallback={<p class="text-xs text-fg-3">This task isn’t in the chat any more.</p>}>
             {(u) => (
               <>
@@ -222,24 +276,17 @@ export function TaskPane(props: {
                     Show in chat
                   </button>
                 </div>
-                <Show
-                  when={isAgent()}
-                  fallback={
-                    <ToolBody
-                      id={props.id}
-                      name={u().name}
-                      input={u().input}
-                      result={props.index().results.get(props.id)}
-                      liveOutput={props.bashOutput[props.id]}
-                      running={props.running}
-                      cwd={props.cwd}
-                      task={props.index().tasks.get(props.id)}
-                      fill
-                    />
-                  }
-                >
-                  <AgentPane id={props.id} input={u().input} bashOutput={props.bashOutput} running={props.running} cwd={props.cwd} />
-                </Show>
+                <ToolBody
+                  id={props.id}
+                  name={u().name}
+                  input={u().input}
+                  result={props.index().results.get(props.id)}
+                  liveOutput={props.bashOutput[props.id]}
+                  running={props.running}
+                  cwd={props.cwd}
+                  task={props.index().tasks.get(props.id)}
+                  fill
+                />
               </>
             )}
           </Show>
@@ -248,9 +295,3 @@ export function TaskPane(props: {
     </TranscriptIndex.Provider>
   )
 }
-
-export function AgentPane(props: { id: string; input: Record<string, unknown>; bashOutput: Record<string, string>; running: boolean; cwd?: string }) {
-  const a = agentState(props)
-  return <AgentBody id={props.id} agent={a} bashOutput={props.bashOutput} cwd={props.cwd} />
-}
-

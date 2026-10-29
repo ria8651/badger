@@ -13,7 +13,6 @@ import { OpError, forwarded, mcpServer, toolName, type Op } from './ops.ts'
 import { Later, Peer, remote, type Link, type Remote } from './peer.ts'
 import { bridgeOps, openPreviewOp, previewInstructions } from './previewTools.ts'
 import type { CreateSpec } from './ptyProtocol.ts'
-import { REVIEW_TOOL, reviewTool } from './review.ts'
 import { reviewDiff } from './reviewDiff.ts'
 import { REVIEW_DIFF_TOOL, REVIEW_DONE_TOOL, REVIEW_GROUP_TOOL, reviewGuideTools } from './reviewGuide.ts'
 import {
@@ -41,8 +40,6 @@ import { excludeWorktrees,gitPull, gitPush, gitStatus, inaccessible, removeWorkt
 
 // Merging only starts a chat in the main checkout, and that chat asks for anything risky itself.
 const MERGE_TOOL_NAME = `mcp__${BOARD_SERVER}__${MERGE_TOOL}`
-// Reviewing only starts a chat that's told to report, not change anything.
-const REVIEW_TOOL_NAME = `mcp__${BOARD_SERVER}__${REVIEW_TOOL}`
 // A review chat's own: reading the diff, and showing its guide.
 const REVIEW_GUIDE_TOOL_NAMES = [REVIEW_DIFF_TOOL, REVIEW_GROUP_TOOL, REVIEW_DONE_TOOL].map((t) => `mcp__${BOARD_SERVER}__${t}`)
 /** The biggest file the browser can fetch from a runner, e.g. an image to attach. */
@@ -112,12 +109,11 @@ export class Runner implements RunnerApi {
                 cwd,
                 MERGE_TOOL_NAME,
               ),
-              reviewTool({ cardOf: (id) => this.hub.chatCard(id), manager: this.manager, children: this.children }, sessionId, cwd, REVIEW_TOOL_NAME),
               ...(this.reviews.has(sessionId) ? reviewGuideTools(sessionId, cwd, join(this.opts.dataDir, 'review-guides')) : []),
             ]),
             [TERMINAL_SERVER]: mcpServer(TERMINAL_SERVER, [...TERMINAL_INSTRUCTIONS, ...previewInstructions(this.local)].join('\n'), ops, ctx),
           },
-          allowedTools: [...ops.filter((o) => o.autoAllow).map(toolName), MERGE_TOOL_NAME, REVIEW_TOOL_NAME, ...REVIEW_GUIDE_TOOL_NAMES],
+          allowedTools: [...ops.filter((o) => o.autoAllow).map(toolName), MERGE_TOOL_NAME, ...REVIEW_GUIDE_TOOL_NAMES],
           turnContext: () => this.hub.cardContext(sessionId),
           contextAdded: (text) => void this.hub.contextSeen(sessionId, text).catch(() => {}),
         }
@@ -229,6 +225,7 @@ export class Runner implements RunnerApi {
       running: this.manager.isRunning(s.id),
       waiting: s.waiting,
       turns: this.turns.get(s.id) ?? 0,
+      agents: s.runningAgents(),
     }))
     this.emit({ type: 'live', sessions })
   }
