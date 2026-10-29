@@ -6,6 +6,7 @@ import type { Task } from '../tasks.ts'
 import { useChecking } from '../useChat.ts'
 import { viewImages } from './ImageViewer.tsx'
 import { Markdown } from './Markdown.tsx'
+import { duration } from '../transcript/model.ts'
 import { compact } from './ui.tsx'
 
 export interface ToolResult {
@@ -13,6 +14,8 @@ export interface ToolResult {
   isError: boolean
   /** The SDK's structured version of the result (`tool_use_result`), on live messages only. */
   structured?: unknown
+  /** When it came back, in ms. */
+  at?: number
 }
 
 /** What Claude Code added to the context about a call: the skill it loaded, and what hooks that ran after it said. */
@@ -334,6 +337,8 @@ type ToolProps = {
   /** Output streamed while a Bash command runs; for one in the background, everything it printed. */
   liveOutput?: string
   running: boolean
+  /** When the call was made, in ms. */
+  startedAt?: number
   cwd?: string
   /** Set when Claude Code tracks the call as a task, e.g. a command left running in the background. */
   task?: Task
@@ -374,6 +379,21 @@ export function ToolCard(props: ToolProps) {
             : 'running'
           : 'stopped'
 
+  // How long it ran, or has been running, once that's a minute: a call taking a while may have stalled.
+  const [now, setNow] = createSignal(Date.now())
+  createEffect(() => {
+    if (status() !== 'running') return
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    onCleanup(() => clearInterval(timer))
+  })
+  const took = () => {
+    // One in the background returned straight away; when its work ended isn't known.
+    const end = status() === 'running' ? now() : props.task?.background ? undefined : props.result?.at
+    const seconds = props.startedAt && end ? Math.floor((end - props.startedAt) / 1000) : 0
+    return seconds >= 60 ? duration(seconds) : undefined
+  }
+
   const questions = () => (props.input.questions as Question[] | undefined) ?? []
   const answers = () =>
     props.name === 'AskUserQuestion' && props.result && !props.result.isError
@@ -396,6 +416,7 @@ export function ToolCard(props: ToolProps) {
               <Show when={props.context?.errors.length && status() !== 'error'}>
                 <span class="shrink-0 text-xs text-danger">Hook failed</span>
               </Show>
+              <Show when={took()}>{(t) => <span class="shrink-0 text-xs text-fg-3 tabular-nums">{t()}</span>}</Show>
               {/* Success is the norm and stays silent; only work in progress and failures show. */}
               <Switch>
                 <Match when={status() === 'checking'}>

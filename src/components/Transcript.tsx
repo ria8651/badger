@@ -162,6 +162,7 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
             result={index().results.get(item.id)}
             liveOutput={props.bashOutput[item.id]}
             running={props.running}
+            startedAt={index().uses.get(item.id)?.at}
             cwd={props.cwd}
             task={index().tasks.get(item.id)}
             context={index().context.get(item.id)}
