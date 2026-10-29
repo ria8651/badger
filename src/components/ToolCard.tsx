@@ -417,7 +417,8 @@ export function ToolCard(props: ToolProps) {
             </>
           }
           // One in the background can run for a long while alongside everything else, so it stays folded; its panel shows it.
-          live={status() === 'running' && !props.task?.background}
+          // Checking counts too, so a row doesn't fold between its input streaming in and its output starting.
+          live={(status() === 'running' || status() === 'checking') && !props.task?.background}
           peek={
             (live() && !props.task?.background && <LiveOutput text={live()!} class="max-h-40" />) ||
             (props.result && resultImages(props.result.content).length > 0 && <ResultImages urls={resultImages(props.result.content)} class="max-h-40" />)
