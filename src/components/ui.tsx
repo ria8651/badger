@@ -423,7 +423,7 @@ export function PaneBar(props: { underHeader?: boolean; class?: string; children
   return (
     <div
       class={`flex h-9 shrink-0 items-center gap-3 px-3 text-xs ${
-        props.underHeader ? 'bar relative z-10 border-b border-line shadow-(--shadow-bar) md:px-4' : 'border-b border-line'
+        props.underHeader ? 'bar relative z-10 border-b border-(--color-bar-edge) bar-shadow md:px-4' : 'border-b border-line'
       } ${props.class ?? ''}`}
     >
       {props.children}
