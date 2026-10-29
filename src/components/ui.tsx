@@ -276,6 +276,8 @@ export function Menu(props: {
   /** Which edge of the trigger the list lines up with; left by default. */
   align?: 'left' | 'right'
   class?: string
+  /** Shown above the items, not one of them. */
+  header?: () => JSX.Element
 }) {
   const id = createUniqueId()
   const [open, setOpen] = createSignal(false)
@@ -353,6 +355,7 @@ export function Menu(props: {
             props.placement === 'bottom' ? 'top-full mt-1.5 origin-top' : 'bottom-full mb-1.5 origin-bottom'
           } ${open() ? 'animate-[pop-in_120ms_ease-out]' : 'pointer-events-none animate-[pop-out_80ms_ease-in_forwards]'} ${props.class ?? 'w-72'}`}
         >
+          {props.header?.()}
           <For each={props.items}>
             {(o, i) => (
               <div
