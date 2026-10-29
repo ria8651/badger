@@ -240,8 +240,9 @@ export function ChatHeader(props: {
 
   return (
     // A container, so what gives way goes by the chat's width, not the window's: a preview beside it narrows it too.
+    // Above the toolbar and sticky headers under it, so its menus open over them; App's drawer is above it in turn.
     <div
-      class={`bar @container relative z-10 flex h-10 shrink-0 items-center gap-2 px-3 text-ui md:h-12 md:px-4 ${props.joined ? '' : 'border-b border-line shadow-(--shadow-bar)'}`}
+      class={`bar @container relative z-20 flex h-10 shrink-0 items-center gap-2 px-3 text-ui md:h-12 md:px-4 ${props.joined ? '' : 'border-b border-(--color-bar-edge) bar-shadow'}`}
     >
       <Show when={props.session}>
         {(s) => (

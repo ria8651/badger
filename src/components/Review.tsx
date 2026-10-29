@@ -831,9 +831,9 @@ export function ReviewPage(props: {
         {props.lead}
         {tools()}
       </PaneBar>
-      {/* How much has been viewed, as a line along the foot of what's above, over its edge. */}
+      {/* How much has been viewed, as a line along the foot of what's above, over its edge but under the header's menus. */}
       <Show when={total() && !props.whole}>
-        <div class="relative z-20 h-0">
+        <div class="relative z-10 h-0">
           <div class="absolute inset-x-0 -top-0.5 h-0.5">
             <div class="h-full bg-ok transition-[width]" style={{ width: `${(viewedCount() / total()) * 100}%` }} />
           </div>
@@ -900,9 +900,10 @@ export function ReviewPage(props: {
           </For>
         </nav>
 
-        {/* The diff, with what goes back to Claude under it; the outline beside them runs the full height. */}
+        {/* The diff, with what goes back to Claude under it; the outline beside them runs the full height. Its own
+            layer, so its sticky headers stay under the bar's shadow above. */}
         <div class="flex min-w-0 flex-1 flex-col">
-          <div ref={scroller} onScroll={onScroll} tabIndex={-1} class="min-h-0 flex-1 overflow-y-auto outline-none">
+          <div ref={scroller} onScroll={onScroll} tabIndex={-1} class="isolate min-h-0 flex-1 overflow-y-auto outline-none">
             <div ref={content} class={props.whole ? 'pb-10' : 'mx-auto max-w-[100rem] px-2 pb-10 @3xl:px-4'}>
               <Show when={!diff() && loading()}>
                 <p class="p-10 text-center text-fg-3">Reading the changes…</p>

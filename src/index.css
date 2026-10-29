@@ -20,6 +20,7 @@
  *   sidebar-surface  its surface: bg and surface unless the palette says otherwise (see .sidebar)
  *   bar              title bars' background, transparent unless the palette says otherwise, and
  *   on-bar, -2, -3   text on them: fg, fg-2 and fg-3 unless the palette says otherwise (see .bar)
+ *   bar-edge         the line under a chat's header: line, unless the palette's bars have a shadow to do it
  *   accent   only for "live" or "needs you": running chats, prompts
  *   danger   errors, destructive modes, removed lines
  *   ok       added lines in diffs
@@ -111,6 +112,7 @@
   --color-on-bar: var(--color-fg);
   --color-on-bar-2: var(--color-fg-2);
   --color-on-bar-3: var(--color-fg-3);
+  --color-bar-edge: var(--color-line);
   /* The palette's own, for .pop to go back to inside the sidebar or a bar. */
   --page-bg: var(--color-bg);
   --page-surface: var(--color-surface);
@@ -242,6 +244,7 @@
   --sidebar-gutter: 0px;
   --shadow-sidebar: 0 4px 5px -2px rgb(0 0 0 / 0.2), 0 7px 10px 1px rgb(0 0 0 / 0.14), 0 2px 16px 1px rgb(0 0 0 / 0.12);
   --shadow-bar: 0 4px 8px 0 rgb(96 97 112 / 0.16), 0 0 2px 0 rgb(40 41 61 / 0.04);
+  --color-bar-edge: transparent;
   --shadow-card: 0 4px 8px 0 rgb(96 97 112 / 0.16), 0 0 2px 0 rgb(40 41 61 / 0.04);
   --shadow-control: 0 4px 8px 0 rgb(96 97 112 / 0.16), 0 0 2px 0 rgb(40 41 61 / 0.04);
   --shadow-pop: 0 8px 16px 0 rgb(96 97 112 / 0.16), 0 2px 4px 0 rgb(40 41 61 / 0.04);
@@ -413,6 +416,17 @@
     --color-fg-3: var(--color-on-bar-3);
     color: var(--color-fg);
     background-color: var(--color-bar);
+  }
+  /* A bar's shadow, falling only below it: bars can be see-through, and it mustn't show on the one above. Drawn by
+     a layer of its own, so clipping it doesn't clip the menus opening out of the bar. Needs a positioned bar. */
+  .bar-shadow::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    box-shadow: var(--shadow-bar);
+    clip-path: inset(0 -2rem -2rem);
   }
   /* Menus and popovers are page-coloured wherever they open from, a bar or the sidebar included. */
   .pop {
