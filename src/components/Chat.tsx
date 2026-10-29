@@ -10,7 +10,7 @@ import { FileView } from './FileView.tsx'
 import { QuoteSelection } from './QuoteSelection.tsx'
 import { sideChatsOf, startSideChat } from '../btw.ts'
 import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
-import { lastModel, modelValue, models, setLastModel } from '../models.ts'
+import { lastModel, modelChoices, modelName, modelValue, models, setLastModel, type ModelChoice } from '../models.ts'
 import { navigate } from '../router.tsx'
 import { createStickyScroll } from '../stickyScroll.ts'
 import { cardOf } from '../stores/cards.ts'
@@ -34,7 +34,7 @@ import { BtwPane } from './Btw.tsx'
 import { createIndex } from '../transcript/context.ts'
 import { UserMessage } from '../transcript/items.tsx'
 import { Workspace, type ChatPanes } from './Workspace.tsx'
-import { Loading, Notice, PaneBar, Segmented, touch, type Option } from './ui.tsx'
+import { Loading, Notice, PaneBar, Segmented, touch } from './ui.tsx'
 
 export function Chat(props: {
   sessionId: string
@@ -66,11 +66,11 @@ export function Chat(props: {
   const [model, setModel] = createSignal(lastModel())
   createEffect(on(() => state.mode, setMode))
   createEffect(on(() => state.model, (m) => m && setModel(m)))
-  const modelOptions = createMemo((): Option<string>[] => {
-    const options = (models() ?? []).map((m) => ({ value: m.value, label: m.displayName.replace(/ \(.*\)$/, ''), description: m.description }))
+  const modelOptions = createMemo((): ModelChoice[] => {
+    const options = modelChoices(models() ?? [])
     // One Claude Code no longer offers, e.g. an older model a transcript was written with.
     const current = modelValue(model(), models() ?? [])
-    return options.some((o) => o.value === current) ? options : [...options, { value: current, label: current }]
+    return options.some((o) => o.value === current) ? options : [...options, { value: current, label: modelName(current), older: true }]
   })
   const changeMode = (next: PermissionMode) => {
     setMode(next)
