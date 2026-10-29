@@ -422,8 +422,8 @@ export function Segmented<T extends string>(props: { value: T; options: { value:
 export function PaneBar(props: { underHeader?: boolean; class?: string; children: JSX.Element }) {
   return (
     <div
-      class={`flex h-9 shrink-0 items-center gap-3 px-3 text-xs ${
-        props.underHeader ? 'bar relative z-10 border-b border-(--color-bar-edge) bar-shadow md:px-4' : 'border-b border-line'
+      class={`bar-shadow relative z-10 flex h-9 shrink-0 items-center gap-3 border-b border-(--color-bar-edge) px-3 text-xs ${
+        props.underHeader ? 'bar md:px-4' : ''
       } ${props.class ?? ''}`}
     >
       {props.children}

@@ -99,7 +99,7 @@ function ChildPane(props: Parameters<typeof NestedPane>[0] & { child: string; na
 function Frame(props: { label: string; detail: string; live: boolean; actions?: JSX.Element; onShowInChat: () => void; children: JSX.Element }) {
   return (
     <div class="flex size-full flex-col">
-      <div class="flex shrink-0 items-center gap-3 border-b border-line px-4 py-1.5 text-xs">
+      <div class="relative z-10 flex shrink-0 items-center gap-3 border-b border-(--color-bar-edge) bar-shadow px-4 py-1.5 text-xs">
         <span class="flex min-w-0 flex-1 items-center gap-2">
           <span class="shrink-0 text-fg-2">{props.label}</span>
           <span class="truncate text-fg-3">{props.detail}</span>

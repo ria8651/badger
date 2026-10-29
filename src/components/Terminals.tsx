@@ -145,7 +145,7 @@ export function TerminalPage(props: { id: string; onClosed: () => void }) {
       >
         {(t) => (
           <>
-            <div class="bar relative z-10 flex h-12 shrink-0 items-center gap-2 px-5 text-ui shadow-(--shadow-bar)">
+            <div class="bar bar-shadow relative z-10 flex h-12 shrink-0 items-center gap-2 px-5 text-ui">
               <StatusDot terminal={t()} />
               <Show
                 when={renaming()}

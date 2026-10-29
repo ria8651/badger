@@ -20,7 +20,7 @@
  *   sidebar-surface  its surface: bg and surface unless the palette says otherwise (see .sidebar)
  *   bar              title bars' background, transparent unless the palette says otherwise, and
  *   on-bar, -2, -3   text on them: fg, fg-2 and fg-3 unless the palette says otherwise (see .bar)
- *   bar-edge         the line under a chat's header: line, unless the palette's bars have a shadow to do it
+ *   bar-edge         the line under a pane's header: line, unless the palette's bars have a shadow to do it
  *   accent   only for "live" or "needs you": running chats, prompts
  *   danger   errors, destructive modes, removed lines
  *   ok       added lines in diffs
