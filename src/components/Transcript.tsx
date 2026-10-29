@@ -1,4 +1,4 @@
-import { For, Show, createMemo, type Accessor, type JSX } from 'solid-js'
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, type Accessor, type JSX } from 'solid-js'
 import { CircleAlert, Repeat2, Scissors, Shield, ShieldAlert } from '../icons'
 import type { WireMessage } from '../../shared/protocol.ts'
 import { detail } from '../prefs.ts'
@@ -9,7 +9,8 @@ import { ApiError, CardContextBadge, CompactDivider, CompactingLine, Idle, Notic
 import { buildView, duration, foldWork, lastContext, modelName, retryOf, stopReason, within, type Index, type Item, type Row, type Work } from '../transcript/model.ts'
 import { Attachments } from './Attachments.tsx'
 import { Markdown } from './Markdown.tsx'
-import { Disclosure, Pre, ToolCard, toolLabel, toolSummary } from './ToolCard.tsx'
+import { Disclosure, Pre, ToolCard, ToolInput, toolLabel, toolSummary } from './ToolCard.tsx'
+import { parsePartialJson } from '../partialJson.ts'
 import { LiveDot, compact, plural } from './ui.tsx'
 
 type TranscriptProps = {
@@ -55,14 +56,22 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
   const full = () => detail() === 'full' && !props.folded
   const rows = (): Row[] => (full() ? view().items : folded().rows)
 
+  const toolName = () => props.partial?.toolName ?? ''
+  const liveInput = streamedInput(() => (props.partial?.type === 'tool_use' ? props.partial.text : undefined))
+
   const partialWork = () => (
     <>
       <Show when={props.partial?.type === 'thinking'}>
         <Thinking text={props.partial?.text ?? ''} live />
       </Show>
       <Show when={props.partial?.type === 'tool_use'}>
-        <Disclosure label={props.partial?.toolName ? toolLabel(props.partial.toolName) : 'Tool'} trailing={<LiveDot />} live>
-          <Pre text={props.partial?.text ?? ''} />
+        <Disclosure
+          label={toolName() ? toolLabel(toolName()) : 'Tool'}
+          detail={toolName() ? toolSummary(toolName(), liveInput(), props.cwd) : undefined}
+          trailing={<LiveDot />}
+          live
+        >
+          <ToolInput name={toolName()} input={liveInput()} live />
         </Disclosure>
       </Show>
     </>
@@ -71,7 +80,7 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
   /** What the live work row says Claude is doing right now. */
   const activity = (items: Item[]) => {
     const p = props.partial
-    if (p?.type === 'tool_use') return p.toolName ? toolLabel(p.toolName) : ''
+    if (p?.type === 'tool_use') return p.toolName ? `${toolLabel(p.toolName)} ${toolSummary(p.toolName, liveInput(), props.cwd)}`.trim() : ''
     if (p?.type === 'thinking') return 'Thinking'
     const last = items.findLast((i) => i.kind === 'tool' || i.kind === 'thinking')
     if (last?.kind === 'tool') return `${toolLabel(last.name)} ${toolSummary(last.name, last.input, props.cwd)}`
@@ -258,5 +267,36 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
       </Show>
     </div>
   )
+}
+
+/**
+ * A tool call's input as far as it has arrived, read from its JSON at most once a frame: Edit and Write inputs arrive
+ * a few characters at a time, and are long. A new call starts afresh straight away, so the last one's never shows.
+ */
+function streamedInput(json: () => string | undefined): Accessor<Record<string, unknown>> {
+  const read = (text: string | undefined) => {
+    const v = text ? parsePartialJson(text) : undefined
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
+  }
+  const [input, setInput] = createSignal(read(json()))
+  let seen = json()
+  let frame = 0
+  createEffect(() => {
+    const text = json()
+    const fresh = !text || text.length < (seen?.length ?? 0)
+    seen = text
+    if (fresh) {
+      cancelAnimationFrame(frame)
+      frame = 0
+      setInput(read(text))
+    } else if (!frame) {
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        setInput(read(seen))
+      })
+    }
+  })
+  onCleanup(() => cancelAnimationFrame(frame))
+  return input
 }
 

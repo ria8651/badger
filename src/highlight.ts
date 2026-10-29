@@ -4,6 +4,8 @@
  * shows plain until then.
  */
 
+import { createEffect, createSignal, onCleanup, untrack, type Accessor } from 'solid-js'
+
 /** Past this, code stays plain: highlighting it would stall the page. */
 const MAX = 200_000
 
@@ -45,20 +47,72 @@ export function languageOf(path: string | undefined): string | undefined {
  * <pre> or <code>. Shiki escapes the code itself. Undefined when there's
  * nothing to highlight it as, or it's too long.
  */
-export async function highlight(code: string, lang: string | undefined): Promise<string | undefined> {
+export async function highlight(code: string, lang: string | undefined, keep = true): Promise<string | undefined> {
   if (!lang || code.length > MAX) return
   const key = `${lang}\0${code}`
   const hit = cache.get(key)
   if (hit !== undefined) return hit
   try {
     const html = await (await load()).toHtml(code, lang)
-    if (html === undefined) return
+    if (html === undefined || !keep) return html
     if (cache.size > 500) cache.delete(cache.keys().next().value!)
     cache.set(key, html)
     return html
   } catch (e) {
     console.warn(`Couldn't highlight ${lang}`, e)
   }
+}
+
+/**
+ * Between highlights of code that's still arriving, at least: a long file would otherwise be highlighted whole every
+ * frame. Each highlight runs on the page's thread, so the gap after one is twice as long as it took, at least, leaving
+ * the page free most of the time however long the file gets.
+ */
+const LIVE_GAP = 150
+
+/**
+ * Code highlighted as it changes, e.g. while Claude writes it: the last version highlighted and its HTML, undefined
+ * until the first is done. One at a time, with a gap between (see LIVE_GAP), so what has arrived since shows plain
+ * after it until the next catches up. `keep`: cache the results, which code still arriving shouldn't, as it'd push
+ * out finished code.
+ */
+export function highlighted(code: () => string, lang: () => string | undefined, keep = true): Accessor<{ code: string; html: string } | undefined> {
+  const [done, setDone] = createSignal<{ code: string; html: string }>()
+  let busy = false
+  let stopped = false
+  /** What was last highlighted, or tried: nothing to do until one of them changes. */
+  let last = ''
+  const run = () => {
+    const c = code()
+    const l = lang()?.toLowerCase()
+    if (busy || stopped || !l || !c || `${l}\0${c}` === last) return
+    busy = true
+    last = `${l}\0${c}`
+    const started = performance.now()
+    void highlight(c, l, keep).then((html) => {
+      if (stopped) return
+      // Nothing to highlight it as, or too long: whatever changes next gets a try straight away.
+      if (html === undefined) {
+        busy = false
+        return
+      }
+      setDone({ code: c, html })
+      setTimeout(
+        () => {
+          busy = false
+          run()
+        },
+        Math.max(LIVE_GAP, 2 * (performance.now() - started)),
+      )
+    })
+  }
+  createEffect(() => {
+    code()
+    lang()
+    untrack(run)
+  })
+  onCleanup(() => (stopped = true))
+  return done
 }
 
 /** Highlights the code in an element once it scrolls near the screen. Returns a function that stops it. */
