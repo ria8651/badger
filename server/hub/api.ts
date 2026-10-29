@@ -155,7 +155,7 @@ function machineFileRoutes({ machines, chats, listChanged }: ApiDeps): Route[] {
         const scope = parseScope(url.searchParams.get('scope') ?? 'base')
         const n = Number(url.searchParams.get('context') ?? 3)
         const context = Number.isInteger(n) && n >= 0 ? n : 3
-        return [200, await query(url).runner.remote.reviewDiff(dir, scope, context)]
+        return [200, await query(url).runner.remote.reviewDiff(dir, scope, context, url.searchParams.get('only') || undefined)]
       },
     ],
     ...(['push', 'pull'] as const).map(

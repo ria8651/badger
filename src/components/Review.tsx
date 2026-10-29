@@ -422,6 +422,11 @@ export function ReviewPage(props: {
   underHeader?: boolean
   /** Only this file's changes, by its path in the checkout: a file's own diff. */
   only?: string
+  /**
+   * With `only`: all of the file, its changes in place, as one hunk rather than split up. Nothing to tick off as viewed,
+   * since that's done hunk by hunk in the chat's diff, and the file's toolbar is above it, so no header of its own.
+   */
+  whole?: boolean
   /** What's streaming in, for answers to show as the conversation does. */
   partial: Streaming | null
   bashOutput: Record<string, string>
@@ -453,7 +458,9 @@ export function ReviewPage(props: {
     const mine = ++seq
     setLoading(true)
     try {
-      const next = await api.review(dir, 'base', 3, props.machine)
+      const whole = props.whole && props.only
+      // All of it is as much context as there is.
+      const next = await api.review(dir, 'base', whole ? 100_000 : 3, props.machine, whole || undefined)
       if (mine !== seq) return
       setDiff(next)
       setError(undefined)
@@ -781,7 +788,7 @@ export function ReviewPage(props: {
         )}
       </Show>
       <div class="flex-1" />
-      <Show when={total()}>
+      <Show when={total() && !props.whole}>
         <span class="shrink-0 tabular-nums" title={`${viewedCount()} of ${plural(total(), 'hunk')} viewed`}>
           {viewedCount()}/{total()}
           <span class="hidden @md:inline"> viewed</span>
@@ -796,7 +803,7 @@ export function ReviewPage(props: {
         <GhostButton title="Read the changes again" onClick={() => void load()}>
           <RotateCw class={`size-3.5 ${loading() ? 'animate-spin' : ''}`} />
         </GhostButton>
-        <Show when={props.onGuide}>
+        <Show when={!props.whole && props.onGuide}>
           {(guide) => (
             <button
               onClick={guide()}
@@ -822,7 +829,7 @@ export function ReviewPage(props: {
         {tools()}
       </PaneBar>
       {/* How much has been viewed, as a line along the foot of what's above, over its edge. */}
-      <Show when={total()}>
+      <Show when={total() && !props.whole}>
         <div class="relative z-20 h-0">
           <div class="absolute inset-x-0 -top-0.5 h-0.5">
             <div class="h-full bg-ok transition-[width]" style={{ width: `${(viewedCount() / total()) * 100}%` }} />
@@ -831,7 +838,7 @@ export function ReviewPage(props: {
       </Show>
 
       <div class="flex min-h-0 flex-1">
-        <nav class="hidden w-72 shrink-0 overflow-y-auto border-r border-line py-2 @6xl:block">
+        <nav class={`hidden w-72 shrink-0 overflow-y-auto border-r border-line py-2 ${props.whole ? '' : '@6xl:block'}`}>
           <For each={sections()}>
             {(s) => {
               const done = () => s.hunks.filter((p) => isViewed(p.hunk.id)).length
@@ -983,6 +990,13 @@ export function ReviewPage(props: {
                     setOpen((o) => ({ ...o, ...Object.fromEntries(ids().map((id) => [id, open])) }))
                   }
                   const file = s.id.startsWith('file:') ? s.hunks[0]?.file : undefined
+                  // All of one file: its one hunk in a box, with nothing over it but the file's toolbar.
+                  if (file && props.whole)
+                    return (
+                      <section ref={(el) => sectionEls.set(s.id, el)} class="mt-2 overflow-clip rounded-lg border border-line [&>div:first-child]:border-t-0">
+                        <For each={s.hunks}>{(p) => hunk(p, { bar: false })}</For>
+                      </section>
+                    )
                   // File by file: the file is the one box, its hunks one after another in it, split by their @@ lines.
                   if (file)
                     return (

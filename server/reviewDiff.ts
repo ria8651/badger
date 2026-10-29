@@ -99,7 +99,7 @@ function hunksOf(path: string, body: string[]): ReviewHunk[] {
 }
 
 /** Splits `git diff` output into its files. */
-function parsePatch(out: string): ReviewFile[] {
+function parsePatch(out: string, maxLines = FILE_LINES): ReviewFile[] {
   const files: ReviewFile[] = []
   let total = 0
   for (const chunk of out.split(/^(?=diff --git )/m)) {
@@ -137,7 +137,7 @@ function parsePatch(out: string): ReviewFile[] {
       else if (l.startsWith('-')) removed++
     }
     const size = body.reduce((n, l) => n + l.length + 1, 0)
-    const truncated = body.length > FILE_LINES || total + size > TOTAL_BYTES
+    const truncated = body.length > maxLines || total + size > TOTAL_BYTES
     if (!truncated) total += size
     files.push({
       path,
@@ -158,22 +158,26 @@ function parsePatch(out: string): ReviewFile[] {
 const recent = new Map<string, { at: number; diff: Promise<ReviewDiff> }>()
 
 /**
- * The changes in a checkout for a review: see ReviewScope. `context` is lines around each change, as `-U`.
+ * The changes in a checkout for a review: see ReviewScope. `context` is lines around each change, as `-U`. `only` is
+ * one file's, by its path in the checkout, e.g. all of a file with its changes in place, so it's let be longer.
  * Asked again for the same within REUSE_MS, the one read serves both.
  */
-export function reviewDiff(path: string, scope: ReviewScope, context = 3): Promise<ReviewDiff> {
-  const key = JSON.stringify([path, scope, context])
+export function reviewDiff(path: string, scope: ReviewScope, context = 3, only?: string): Promise<ReviewDiff> {
+  const key = JSON.stringify([path, scope, context, only])
   const now = Date.now()
   for (const [k, r] of recent) if (now - r.at > REUSE_MS) recent.delete(k)
   const hit = recent.get(key)
   if (hit) return hit.diff
-  const diff = readDiff(path, scope, context)
+  const diff = readDiff(path, scope, context, only)
   recent.set(key, { at: now, diff })
   diff.catch(() => recent.delete(key))
   return diff
 }
 
-async function readDiff(path: string, scope: ReviewScope, context: number): Promise<ReviewDiff> {
+/** The most lines of patch one file asked for alone may have. */
+const ONLY_LINES = 50_000
+
+async function readDiff(path: string, scope: ReviewScope, context: number, only?: string): Promise<ReviewDiff> {
   const [branch, { tree, big }, base, root] = await Promise.all([
     git(path, 'branch', '--show-current'),
     snapshot(path),
@@ -203,17 +207,30 @@ async function readDiff(path: string, scope: ReviewScope, context: number): Prom
   }
   const { stdout } = await run(
     'git',
-    ['-c', 'core.quotePath=false', 'diff', '--no-color', '--no-ext-diff', '--full-index', '-M', `-U${Math.max(0, Math.min(context, 100_000))}`, from, to],
+    [
+      '-c',
+      'core.quotePath=false',
+      'diff',
+      '--no-color',
+      '--no-ext-diff',
+      '--full-index',
+      '-M',
+      `-U${Math.max(0, Math.min(context, 100_000))}`,
+      from,
+      to,
+      // From the top of the checkout, and taken as it is, whatever folder git runs in and whatever's in the name.
+      ...(only ? ['--', `:(top,literal)${only}`] : []),
+    ],
     { cwd: path, maxBuffer: MAX_OUTPUT },
   ).catch((err) => {
     if ((err as { code?: string }).code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') throw new Error(`These changes are too big to review here: git's diff of them is over ${MAX_OUTPUT >> 20} MB.`)
     if (scope.kind === 'since' && /bad object/.test(String((err as Error).message))) throw new Error('That earlier snapshot of the changes has been cleared away by git, so what changed since it can\'t be shown.')
     throw err
   })
-  const files = parsePatch(stdout)
+  const files = parsePatch(stdout, only ? ONLY_LINES : FILE_LINES)
   // Too big to have been put in the snapshot, so not in the diff: listed, to be read some other way. Only the working tree has them.
   for (const b of to === tree ? big : []) {
-    if (files.some((f) => f.path === b.path)) continue
+    if (files.some((f) => f.path === b.path) || (only && b.path !== only)) continue
     files.push({ path: b.path, status: 'added', added: 0, removed: 0, binary: false, truncated: true, hunks: [{ id: hunkId(b.path, `untracked\0${b.size}\0${b.mtime}`), patch: '' }] })
   }
   return { branch, base: base?.branch, baseHow: base?.how, root, commits, snapshot: tree, files }

@@ -170,7 +170,7 @@ export interface RunnerApi {
   /** `null` goes back to working the base out; `''` means none. */
   setBase(path: string, base: string | null): Promise<void>
   /** The changes a review looks at; see ReviewScope. */
-  reviewDiff(path: string, scope: ReviewScope, context: number): Promise<ReviewDiff>
+  reviewDiff(path: string, scope: ReviewScope, context: number, only?: string): Promise<ReviewDiff>
   /** Fast-forward only; refused while a chat is working there. */
   gitPull(path: string): Promise<void>
   /** Refused while a chat is working in it or it has terminals. */

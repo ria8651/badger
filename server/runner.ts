@@ -313,8 +313,8 @@ export class Runner implements RunnerApi {
     return setBase(path, base).catch(badRequest)
   }
 
-  reviewDiff(path: string, scope: ReviewScope, context: number) {
-    return reviewDiff(path, scope, context).catch(badRequest)
+  reviewDiff(path: string, scope: ReviewScope, context: number, only?: string) {
+    return reviewDiff(path, scope, context, only).catch(badRequest)
   }
 
   /** Fine while a chat is working: a fast-forward won't touch files with uncommitted changes, and Claude rereads a file that changed under it. */

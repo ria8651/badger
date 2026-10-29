@@ -64,8 +64,9 @@ export const api = {
   /** Null outside a git repo. Fetching first makes "behind" current, but can take a moment. */
   git: (path: string, machine?: string, fetch = false) => get<GitStatus | null>(`/api/git?${on(machine, { path, ...(fetch ? { fetch: '1' } : {}) })}`),
   /** `scope` as the server reads it: base, uncommitted, commit:<sha> or since:<tree>. */
-  review: (path: string, scope: string, context: number, machine?: string) =>
-    get<ReviewDiff>(`/api/review?${on(machine, { path, scope, context: String(context) })}`),
+  /** `only`: one file's changes, by its path in the checkout. */
+  review: (path: string, scope: string, context: number, machine?: string, only?: string) =>
+    get<ReviewDiff>(`/api/review?${on(machine, { path, scope, context: String(context), ...(only ? { only } : {}) })}`),
   push: (path: string, machine?: string) => request<void>('POST', '/api/git/push', { path, machine }),
   pull: (path: string, machine?: string) => request<void>('POST', '/api/git/pull', { path, machine }),
   baseChoices: (path: string, machine?: string) => get<BaseChoices>(`/api/git/base?${on(machine, { path })}`),

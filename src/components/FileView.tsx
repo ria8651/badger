@@ -133,8 +133,8 @@ export function FileView(props: {
       value={props.mode}
       onChange={props.onMode}
       options={[
-        { value: 'file', label: 'File', title: 'All of it, its changes marked' },
-        { value: 'diff', label: 'Diff', title: 'Only its changes' },
+        { value: 'file', label: 'File', title: 'As it is now, its changes marked in the margin' },
+        { value: 'diff', label: 'Diff', title: 'All of it with its changes in place: lines taken out and put in' },
       ]}
     />
   )
@@ -144,7 +144,15 @@ export function FileView(props: {
       when={props.mode === 'file'}
       fallback={
         <Show when={relative()} fallback={<p class="p-6 text-center text-ui text-fg-3">{changes.loading ? 'Reading the changes…' : 'This file isn’t in the checkout’s changes.'}</p>}>
-          {(only) => props.renderDiff(only(), toggle())}
+          {(only) =>
+            props.renderDiff(
+              only(),
+              <>
+                {toggle()}
+                <PathLabel path={only()} class="text-fg-3" />
+              </>,
+            )
+          }
         </Show>
       }
     >

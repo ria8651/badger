@@ -241,7 +241,7 @@ export function Chat(props: {
                   composer?.insert(markdown)
                 }
           }
-          renderDiff={(only, lead) => reviewPage(false, { lead, only })}
+          renderDiff={(only, lead) => reviewPage(false, { lead, only, whole: true })}
         />
       </div>
     ),
@@ -311,7 +311,7 @@ export function Chat(props: {
   /** This chat's changes: its own page if it's a review chat, else its diff, whose comments and questions come here. */
   const reviewPage = (
     guided: boolean,
-    opts: { onReady?: (focus: () => void) => void; lead?: JSX.Element; underHeader?: boolean; only?: string } = {},
+    opts: { onReady?: (focus: () => void) => void; lead?: JSX.Element; underHeader?: boolean; only?: string; whole?: boolean } = {},
   ) => (
     // In a panel it's drawn outside the chat, so it's given the chat's way of opening files again.
     <OpenFile.Provider value={files}>
@@ -333,6 +333,7 @@ export function Chat(props: {
           lead={opts.lead}
           underHeader={opts.underHeader}
           only={opts.only}
+          whole={opts.whole}
         />
       </Checking.Provider>
     </ChildChats.Provider>
