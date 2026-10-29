@@ -23,7 +23,7 @@ type BoardProps = {
 export function Board(props: BoardProps) {
   return (
     <div class="flex h-full min-w-0 flex-1 flex-col">
-      <div class="bar relative z-10 flex h-12 shrink-0 items-center px-5 shadow-(--shadow-bar)">
+      <div class="bar flex h-12 shrink-0 items-center px-5">
         <h1 class="font-medium">Projects</h1>
       </div>
       <Columns {...props} parentId={null} class="flex-1" />

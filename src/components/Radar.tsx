@@ -63,7 +63,7 @@ export function Radar(props: {
 
   return (
     <div class="flex h-full min-w-0 flex-1 flex-col overflow-y-auto">
-      <div class="bar relative z-10 flex h-12 shrink-0 items-center px-5 shadow-(--shadow-bar)">
+      <div class="bar flex h-12 shrink-0 items-center px-5">
         <h1 class="font-medium">Radar</h1>
       </div>
       <div class="mx-auto w-full max-w-3xl px-5 pb-10">

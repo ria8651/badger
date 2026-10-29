@@ -234,7 +234,7 @@ export function CardView(props: {
       when={isProject()}
       fallback={
         <div class="flex h-full min-w-0 flex-1 flex-col overflow-y-auto">
-          <div class="bar relative z-10 flex h-12 shrink-0 items-center gap-1 px-5 text-ui shadow-(--shadow-bar)">
+          <div class="bar flex h-12 shrink-0 items-center gap-1 px-5 text-ui">
             <button onClick={() => props.onOpenCard(null)} class="text-fg-3 transition-colors hover:text-fg">
               Projects
             </button>
@@ -260,7 +260,7 @@ export function CardView(props: {
       }
     >
       <div class="flex h-full min-w-0 flex-1 flex-col">
-        <div class="bar relative z-10 flex h-12 shrink-0 items-center gap-1 px-5 text-ui shadow-(--shadow-bar)">
+        <div class="bar flex h-12 shrink-0 items-center gap-1 px-5 text-ui">
           <button onClick={() => props.onOpenCard(null)} class="text-fg-3 transition-colors hover:text-fg">
             Projects
           </button>
