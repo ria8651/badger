@@ -24,6 +24,7 @@ export type View =
   | AttachmentView
   | BtwView
   | DiffView
+  | FileView
 /**
  * What a port serves, in a frame; id is the port. Path is where the page is:
  * where it was opened, then wherever it's gone since. Opening it again
@@ -44,6 +45,11 @@ export const btwView = (session: string): BtwView => ({ kind: 'btw', session })
 /** The changes in a chat's checkout, to read without Claude explaining them, with a way on to a guided review. */
 export type DiffView = { kind: 'diff'; session: string }
 export const diffView = (session: string): DiffView => ({ kind: 'diff', session })
+/**
+ * A file on its chat's machine, by absolute path: all of it, or its changes. `line` is where to go, and opening it
+ * again bumps `nav`, which goes there again.
+ */
+export type FileView = { kind: 'file'; session: string; path: string; line?: number; mode?: 'file' | 'diff'; nav?: number }
 export const viewKey = (v: View) =>
   v.kind === 'task'
     ? `task:${v.session}:${v.id}`
@@ -51,10 +57,12 @@ export const viewKey = (v: View) =>
       ? `${v.kind}:${v.session}`
       : v.kind === 'attachment'
         ? `attachment:${v.session}:${v.prompt}:${v.part}`
-        : `${v.kind}:${v.id}`
+        : v.kind === 'file'
+          ? `file:${v.session}:${v.path}`
+          : `${v.kind}:${v.id}`
 /** The chat a view belongs to, if it only shows beside one. */
 export const sessionOf = (v: View) =>
-  v.kind === 'task' || v.kind === 'plan' || v.kind === 'attachment' || v.kind === 'btw' || v.kind === 'diff' ? v.session : undefined
+  v.kind === 'task' || v.kind === 'plan' || v.kind === 'attachment' || v.kind === 'btw' || v.kind === 'diff' || v.kind === 'file' ? v.session : undefined
 
 export type Group = { type: 'group'; id: string; views: View[]; active?: string }
 export type Leaf = { type: 'chat' } | Group
@@ -520,6 +528,18 @@ export function openView(ws: Ws, view: View): void {
     return { ...l, tree: placed.tree, focus: placed.group, hidden: false }
   })
   setFocusRequest(key)
+}
+
+/** Shows a file beside its chat: the tab it already has, gone to `line` again and in `mode` if given, or a new one. */
+export function openFile(ws: Ws, view: FileView): void {
+  const was = viewsOf(layoutOf(ws).tree).find((v): v is FileView => v.kind === 'file' && viewKey(v) === viewKey(view))
+  if (was) updateLayout(ws, (l) => ({ ...l, tree: replaceView(l.tree, { ...was, line: view.line ?? was.line, mode: view.mode ?? was.mode, nav: (was.nav ?? 0) + 1 }) }))
+  openView(ws, view)
+}
+
+/** Switches a file's tab between all of it and its diff. */
+export function setFileMode(ws: Ws, view: FileView, mode: 'file' | 'diff'): void {
+  updateLayout(ws, (l) => ({ ...l, tree: replaceView(l.tree, { ...view, mode }) }))
 }
 
 /**

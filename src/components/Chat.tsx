@@ -4,7 +4,9 @@ import type { DraftAttachments, PermissionMode, QueuedMessage } from '../../shar
 import { chatActions } from '../actions.ts'
 import { api, connected } from '../api.ts'
 import { cardWorktreeName, isScratch, worktreeOf } from '../folders.ts'
-import { diffView, openTerminal, openView, planView, viewKey, viewShown, wide } from '../layout.ts'
+import { diffView, openFile, openTerminal, openView, planView, setFileMode, viewKey, viewShown, wide } from '../layout.ts'
+import { OpenFile } from '../fileLinks.ts'
+import { FileView } from './FileView.tsx'
 import { sideChatsOf, startSideChat } from '../btw.ts'
 import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
 import { lastModel, modelValue, models, setLastModel } from '../models.ts'
@@ -141,6 +143,16 @@ export function Chat(props: {
   /** Where tasks, plans and attachments open beside the chat. An embedded chat has nowhere: they stay in it. */
   const beside = () => (props.embedded ? undefined : ws())
 
+  /** Opens a file beside the chat; embedded, there's nowhere, so a link to one does nothing. */
+  const files = {
+    cwd: () => cwd(),
+    open: (path: string, line?: number) => {
+      const w = beside()
+      if (w) openFile(w, { kind: 'file', session: props.sessionId, path, line })
+      else showError("Couldn't open it", 'Files open in a panel beside the chat, and there’s none here.')
+    },
+  }
+
   /** Scroll to a tool call, opening it and whatever it's folded into. */
   const jump = (toolUseId: string) => {
     reveal(toolUseId)
@@ -206,6 +218,23 @@ export function Chat(props: {
     btwLive: () => sideChatsOf(props.sessionId).some((s) => s.running),
     renderBtw: (onReady) => <BtwPane parent={props.sessionId} onNew={() => askAside('')} onReady={onReady} />,
     renderDiff: (onReady, bar) => <div class="flex size-full flex-col">{reviewPage(false, { onReady, bar })}</div>,
+    renderFile: (view, onReady, bar) => (
+      <div class="flex size-full flex-col">
+        <FileView
+          path={view().path}
+          line={view().line}
+          nav={view().nav}
+          mode={view().mode ?? 'file'}
+          onMode={(mode) => ws() && setFileMode(ws()!, view(), mode)}
+          machine={machine()}
+          cwd={cwd()}
+          running={state.running}
+          bar={bar}
+          onReady={onReady}
+          renderDiff={(only, lead) => reviewPage(false, { bar, lead, only })}
+        />
+      </div>
+    ),
   }
 
   /** Forks a side chat (/btw) in the panel beside this one, asking it `question` if there is one. */
@@ -270,7 +299,12 @@ export function Chat(props: {
     else startReview()
   }
   /** This chat's changes: its own page if it's a review chat, else its diff, whose comments and questions come here. */
-  const reviewPage = (guided: boolean, opts: { onReady?: (focus: () => void) => void; bar?: () => HTMLElement | undefined; lead?: JSX.Element } = {}) => (
+  const reviewPage = (
+    guided: boolean,
+    opts: { onReady?: (focus: () => void) => void; bar?: () => HTMLElement | undefined; lead?: JSX.Element; underHeader?: boolean; only?: string } = {},
+  ) => (
+    // In a panel it's drawn outside the chat, so it's given the chat's way of opening files again.
+    <OpenFile.Provider value={files}>
     <ChildChats.Provider value={children.state}>
       <Checking.Provider value={(id) => state.checking.includes(id)}>
         <ReviewPage
@@ -288,9 +322,12 @@ export function Chat(props: {
           onReady={opts.onReady}
           bar={opts.bar}
           lead={opts.lead}
+          underHeader={opts.underHeader}
+          only={opts.only}
         />
       </Checking.Provider>
     </ChildChats.Provider>
+    </OpenFile.Provider>
   )
 
   /** A review chat's two ways of being seen. */
@@ -317,6 +354,8 @@ export function Chat(props: {
   const openChat = (id: string) => navigate({ kind: 'chat', id })
 
   const body = (
+    // Links to files in what it shows open them beside it.
+    <OpenFile.Provider value={files}>
     <div class="flex h-full min-w-0 flex-1 flex-col">
       {/* One header on narrow screens: the page's bar above the chat's own row, divided only below. */}
       <Show when={!props.embedded}>
@@ -345,7 +384,7 @@ export function Chat(props: {
           <div class={`${UNDER_HEADER} flex h-9 shrink-0 items-center px-3 md:px-4`}>{reviewTabs()}</div>
         </Show>
         <Show when={reviewing()}>
-          {reviewPage(true, { lead: reviewTabs() })}
+          {reviewPage(true, { lead: reviewTabs(), underHeader: true })}
           {/* Claude asking for something can't wait for you to switch to the conversation. */}
           <Show when={state.permissions.length || state.error}>
             <div class="flex shrink-0 flex-col gap-2 border-t border-line p-3">
@@ -551,6 +590,7 @@ export function Chat(props: {
         </div>
       </div>
     </div>
+    </OpenFile.Provider>
   )
   if (props.embedded) return body
   return (

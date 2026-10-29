@@ -12,6 +12,7 @@ import type { Partial as Streaming } from '../useChat.ts'
 import { Messages } from './Transcript.tsx'
 import { BasePicker, baseChanged, howText } from './BasePicker.tsx'
 import { UNDER_HEADER } from './ChatHeader.tsx'
+import { useOpenFile } from '../fileLinks.ts'
 import { Markdown } from './Markdown.tsx'
 import { Button, DiffCount, GhostButton, LiveDot, inputClass } from './ui.tsx'
 
@@ -538,6 +539,10 @@ export function ReviewPage(props: {
   bar?: () => HTMLElement | undefined
   /** Put first in the toolbar's row, e.g. a review chat's tabs. */
   lead?: JSX.Element
+  /** The toolbar's row is the second line of the chat's header (see UNDER_HEADER). */
+  underHeader?: boolean
+  /** Only this file's changes, by its path in the checkout: a file's own diff. */
+  only?: string
   /** What's streaming in, for answers to show as the conversation does. */
   partial: Streaming | null
   bashOutput: Record<string, string>
@@ -547,6 +552,7 @@ export function ReviewPage(props: {
     untrack(() => props.sessionId),
     untrack(() => props.guided),
   )
+  const openFile = useOpenFile()
   const [diff, setDiff] = createSignal<ReviewDiff>()
   const [error, setError] = createSignal<string>()
   const [loading, setLoading] = createSignal(false)
@@ -593,9 +599,11 @@ export function ReviewPage(props: {
   const answers = createMemo(() => answersOf(props.index(), questions()))
 
   // Kept the same where a hunk is, so reading the diff again (each time a turn ends) doesn't redraw what hasn't changed.
+  /** What's shown of the changes: all of them, or one file's. */
+  const files = createMemo(() => (diff()?.files ?? []).filter((f) => !props.only || f.path === props.only))
   const placed = createMemo<Map<string, Placed>>((before) => {
     const all = new Map<string, Placed>()
-    for (const file of diff()?.files ?? []) {
+    for (const file of files()) {
       for (const hunk of file.hunks) {
         const was = before?.get(hunk.id)
         const same = was && was.hunk.patch === hunk.patch && was.file.path === file.path && was.file.status === file.status && was.file.oldPath === file.oldPath
@@ -629,7 +637,7 @@ export function ReviewPage(props: {
     const g = guide()
     let out: Section[]
     if (!g) {
-      out = (diff()?.files ?? []).map((f) => ({ id: `file:${f.path}`, title: f.path, hunks: f.hunks.map((hunk) => all.get(hunk.id)!) }))
+      out = files().map((f) => ({ id: `file:${f.path}`, title: f.path, hunks: f.hunks.map((hunk) => all.get(hunk.id)!) }))
     } else {
       const inGuide = new Set(g.groups.flatMap((x) => x.hunks))
       const rest = [...all.values()].filter((p) => !inGuide.has(p.hunk.id))
@@ -751,7 +759,7 @@ export function ReviewPage(props: {
       remember(scrollKey, el && scroller.scrollTop > 0 ? { hunk, offset: top - el.getBoundingClientRect().top } : undefined)
     }
   }
-  const scrollKey = `${untrack(() => props.guided) ? 'review' : 'diff'}:${untrack(() => props.sessionId)}`
+  const scrollKey = `${untrack(() => props.guided) ? 'review' : 'diff'}:${untrack(() => props.sessionId)}${untrack(() => props.only) ? `:${untrack(() => props.only)}` : ''}`
   let content!: HTMLDivElement
   const spot = recall<{ hunk: string; offset: number }>(scrollKey)
   // Not saved over until it's been gone back to: the page starts at the top while the diff loads.
@@ -879,9 +887,9 @@ export function ReviewPage(props: {
               )}
             </Show>
             <DiffCount
-              files={d().files.length}
-              added={d().files.reduce((n, f) => n + f.added, 0)}
-              removed={d().files.reduce((n, f) => n + f.removed, 0)}
+              files={files().length}
+              added={files().reduce((n, f) => n + f.added, 0)}
+              removed={files().reduce((n, f) => n + f.removed, 0)}
               class="shrink-0"
             />
           </>
@@ -929,14 +937,14 @@ export function ReviewPage(props: {
         when={props.bar?.()}
         keyed
         fallback={
-          // With a lead it's a review chat's page, and the row is the second line of the chat's header.
-          <div class={`flex h-9 shrink-0 items-center gap-3 px-3 ${props.lead ? `${UNDER_HEADER} md:px-4` : 'border-b border-line'}`}>
+          // Under a chat's header, the second line of it.
+          <div class={`flex h-9 shrink-0 items-center gap-3 px-3 ${props.underHeader ? `${UNDER_HEADER} md:px-4` : 'border-b border-line'}`}>
             {props.lead}
             {tools(false)}
           </div>
         }
       >
-        {(el) => <Portal mount={el}>{tools(true)}</Portal>}
+        {(el) => <Portal mount={el}><div class="flex min-w-0 flex-1 items-center gap-3">{props.lead}{tools(true)}</div></Portal>}
       </Show>
       {/* How much has been viewed, as a line along the foot of what's above. */}
       <Show when={total()}>
@@ -1113,8 +1121,18 @@ export function ReviewPage(props: {
                           </button>
                           <span class={`shrink-0 font-mono text-xs ${STATUS_TONE[file.status]}`}>{STATUS_LETTER[file.status]}</span>
                           {/* rtl so a long path loses its start, not its file name. */}
-                          <h2 class="min-w-0 truncate font-mono text-xs text-fg" title={file.path} dir="rtl">
-                            <bdi>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</bdi>
+                          <h2 class="min-w-0 truncate font-mono text-xs text-fg" dir="rtl">
+                            {/* A file's own diff is already beside it; anywhere else, the path opens the whole file. */}
+                            <Show
+                              when={openFile && !props.only && file.status !== 'deleted' && diff()?.root}
+                              fallback={<bdi title={file.path}>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</bdi>}
+                            >
+                              {(root) => (
+                                <button onClick={() => openFile!.open(`${root()}/${file.path}`)} title={`Open ${file.path}`} class="hover:underline">
+                                  <bdi>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</bdi>
+                                </button>
+                              )}
+                            </Show>
                           </h2>
                           <Show when={file.added || file.removed}>
                             <DiffCount files={1} added={file.added} removed={file.removed} class="shrink-0 text-xs" />
@@ -1141,13 +1159,13 @@ export function ReviewPage(props: {
                             Update the guide
                           </Button>
                         </Show>
-                        {/* With one hunk, its own tick is all it needs. */}
                         <Show when={s.hunks.length > 1}>
                           <span class="text-xs text-fg-3 tabular-nums">
                             {s.hunks.filter((p) => isViewed(p.hunk.id)).length}/{s.hunks.length}
                           </span>
-                          <ViewedBox viewed={allViewed()} onChange={(on) => setViewed(ids(), on)} label="All viewed" />
                         </Show>
+                        {/* Even with one hunk: the header stays stuck at the top, so it's in reach from anywhere in a long one. */}
+                        <ViewedBox viewed={allViewed()} onChange={(on) => setViewed(ids(), on)} label={s.hunks.length > 1 ? 'All viewed' : 'Viewed'} />
                       </header>
                       {/* The explanation beside its hunks where there's room, each pinned (see pin); above them where there isn't. */}
                       <div class={`grid gap-4 pt-3 ${side() ? '@4xl:grid-cols-[minmax(16rem,26rem)_minmax(0,1fr)]' : ''}`}>

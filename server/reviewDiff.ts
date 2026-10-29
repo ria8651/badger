@@ -174,7 +174,12 @@ export function reviewDiff(path: string, scope: ReviewScope, context = 3): Promi
 }
 
 async function readDiff(path: string, scope: ReviewScope, context: number): Promise<ReviewDiff> {
-  const [branch, { tree, big }, base] = await Promise.all([git(path, 'branch', '--show-current'), snapshot(path), baseOf(path, true).catch(() => undefined)])
+  const [branch, { tree, big }, base, root] = await Promise.all([
+    git(path, 'branch', '--show-current'),
+    snapshot(path),
+    baseOf(path, true).catch(() => undefined),
+    git(path, 'rev-parse', '--show-toplevel'),
+  ])
   const head = await git(path, 'rev-parse', '-q', '--verify', 'HEAD').catch(() => '')
   const forkPoint = base && head ? await git(path, 'merge-base', head, base.sha).catch(() => '') : ''
   const commits = forkPoint ? await commitsSince(path, forkPoint) : []
@@ -211,5 +216,5 @@ async function readDiff(path: string, scope: ReviewScope, context: number): Prom
     if (files.some((f) => f.path === b.path)) continue
     files.push({ path: b.path, status: 'added', added: 0, removed: 0, binary: false, truncated: true, hunks: [{ id: hunkId(b.path, `untracked\0${b.size}\0${b.mtime}`), patch: '' }] })
   }
-  return { branch, base: base?.branch, baseHow: base?.how, commits, snapshot: tree, files }
+  return { branch, base: base?.branch, baseHow: base?.how, root, commits, snapshot: tree, files }
 }

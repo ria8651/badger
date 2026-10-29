@@ -2,6 +2,7 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { createEffect, onCleanup } from 'solid-js'
 import { diagramWhenSeen } from '../diagram.ts'
+import { fileLink, useOpenFile } from '../fileLinks.ts'
 import { highlightWhenSeen } from '../highlight.ts'
 import { appliedPalette } from '../theme.ts'
 import { viewImageIn, viewImages } from './ImageViewer.tsx'
@@ -64,8 +65,20 @@ function decorate(root: HTMLElement, text: string): () => void {
 
 export function Markdown(props: { text: string }) {
   let el!: HTMLDivElement
-  // Images open in the viewer, unless they're a link's.
+  const files = useOpenFile()
   const onClick = (e: MouseEvent) => {
+    // A link to a file opens it beside the chat, rather than as a page of Badger's in a new tab. Modified clicks still go there.
+    const link = (e.target as Element).closest?.('a')
+    const href = link?.getAttribute('href')
+    if (files && href && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+      const to = fileLink(href, files.cwd())
+      if (to) {
+        e.preventDefault()
+        files.open(to.path, to.line)
+        return
+      }
+    }
+    // Images open in the viewer, unless they're a link's.
     const img = e.target as Element
     if (!(img instanceof HTMLImageElement) || img.closest('a')) return
     viewImageIn(e.currentTarget as Element, img)

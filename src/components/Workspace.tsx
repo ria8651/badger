@@ -1,5 +1,5 @@
 import { For, Index, Match, Show, Switch, children, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
-import { FileDiff, Globe, Minimize2, MessagesSquare, NotebookPen, Plus, RotateCw, SquareArrowOutUpRight, X } from '../icons'
+import { FileDiff, FileText, Globe, Minimize2, MessagesSquare, NotebookPen, Plus, RotateCw, SquareArrowOutUpRight, X } from '../icons'
 import { setOnScreen } from '../activity.ts'
 import { api } from '../api.ts'
 import type { ContextChip } from './Attachments.tsx'
@@ -39,6 +39,7 @@ import {
   type Group,
   type Len,
   type AttachmentView,
+  type FileView,
   type PreviewView,
   type View,
 } from '../layout.ts'
@@ -97,6 +98,8 @@ export interface ChatPanes {
   /** The diff of its checkout. */
   /** `bar`: where in its group's tab strip its toolbar goes, while it's the tab shown there. */
   renderDiff: (onReady: (focus: () => void) => void, bar: () => HTMLElement | undefined) => JSX.Element
+  /** A file on its machine, all of it or its diff, as its tab says now; `bar` as for renderDiff. */
+  renderFile: (v: () => FileView, onReady: (focus: () => void) => void, bar: () => HTMLElement | undefined) => JSX.Element
 }
 
 const BINDINGS: [string, string][] = [
@@ -449,6 +452,7 @@ export function Workspace(props: {
     if (v?.kind === 'plan') return 'Plan'
     if (v?.kind === 'btw') return 'Side chats'
     if (v?.kind === 'diff') return 'Diff'
+    if (v?.kind === 'file') return v.path.split('/').pop() || v.path
     if (v?.kind === 'attachment') return props.panes.attachment(v)?.label ?? 'Attachment'
     if (v?.kind === 'preview') return v.name ?? `:${v.id}`
     const t = terminalOf(v)
@@ -457,7 +461,9 @@ export function Workspace(props: {
   const tabTitle = (v?: View) =>
     v?.kind === 'preview'
       ? `${tabLabel(v)}\n${previewUrl(v.id, v.path, machine()) ?? `Port ${v.id}`}`
-      : v?.kind === 'task' || v?.kind === 'plan' || v?.kind === 'attachment' || v?.kind === 'btw' || v?.kind === 'diff'
+      : v?.kind === 'file'
+        ? v.path
+        : v?.kind === 'task' || v?.kind === 'plan' || v?.kind === 'attachment' || v?.kind === 'btw' || v?.kind === 'diff'
         ? tabLabel(v)
         : [
             terminalOf(v) ? terminalTooltip(terminalOf(v)!) : tabLabel(v),
@@ -547,6 +553,9 @@ export function Workspace(props: {
                           <Show when={v()?.kind === 'diff'}>
                             <FileDiff class="size-3 shrink-0" />
                           </Show>
+                          <Show when={v()?.kind === 'file'}>
+                            <FileText class="size-3 shrink-0" />
+                          </Show>
                           <Show when={v()?.kind === 'btw'}>
                             <MessagesSquare class="size-3 shrink-0" />
                             <Show when={props.panes.btwLive()}>
@@ -589,7 +598,7 @@ export function Workspace(props: {
             <Plus class="size-3.5" />
           </button>
           {/* A diff's toolbar comes up here, rather than being a bar of its own under the tabs. */}
-          <Show when={active()?.kind === 'diff'} fallback={<div class="flex-1" />}>
+          <Show when={active()?.kind === 'diff' || active()?.kind === 'file'} fallback={<div class="flex-1" />}>
             <div
               ref={(el) => {
                 const id = g().id
@@ -650,6 +659,11 @@ export function Workspace(props: {
             const b = g && boxOf(g.id)
             return b && activeOf(g) === key ? { group: g.id, box: b } : undefined
           })
+          /** Where in its group's tab strip a diff's or file's toolbar goes, while it's the tab shown. */
+          const bar = () => {
+            const a = at()
+            return a && diffBars()[a.group]
+          }
           return (
             <div
               class="absolute overflow-hidden rounded-b-(--pane-radius)"
@@ -679,15 +693,8 @@ export function Workspace(props: {
                     <Match when={v().kind === 'plan'}>{props.panes.renderPlan((focus) => ready(key, focus))}</Match>
                     <Match when={attachmentViewOf(v())}>{(a) => props.panes.renderAttachment(a(), (focus) => ready(key, focus))}</Match>
                     <Match when={v().kind === 'btw'}>{props.panes.renderBtw((focus) => ready(key, focus))}</Match>
-                    <Match when={v().kind === 'diff'}>
-                      {props.panes.renderDiff(
-                        (focus) => ready(key, focus),
-                        () => {
-                          const a = at()
-                          return a && diffBars()[a.group]
-                        },
-                      )}
-                    </Match>
+                    <Match when={v().kind === 'diff'}>{props.panes.renderDiff((focus) => ready(key, focus), bar)}</Match>
+                    <Match when={v().kind === 'file' && (v() as FileView)}>{(f) => props.panes.renderFile(f, (focus) => ready(key, focus), bar)}</Match>
                   </Switch>
                 )}
               </Show>

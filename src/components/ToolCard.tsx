@@ -1,4 +1,5 @@
 import { For, Match, Show, Switch, createEffect, createSignal, on, onCleanup, type JSX } from 'solid-js'
+import { useOpenFile } from '../fileLinks.ts'
 import { highlightWhenSeen, languageOf } from '../highlight.ts'
 import { Check, ChevronRight, CircleAlert, Loader2, Shield, Webhook } from '../icons'
 import type { Task } from '../tasks.ts'
@@ -247,6 +248,8 @@ export function Disclosure(props: {
   id?: string
   label: string
   detail?: string
+  /** Makes the detail a link of its own, e.g. a file's path that opens the file; the rest of the row still folds. */
+  onDetail?: () => void
   trailing?: JSX.Element
   /** Shown under the row while collapsed. */
   peek?: JSX.Element
@@ -285,7 +288,23 @@ export function Disclosure(props: {
         class="group -mx-2 flex w-[calc(100%+1rem)] items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-surface pointer-coarse:py-1.5"
       >
         <span class="min-w-0 truncate text-fg-2 group-hover:text-fg">{props.label}</span>
-        <span class="min-w-0 flex-1 truncate font-mono text-xs text-fg-3">{props.detail}</span>
+        <span class="min-w-0 flex-1 truncate font-mono text-xs text-fg-3">
+          <Show when={props.onDetail} fallback={props.detail}>
+            {(open) => (
+              // A span, since it's inside the row's button; a click on it opens rather than folds.
+              <span
+                role="link"
+                tabIndex={0}
+                title={`Open ${props.detail}`}
+                onClick={(e) => (e.stopPropagation(), open()())}
+                onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), e.stopPropagation(), open()())}
+                class="cursor-pointer hover:text-fg-2 hover:underline"
+              >
+                {props.detail}
+              </span>
+            )}
+          </Show>
+        </span>
         {props.trailing}
         <ChevronRight class={`size-3.5 shrink-0 text-fg-3 transition-transform ${open() ? 'rotate-90' : ''}`} />
       </button>
@@ -318,6 +337,15 @@ const liveOf = (props: ToolProps) =>
 
 export function ToolCard(props: ToolProps) {
   const live = () => liveOf(props)
+  const files = useOpenFile()
+  /** The file a call read or wrote, to open beside the chat: where a Read started, if it said. */
+  const openTarget = () => {
+    if (!files || !['Read', 'Write', 'Edit', 'MultiEdit'].includes(props.name)) return
+    const path = str(props.input.file_path)
+    if (!path) return
+    const line = props.name === 'Read' && typeof props.input.offset === 'number' ? props.input.offset : undefined
+    return () => files.open(path.startsWith('/') ? path : `${props.cwd ?? files.cwd() ?? ''}/${path}`, line)
+  }
   const checking = useChecking()
   const status = () =>
     props.task?.status === 'running'
@@ -347,6 +375,7 @@ export function ToolCard(props: ToolProps) {
           id={props.id}
           label={toolLabel(props.name)}
           detail={props.name === 'ToolSearch' ? loadedTools(props.input, props.result).join(', ') : toolSummary(props.name, props.input, props.cwd)}
+          onDetail={openTarget()}
           trailing={
             <>
               <Show when={props.context?.skill}>

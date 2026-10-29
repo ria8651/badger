@@ -239,6 +239,8 @@ export interface ReviewDiff {
   /** What `base` compares with, e.g. develop or origin/release/2.5, and how it was chosen; absent with nothing to compare with. */
   base?: string
   baseHow?: BaseHow
+  /** The checkout's top folder, which the files' paths are from. */
+  root: string
   /** Commits on HEAD that aren't on the base, newest first. */
   commits: ReviewCommit[]
   /** The working tree as it was read, untracked files included: pass it back as `since` to see what changed after. */
