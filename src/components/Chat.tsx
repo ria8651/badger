@@ -1,5 +1,5 @@
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
-import { FolderX, GitBranch, MonitorOff, Pencil, TextQuote, WifiOff, X } from '../icons'
+import { For, Show, createEffect, createMemo, createSignal, on, onMount, untrack, type JSX } from 'solid-js'
+import { FolderX, GitBranch, MonitorOff, Pencil, WifiOff, X } from '../icons'
 import type { DraftAttachments, PermissionMode, QueuedMessage } from '../../shared/protocol.ts'
 import { chatActions } from '../actions.ts'
 import { api, connected } from '../api.ts'
@@ -7,6 +7,7 @@ import { cardWorktreeName, isScratch, worktreeOf } from '../folders.ts'
 import { diffView, openFile, openTerminal, openView, planView, setFileMode, viewKey, viewShown, wide } from '../layout.ts'
 import { OpenFile } from '../fileLinks.ts'
 import { FileView } from './FileView.tsx'
+import { QuoteSelection } from './QuoteSelection.tsx'
 import { sideChatsOf, startSideChat } from '../btw.ts'
 import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
 import { lastModel, modelValue, models, setLastModel } from '../models.ts'
@@ -231,6 +232,15 @@ export function Chat(props: {
           cwd={cwd()}
           running={state.running}
           onReady={onReady}
+          onQuote={
+            state.gone || stranded()
+              ? undefined
+              : (markdown: string) => {
+                  // A review chat's composer is with its conversation, so that's where the quote is shown going.
+                  setShowConversation(true)
+                  composer?.insert(markdown)
+                }
+          }
           renderDiff={(only, lead) => reviewPage(false, { lead, only })}
         />
       </div>
@@ -625,54 +635,3 @@ function Queued(props: { message: QueuedMessage; onEdit: () => void; onRemove: (
   )
 }
 
-/**
- * Offers "Quote" once the mouse lets go of text selected in the transcript, to add it to the composer as a quote. It
- * goes inside `within` and is placed against it, so it scrolls along with what's selected.
- */
-function QuoteSelection(props: { within: () => HTMLElement; onQuote: (text: string) => void }) {
-  const [offer, setOffer] = createSignal<{ text: string; x: number; y: number }>()
-  const selected = () => {
-    const sel = getSelection()
-    const range = sel && !sel.isCollapsed && sel.rangeCount ? sel.getRangeAt(0) : undefined
-    const el = props.within()
-    return range && el.contains(range.startContainer) && el.contains(range.endContainer) ? range : undefined
-  }
-  const onSelected = () => {
-    const range = selected()
-    const text = range?.toString().trim()
-    const end = range && [...range.getClientRects()].filter((b) => b.width).at(-1)
-    if (!range || !text || !end) return setOffer(undefined)
-    const at = props.within().getBoundingClientRect()
-    setOffer({ text, x: end.right - at.left, y: end.bottom - at.top })
-  }
-  const onSelectionChange = () => offer() && !selected() && setOffer(undefined)
-  onMount(() => {
-    document.addEventListener('selectionchange', onSelectionChange)
-    document.addEventListener('pointerup', onSelected)
-    onCleanup(() => {
-      document.removeEventListener('selectionchange', onSelectionChange)
-      document.removeEventListener('pointerup', onSelected)
-    })
-  })
-  return (
-    <Show when={offer()}>
-      {(o) => (
-        <button
-          type="button"
-          onPointerDown={(e) => e.preventDefault()}
-          onClick={() => {
-            const text = o().text
-            getSelection()?.removeAllRanges()
-            setOffer(undefined)
-            props.onQuote(text)
-          }}
-          style={{ left: `${Math.max(0, o().x - 40)}px`, top: `${o().y + 4}px` }}
-          title="Add it to your message as a quote"
-          class="absolute z-10 flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-xs text-on-primary shadow-(--shadow-pop)"
-        >
-          <TextQuote class="size-3" /> Quote
-        </button>
-      )}
-    </Show>
-  )
-}

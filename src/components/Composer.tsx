@@ -28,6 +28,8 @@ export interface ComposerControls {
   flush: () => void
   /** Adds this to the end of what's typed as a Markdown quote, with the cursor after it. */
   quote: (text: string) => void
+  /** Adds this Markdown to the end of what's typed as it is, e.g. code quoted from a file, with the cursor after it. */
+  insert: (markdown: string) => void
 }
 
 /**
@@ -86,20 +88,23 @@ export function Composer(props: {
     flush()
     removeEventListener('pagehide', flush)
   })
-  const quote = (quoted: string) => {
-    const block = quoted
-      .trim()
-      .replace(/\n{3,}/g, '\n\n')
-      .split('\n')
-      .map((line) => (line.trim() ? `> ${line}` : '>'))
-      .join('\n')
+  const insert = (block: string) => {
     const before = text().trimEnd()
     edit(`${before ? `${before}\n\n` : ''}${block}\n\n`)
     input.focus()
     input.setSelectionRange(input.value.length, input.value.length)
     input.scrollTop = input.scrollHeight
   }
-  props.ref?.({ focus: () => input.focus(), flush, quote })
+  const quote = (quoted: string) =>
+    insert(
+      quoted
+        .trim()
+        .replace(/\n{3,}/g, '\n\n')
+        .split('\n')
+        .map((line) => (line.trim() ? `> ${line}` : '>'))
+        .join('\n'),
+    )
+  props.ref?.({ focus: () => input.focus(), flush, quote, insert })
 
   const submit = () => {
     if (!hasInput()) return

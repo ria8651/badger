@@ -6,6 +6,7 @@ import { changedLines } from '../diffRows.ts'
 import { plural } from '../format.ts'
 import { highlight, languageOf } from '../highlight.ts'
 import { CodeRow } from './CodeRow.tsx'
+import { QuoteSelection } from './QuoteSelection.tsx'
 import { DiffCount, GhostButton, PaneBar, PathLabel, Segmented } from './ui.tsx'
 
 /** Lines drawn per block; blocks off screen skip layout, so a long file costs little until it's scrolled through. */
@@ -46,6 +47,8 @@ export function FileView(props: {
   /** Read again when a turn ends, since that's when files change. */
   running: boolean
   onReady?: (focus: () => void) => void
+  /** Adds lines picked out of it to the chat's message, as Markdown; absent when the chat can't take one. */
+  onQuote?: (markdown: string) => void
   /** The file's diff, `lead` first in its toolbar; `only` is its path in the checkout. */
   renderDiff: (only: string, lead: JSX.Element) => JSX.Element
 }) {
@@ -94,6 +97,21 @@ export function FileView(props: {
   })
 
   let scroller: HTMLDivElement | undefined
+  let linesEl: HTMLDivElement | undefined
+  /**
+   * Lines picked out of the file, whole, as a fenced block under where they're from, e.g. `src/a.ts:12-15`: what Claude
+   * needs to find them, whatever part of the first and last line was selected.
+   */
+  const quoted = (range: Range) => {
+    const lineOf = (n: Node) => Number((n instanceof Element ? n : n.parentElement)?.closest<HTMLElement>('[data-line]')?.dataset.line)
+    // A selection ending at the very start of a line hasn't taken any of it.
+    const endsAtStart = range.endOffset === 0 && range.endContainer !== range.startContainer
+    const from = lineOf(range.startContainer) || 1
+    const to = Math.max(from, (lineOf(range.endContainer) || lines().length) - (endsAtStart ? 1 : 0))
+    const code = lines().slice(from - 1, to).join('\n')
+    const fence = code.includes('```') ? '````' : '```'
+    return `\`${relative() ?? props.path}:${from}${to > from ? `-${to}` : ''}\`\n${fence}${languageOf(props.path) ?? ''}\n${code}\n${fence}`
+  }
   onMount(() => props.onReady?.(() => scroller?.focus({ preventScroll: true })))
   const [lit, setLit] = createSignal<number>()
   /** To the line asked for, once its block is drawn; it stays lit for a moment, so the eye finds it. */
@@ -149,7 +167,8 @@ export function FileView(props: {
           <Show when={content()}>
             {(c) => (
               <Show when={'text' in c()} fallback={<p class="p-6 text-center text-fg-3">{(c() as { error: string }).error}</p>}>
-                <div class="min-w-max py-1 font-mono text-xs leading-5">
+                <div ref={linesEl} class="relative min-w-max py-1 font-mono text-xs leading-5">
+                  <Show when={props.onQuote}>{(q) => <QuoteSelection within={() => linesEl} onQuote={(_, range) => q()(quoted(range))} />}</Show>
                   <For each={blocks()}>
                     {(start) => (
                       <div style={{ 'content-visibility': 'auto', 'contain-intrinsic-size': `auto ${Math.min(BLOCK, lines().length - start) * 20}px` }}>
@@ -161,13 +180,15 @@ export function FileView(props: {
                             return (
                               <CodeRow
                                 data-line={n}
-                                kind={added() ? 'add' : 'ctx'}
                                 numbers={[n]}
                                 lit={lit() === n}
-                                // Where lines were taken out: a red edge along the top of the number after them.
+                                // Changes only marked in the margin, so the file reads as the file: a green edge by a
+                                // line added, a small red notch where lines were taken out. Its Diff shows them.
                                 gutter={{
-                                  class: removed() ? 'shadow-[inset_0_2px_0_var(--color-danger)]' : '',
-                                  title: removed() ? `${plural(removed()!, 'line')} taken out above this one` : undefined,
+                                  class: `relative border-l-2 ${added() ? 'border-ok/70' : 'border-transparent'} ${
+                                    removed() ? "before:absolute before:-top-1 before:-left-0.5 before:border-y-4 before:border-l-4 before:border-y-transparent before:border-l-danger/80 before:content-['']" : ''
+                                  }`,
+                                  title: added() ? 'Added' : removed() ? `${plural(removed()!, 'line')} taken out above this one` : undefined,
                                 }}
                               >
                                 <Show when={html()?.[n - 1]} fallback={<span class="whitespace-pre pr-4 pl-2 text-fg">{text}</span>}>
