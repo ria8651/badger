@@ -61,6 +61,9 @@ export function createGitStatus(target: () => { dir: string; machine: string } |
 /** e.g. "+126 −38 in 4 files". */
 const uncommitted = (g: GitStatus) => `+${g.added} −${g.removed} in ${plural(g.changes, 'file')}`
 
+/** A row under a `joined` header, as its second line: the header's colours, and the edge and shadow it left off. */
+export const UNDER_HEADER = 'bar relative z-10 border-b border-line shadow-(--shadow-bar)'
+
 /** Something the git menu can do: run git here, or ask Claude to. */
 type GitItem = MenuItem & { run: () => void }
 
@@ -86,6 +89,8 @@ export function ChatHeader(props: {
   onDiff?: () => void
   /** Opens the guided review of this folder's changes, starting one if there isn't one. */
   onReview?: () => void
+  /** A row goes under it as part of the same header, e.g. a review chat's tabs: that row has the edge and shadow. */
+  joined?: boolean
 }) {
   const [busy, setBusy] = createSignal<'push' | 'pull'>()
   const card = () => props.session && cardOf(props.session.id)
@@ -216,7 +221,9 @@ export function ChatHeader(props: {
 
   return (
     // A container, so what gives way goes by the chat's width, not the window's: a preview beside it narrows it too.
-    <div class="bar @container relative z-10 flex h-10 shrink-0 items-center gap-2 border-b border-line shadow-(--shadow-bar) px-3 text-ui md:h-12 md:px-4">
+    <div
+      class={`bar @container relative z-10 flex h-10 shrink-0 items-center gap-2 px-3 text-ui md:h-12 md:px-4 ${props.joined ? '' : 'border-b border-line shadow-(--shadow-bar)'}`}
+    >
       <Show when={props.session}>
         {(s) => (
           <>

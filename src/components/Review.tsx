@@ -11,6 +11,7 @@ import { itemsFor, type Block, type Index } from '../transcript/model.ts'
 import type { Partial as Streaming } from '../useChat.ts'
 import { Messages } from './Transcript.tsx'
 import { BasePicker, baseChanged, howText } from './BasePicker.tsx'
+import { UNDER_HEADER } from './ChatHeader.tsx'
 import { Markdown } from './Markdown.tsx'
 import { Button, DiffCount, GhostButton, LiveDot, inputClass } from './ui.tsx'
 
@@ -928,7 +929,8 @@ export function ReviewPage(props: {
         when={props.bar?.()}
         keyed
         fallback={
-          <div class="flex h-9 shrink-0 items-center gap-3 border-b border-line px-3">
+          // With a lead it's a review chat's page, and the row is the second line of the chat's header.
+          <div class={`flex h-9 shrink-0 items-center gap-3 px-3 ${props.lead ? `${UNDER_HEADER} md:px-4` : 'border-b border-line'}`}>
             {props.lead}
             {tools(false)}
           </div>

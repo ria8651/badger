@@ -14,7 +14,7 @@ import { cardOf } from '../stores/cards.ts'
 import { sessionById } from '../stores/sessions.ts'
 import { knownRoot, workspaceOf, type Ws } from '../terminals.ts'
 import { Checking, ChildChats, NO_ATTACHMENTS, createChat, createChildChats } from '../useChat.ts'
-import { ChatHeader, createGitStatus } from './ChatHeader.tsx'
+import { ChatHeader, UNDER_HEADER, createGitStatus } from './ChatHeader.tsx'
 import { Composer, type ComposerControls } from './Composer.tsx'
 import { FolderPicker } from './FolderPicker.tsx'
 import { ForkDialog } from './ForkDialog.tsx'
@@ -336,12 +336,13 @@ export function Chat(props: {
           onDiff={isReview() || !cwd() || isScratch(cwd()) ? undefined : openDiff}
           onReview={isReview() || !cwd() || isScratch(cwd()) ? undefined : startReview}
           onAsk={picking() ? undefined : (prompt) => send(prompt)}
+          joined={isReview()}
         />
       </Show>
       <Show when={isReview() && !props.embedded}>
         {/* On the review, the first thing in its toolbar; on the conversation, a row of their own. */}
         <Show when={!reviewing()}>
-          <div class="flex h-9 shrink-0 items-center border-b border-line px-3">{reviewTabs()}</div>
+          <div class={`${UNDER_HEADER} flex h-9 shrink-0 items-center px-3 md:px-4`}>{reviewTabs()}</div>
         </Show>
         <Show when={reviewing()}>
           {reviewPage(true, { lead: reviewTabs() })}
