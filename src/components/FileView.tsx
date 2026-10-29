@@ -1,5 +1,4 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, on, onMount, type JSX } from 'solid-js'
-import { Portal } from 'solid-js/web'
 import { RotateCw } from '../icons'
 import type { ReviewDiff } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
@@ -55,7 +54,6 @@ export function FileView(props: {
   cwd?: string
   /** Read again when a turn ends, since that's when files change. */
   running: boolean
-  bar?: () => HTMLElement | undefined
   onReady?: (focus: () => void) => void
   /** The file's diff, `lead` first in its toolbar; `only` is its path in the checkout. */
   renderDiff: (only: string, lead: JSX.Element) => JSX.Element
@@ -161,9 +159,7 @@ export function FileView(props: {
       }
     >
       <div class="flex min-h-0 flex-1 flex-col text-ui">
-        <Show when={props.bar?.()} keyed fallback={<div class="flex h-9 shrink-0 items-center border-b border-line px-3">{tools()}</div>}>
-          {(el) => <Portal mount={el}>{tools()}</Portal>}
-        </Show>
+        <div class="flex h-9 shrink-0 items-center border-b border-line px-3">{tools()}</div>
         <div ref={scroller} tabIndex={-1} class="min-h-0 flex-1 overflow-auto outline-none">
           <Show when={image()}>
             <div class="grid min-h-full place-items-center p-4">

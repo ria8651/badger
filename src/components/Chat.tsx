@@ -217,8 +217,8 @@ export function Chat(props: {
     renderAttachment: (v, onReady) => <AttachmentPane index={index} prompt={v.prompt} part={v.part} onReady={onReady} />,
     btwLive: () => sideChatsOf(props.sessionId).some((s) => s.running),
     renderBtw: (onReady) => <BtwPane parent={props.sessionId} onNew={() => askAside('')} onReady={onReady} />,
-    renderDiff: (onReady, bar) => <div class="flex size-full flex-col">{reviewPage(false, { onReady, bar })}</div>,
-    renderFile: (view, onReady, bar) => (
+    renderDiff: (onReady) => <div class="flex size-full flex-col">{reviewPage(false, { onReady })}</div>,
+    renderFile: (view, onReady) => (
       <div class="flex size-full flex-col">
         <FileView
           path={view().path}
@@ -229,9 +229,8 @@ export function Chat(props: {
           machine={machine()}
           cwd={cwd()}
           running={state.running}
-          bar={bar}
           onReady={onReady}
-          renderDiff={(only, lead) => reviewPage(false, { bar, lead, only })}
+          renderDiff={(only, lead) => reviewPage(false, { lead, only })}
         />
       </div>
     ),
@@ -301,7 +300,7 @@ export function Chat(props: {
   /** This chat's changes: its own page if it's a review chat, else its diff, whose comments and questions come here. */
   const reviewPage = (
     guided: boolean,
-    opts: { onReady?: (focus: () => void) => void; bar?: () => HTMLElement | undefined; lead?: JSX.Element; underHeader?: boolean; only?: string } = {},
+    opts: { onReady?: (focus: () => void) => void; lead?: JSX.Element; underHeader?: boolean; only?: string } = {},
   ) => (
     // In a panel it's drawn outside the chat, so it's given the chat's way of opening files again.
     <OpenFile.Provider value={files}>
@@ -320,7 +319,6 @@ export function Chat(props: {
           onSend={state.gone || stranded() ? undefined : (text) => send(text)}
           onGuide={guided ? undefined : startReview}
           onReady={opts.onReady}
-          bar={opts.bar}
           lead={opts.lead}
           underHeader={opts.underHeader}
           only={opts.only}

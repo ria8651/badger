@@ -96,10 +96,9 @@ export interface ChatPanes {
   btwLive: () => boolean
   renderBtw: (onReady: (focus: () => void) => void) => JSX.Element
   /** The diff of its checkout. */
-  /** `bar`: where in its group's tab strip its toolbar goes, while it's the tab shown there. */
-  renderDiff: (onReady: (focus: () => void) => void, bar: () => HTMLElement | undefined) => JSX.Element
-  /** A file on its machine, all of it or its diff, as its tab says now; `bar` as for renderDiff. */
-  renderFile: (v: () => FileView, onReady: (focus: () => void) => void, bar: () => HTMLElement | undefined) => JSX.Element
+  renderDiff: (onReady: (focus: () => void) => void) => JSX.Element
+  /** A file on its machine, all of it or its diff, as its tab says now. */
+  renderFile: (v: () => FileView, onReady: (focus: () => void) => void) => JSX.Element
 }
 
 const BINDINGS: [string, string][] = [
@@ -483,9 +482,6 @@ export function Workspace(props: {
     if (by) strip.scrollBy({ left: by, behavior: 'smooth' })
   }
 
-  /** Each group's place in its tab strip for a diff's toolbar, there while a diff is its tab shown. */
-  const [diffBars, setDiffBars] = createSignal<Record<string, HTMLElement>>({})
-
   const GroupFrame = (p: { group: Group }) => {
     const g = () => p.group
     const active = () => viewOf(activeOf(g()))
@@ -597,17 +593,7 @@ export function Workspace(props: {
           <button onClick={() => newTerminal({ group: g().id })} title={`New terminal (${LEADER} T)`} class={ghostClass()}>
             <Plus class="size-3.5" />
           </button>
-          {/* A diff's toolbar comes up here, rather than being a bar of its own under the tabs. */}
-          <Show when={active()?.kind === 'diff' || active()?.kind === 'file'} fallback={<div class="flex-1" />}>
-            <div
-              ref={(el) => {
-                const id = g().id
-                setDiffBars((b) => ({ ...b, [id]: el }))
-                onCleanup(() => setDiffBars((b) => (b[id] === el ? (({ [id]: _, ...rest }) => rest)(b) : b)))
-              }}
-              class="flex min-w-0 flex-1 overflow-hidden pl-2 [&>div]:flex [&>div]:min-w-0 [&>div]:flex-1"
-            />
-          </Show>
+          <div class="flex-1" />
           <Show when={terminalOf(active())}>
             {(t) => (
               <>
@@ -659,11 +645,6 @@ export function Workspace(props: {
             const b = g && boxOf(g.id)
             return b && activeOf(g) === key ? { group: g.id, box: b } : undefined
           })
-          /** Where in its group's tab strip a diff's or file's toolbar goes, while it's the tab shown. */
-          const bar = () => {
-            const a = at()
-            return a && diffBars()[a.group]
-          }
           return (
             <div
               class="absolute overflow-hidden rounded-b-(--pane-radius)"
@@ -693,8 +674,8 @@ export function Workspace(props: {
                     <Match when={v().kind === 'plan'}>{props.panes.renderPlan((focus) => ready(key, focus))}</Match>
                     <Match when={attachmentViewOf(v())}>{(a) => props.panes.renderAttachment(a(), (focus) => ready(key, focus))}</Match>
                     <Match when={v().kind === 'btw'}>{props.panes.renderBtw((focus) => ready(key, focus))}</Match>
-                    <Match when={v().kind === 'diff'}>{props.panes.renderDiff((focus) => ready(key, focus), bar)}</Match>
-                    <Match when={v().kind === 'file' && (v() as FileView)}>{(f) => props.panes.renderFile(f, (focus) => ready(key, focus), bar)}</Match>
+                    <Match when={v().kind === 'diff'}>{props.panes.renderDiff((focus) => ready(key, focus))}</Match>
+                    <Match when={v().kind === 'file' && (v() as FileView)}>{(f) => props.panes.renderFile(f, (focus) => ready(key, focus))}</Match>
                   </Switch>
                 )}
               </Show>

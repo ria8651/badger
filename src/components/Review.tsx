@@ -1,5 +1,4 @@
 import { For, Show, createContext, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack, useContext, type JSX } from 'solid-js'
-import { Portal } from 'solid-js/web'
 import { Check, ChevronDown, ChevronRight, MessageSquarePlus, RotateCw, Sparkles, Trash2 } from '../icons'
 import type { ReviewAttention, ReviewDiff, ReviewFile, ReviewGroup, ReviewGuide, ReviewHunk, WireMessage } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
@@ -535,8 +534,6 @@ export function ReviewPage(props: {
   onGuide?: () => void
   /** In a panel: how to focus it. */
   onReady?: (focus: () => void) => void
-  /** In a panel: where in its tab strip the toolbar goes, while it's the tab shown. */
-  bar?: () => HTMLElement | undefined
   /** Put first in the toolbar's row, e.g. a review chat's tabs. */
   lead?: JSX.Element
   /** The toolbar's row is the second line of the chat's header (see UNDER_HEADER). */
@@ -860,8 +857,8 @@ export function ReviewPage(props: {
     cwd: () => props.cwd,
   }
 
-  /** What the changes are against, how much of them, and what to do with them: in a row of its own, or the panel's tab strip. */
-  const tools = (compact: boolean) => (
+  /** What the changes are against, how much of them, and what to do with them. Narrow, the words go and the icons stay. */
+  const tools = () => (
     <div class="flex min-w-0 flex-1 items-center gap-3 text-xs whitespace-nowrap text-fg-3">
       <Show when={diff()}>
         {(d) => (
@@ -877,7 +874,7 @@ export function ReviewPage(props: {
                   trigger={() => (
                     <>
                       <Show when={d().base} fallback="Uncommitted only">
-                        <Show when={!compact}>against </Show>
+                        <span class="hidden @md:inline">against </span>
                         <span class="min-w-0 truncate font-mono text-fg-2">{d().base}</span>
                       </Show>
                       <ChevronDown class="size-3 shrink-0" />
@@ -899,7 +896,7 @@ export function ReviewPage(props: {
       <Show when={total()}>
         <span class="shrink-0 tabular-nums" title={`${viewedCount()} of ${plural(total(), 'hunk')} viewed`}>
           {viewedCount()}/{total()}
-          <Show when={!compact}> viewed</Show>
+          <span class="hidden @md:inline"> viewed</span>
         </span>
       </Show>
       <div class="-mx-1.5 flex shrink-0 items-center">
@@ -920,7 +917,7 @@ export function ReviewPage(props: {
               title="Guided review: a chat of its own where Claude groups these changes, explains each group, and answers and acts on your comments"
             >
               <Sparkles class="size-3.5" />
-              <Show when={!compact}>Guided review</Show>
+              <span class="hidden @md:inline">Guided review</span>
             </button>
           )}
         </Show>
@@ -932,24 +929,15 @@ export function ReviewPage(props: {
     <TranscriptIndex.Provider value={props.index}>
     <LiveChatContext.Provider value={live}>
     <div class="@container flex min-h-0 flex-1 flex-col text-ui">
-      {/* In a panel, up in its tab strip; otherwise one row, after whatever leads it, like the review's tabs. */}
-      <Show
-        when={props.bar?.()}
-        keyed
-        fallback={
-          // Under a chat's header, the second line of it.
-          <div class={`flex h-9 shrink-0 items-center gap-3 px-3 ${props.underHeader ? `${UNDER_HEADER} md:px-4` : 'border-b border-line'}`}>
-            {props.lead}
-            {tools(false)}
-          </div>
-        }
-      >
-        {(el) => <Portal mount={el}><div class="flex min-w-0 flex-1 items-center gap-3">{props.lead}{tools(true)}</div></Portal>}
-      </Show>
-      {/* How much has been viewed, as a line along the foot of what's above. */}
+      {/* One row, after whatever leads it, like the review's tabs; under a chat's header, the second line of it. */}
+      <div class={`flex h-9 shrink-0 items-center gap-3 px-3 ${props.underHeader ? `${UNDER_HEADER} md:px-4` : 'border-b border-line'}`}>
+        {props.lead}
+        {tools()}
+      </div>
+      {/* How much has been viewed, as a line along the foot of what's above, over its edge. */}
       <Show when={total()}>
         <div class="relative z-20 h-0">
-          <div class="absolute inset-x-0 -top-px h-0.5">
+          <div class="absolute inset-x-0 -top-0.5 h-0.5">
             <div class="h-full bg-ok transition-[width]" style={{ width: `${(viewedCount() / total()) * 100}%` }} />
           </div>
         </div>
