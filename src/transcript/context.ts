@@ -55,7 +55,7 @@ export function createIndex(messages: () => WireMessage[], sessionId?: () => str
       for (const b of ((m.message as { content?: Block[] })?.content ?? []) as Block[]) {
         if (b.type !== 'tool_use' || !b.id) continue
         parents.set(b.id, parent)
-        uses.set(b.id, { name: b.name ?? '?', input: b.input ?? {} })
+        uses.set(b.id, { name: b.name ?? '?', input: b.input ?? {}, at: timeOf(m) })
         const sent = sentBy(m, b, agents)
         if (sent) place(group(sent.parent_tool_use_id as string), sent)
       }

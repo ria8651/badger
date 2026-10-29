@@ -167,8 +167,8 @@ export interface Index {
   tasks: Map<string, Task>
   /** Each tool call's parent: the subagent call it was made in, or '' for the chat's own. */
   parents: Map<string, string>
-  /** Tool calls by tool_use_id. */
-  uses: Map<string, { name: string; input: Record<string, unknown> }>
+  /** Tool calls by tool_use_id, with when each was made. */
+  uses: Map<string, { name: string; input: Record<string, unknown>; at?: number }>
   /** What Claude Code added about calls, by tool_use_id: a Skill call's instructions, hooks' context and failures. */
   context: Map<string, ToolContext>
   /** Subagents' Agent calls, by agent id. */
@@ -365,7 +365,8 @@ export function collectResults(m: WireMessage, results: Map<string, ToolResult>)
   const blocks = (content as ContentBlock[]).filter((b) => b.type === 'tool_result' && b.tool_use_id)
   // The structured result belongs to the message as a whole, so it's only unambiguous with one result in it.
   const structured = blocks.length === 1 ? m.tool_use_result : undefined
-  for (const b of blocks) results.set(b.tool_use_id!, { content: b.content, isError: !!b.is_error, structured })
+  const at = typeof m.timestamp === 'string' ? Date.parse(m.timestamp) : undefined
+  for (const b of blocks) results.set(b.tool_use_id!, { content: b.content, isError: !!b.is_error, structured, at })
 }
 
 /** A message Claude sent a subagent while it worked, without the framing Claude Code wraps it in. Claude Code marks these meta. */

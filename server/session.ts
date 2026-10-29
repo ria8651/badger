@@ -395,6 +395,8 @@ export class LiveSession {
     if (!isTranscriptMessage(msg)) return
     // The SDK may replay the user message we already echoed; skip the duplicate.
     if (msg.type === 'user' && wire.uuid && this.live.some((m) => m.uuid === wire.uuid)) return
+    // Read back from disk, every message says when it was written; live, it's when it arrived. How long a call took goes by these.
+    wire.timestamp ??= new Date().toISOString()
     this.record(wire)
     if (msg.type === 'result') {
       this.setRunning(false)
