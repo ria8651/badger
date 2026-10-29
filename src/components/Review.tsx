@@ -1,5 +1,5 @@
 import { For, Show, createContext, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack, useContext, type JSX } from 'solid-js'
-import { Check, ChevronDown, ChevronRight, MessageSquarePlus, RotateCw, Sparkles, Trash2 } from '../icons'
+import { Check, ChevronDown, ChevronRight, MessageSquarePlus, RotateCw, Trash2 } from '../icons'
 import type { ReviewAttention, ReviewDiff, ReviewFile, ReviewGroup, ReviewGuide, ReviewHunk, WireMessage } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { plural } from '../format.ts'
@@ -916,8 +916,7 @@ export function ReviewPage(props: {
               class="flex h-7 items-center gap-1.5 rounded-md px-1.5 text-fg-2 transition-colors hover:bg-surface hover:text-fg disabled:opacity-50"
               title="Guided review: a chat of its own where Claude groups these changes, explains each group, and answers and acts on your comments"
             >
-              <Sparkles class="size-3.5" />
-              <span class="hidden @md:inline">Guided review</span>
+              Guided review
             </button>
           )}
         </Show>

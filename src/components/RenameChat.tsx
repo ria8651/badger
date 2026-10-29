@@ -1,6 +1,6 @@
 import { Show, createSignal, onCleanup, type JSX } from 'solid-js'
 import { Portal } from 'solid-js/web'
-import { RefreshCw, Sparkles } from '../icons'
+import { RefreshCw } from '../icons'
 import type { SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { renameSession } from '../stores/sessions.ts'
@@ -111,8 +111,7 @@ export function RenameChat(props: {
                 when={suggestion() && !suggesting()}
                 fallback={
                   <span class={`flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5 text-xs ${error() ? 'text-danger' : 'text-fg-3'}`}>
-                    <Sparkles class={`size-3.5 shrink-0 ${error() ? '' : 'animate-pulse'}`} />
-                    <span class="truncate">{error() ?? 'Suggesting a title…'}</span>
+                    <span class={`truncate ${error() ? '' : 'animate-pulse'}`}>{error() ?? 'Suggesting a title…'}</span>
                   </span>
                 }
               >
@@ -122,7 +121,6 @@ export function RenameChat(props: {
                   title="Use this title (Tab to edit it first)"
                   class="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-ui text-fg-2 transition-colors hover:bg-surface hover:text-fg pointer-coarse:py-2.5"
                 >
-                  <Sparkles class="size-3.5 shrink-0 text-fg-3" />
                   <span class="truncate">{suggestion()}</span>
                 </button>
               </Show>
