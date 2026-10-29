@@ -95,7 +95,8 @@ export interface ChatPanes {
   btwLive: () => boolean
   renderBtw: (onReady: (focus: () => void) => void) => JSX.Element
   /** The diff of its checkout. */
-  renderDiff: (onReady: (focus: () => void) => void) => JSX.Element
+  /** `bar`: where in its group's tab strip its toolbar goes, while it's the tab shown there. */
+  renderDiff: (onReady: (focus: () => void) => void, bar: () => HTMLElement | undefined) => JSX.Element
 }
 
 const BINDINGS: [string, string][] = [
@@ -476,6 +477,9 @@ export function Workspace(props: {
     if (by) strip.scrollBy({ left: by, behavior: 'smooth' })
   }
 
+  /** Each group's place in its tab strip for a diff's toolbar, there while a diff is its tab shown. */
+  const [diffBars, setDiffBars] = createSignal<Record<string, HTMLElement>>({})
+
   const GroupFrame = (p: { group: Group }) => {
     const g = () => p.group
     const active = () => viewOf(activeOf(g()))
@@ -584,7 +588,17 @@ export function Workspace(props: {
           <button onClick={() => newTerminal({ group: g().id })} title={`New terminal (${LEADER} T)`} class={ghostClass()}>
             <Plus class="size-3.5" />
           </button>
-          <div class="flex-1" />
+          {/* A diff's toolbar comes up here, rather than being a bar of its own under the tabs. */}
+          <Show when={active()?.kind === 'diff'} fallback={<div class="flex-1" />}>
+            <div
+              ref={(el) => {
+                const id = g().id
+                setDiffBars((b) => ({ ...b, [id]: el }))
+                onCleanup(() => setDiffBars((b) => (b[id] === el ? (({ [id]: _, ...rest }) => rest)(b) : b)))
+              }}
+              class="flex min-w-0 flex-1 overflow-hidden pl-2 [&>div]:flex [&>div]:min-w-0 [&>div]:flex-1"
+            />
+          </Show>
           <Show when={terminalOf(active())}>
             {(t) => (
               <>
@@ -665,7 +679,15 @@ export function Workspace(props: {
                     <Match when={v().kind === 'plan'}>{props.panes.renderPlan((focus) => ready(key, focus))}</Match>
                     <Match when={attachmentViewOf(v())}>{(a) => props.panes.renderAttachment(a(), (focus) => ready(key, focus))}</Match>
                     <Match when={v().kind === 'btw'}>{props.panes.renderBtw((focus) => ready(key, focus))}</Match>
-                    <Match when={v().kind === 'diff'}>{props.panes.renderDiff((focus) => ready(key, focus))}</Match>
+                    <Match when={v().kind === 'diff'}>
+                      {props.panes.renderDiff(
+                        (focus) => ready(key, focus),
+                        () => {
+                          const a = at()
+                          return a && diffBars()[a.group]
+                        },
+                      )}
+                    </Match>
                   </Switch>
                 )}
               </Show>

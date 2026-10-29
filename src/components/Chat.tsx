@@ -205,7 +205,7 @@ export function Chat(props: {
     renderAttachment: (v, onReady) => <AttachmentPane index={index} prompt={v.prompt} part={v.part} onReady={onReady} />,
     btwLive: () => sideChatsOf(props.sessionId).some((s) => s.running),
     renderBtw: (onReady) => <BtwPane parent={props.sessionId} onNew={() => askAside('')} onReady={onReady} />,
-    renderDiff: (onReady) => <div class="flex size-full flex-col">{reviewPage(false, onReady)}</div>,
+    renderDiff: (onReady, bar) => <div class="flex size-full flex-col">{reviewPage(false, { onReady, bar })}</div>,
   }
 
   /** Forks a side chat (/btw) in the panel beside this one, asking it `question` if there is one. */
@@ -270,7 +270,7 @@ export function Chat(props: {
     else startReview()
   }
   /** This chat's changes: its own page if it's a review chat, else its diff, whose comments and questions come here. */
-  const reviewPage = (guided: boolean, onReady?: (focus: () => void) => void) => (
+  const reviewPage = (guided: boolean, opts: { onReady?: (focus: () => void) => void; bar?: () => HTMLElement | undefined; lead?: JSX.Element } = {}) => (
     <ChildChats.Provider value={children.state}>
       <Checking.Provider value={(id) => state.checking.includes(id)}>
         <ReviewPage
@@ -285,10 +285,31 @@ export function Chat(props: {
           children={state.children}
           onSend={state.gone || stranded() ? undefined : (text) => send(text)}
           onGuide={guided ? undefined : startReview}
-          onReady={onReady}
+          onReady={opts.onReady}
+          bar={opts.bar}
+          lead={opts.lead}
         />
       </Checking.Provider>
     </ChildChats.Provider>
+  )
+
+  /** A review chat's two ways of being seen. */
+  const reviewTabs = () => (
+    <div class="-ml-2 flex shrink-0 items-center gap-1 text-xs">
+      <For each={[false, true]}>
+        {(conversation) => (
+          <button
+            onClick={() => setShowConversation(conversation)}
+            class={`flex items-center gap-1.5 rounded-md px-2 py-1 ${showConversation() === conversation ? 'bg-surface text-fg' : 'text-fg-3 hover:text-fg-2'}`}
+          >
+            {conversation ? 'Conversation' : 'Guided review'}
+            <Show when={conversation && working()}>
+              <span class="size-1.5 animate-pulse rounded-full bg-accent" />
+            </Show>
+          </button>
+        )}
+      </For>
+    </div>
   )
 
   /** The end of the turn being forked from, while picking where the fork goes. */
@@ -318,23 +339,12 @@ export function Chat(props: {
         />
       </Show>
       <Show when={isReview() && !props.embedded}>
-        <div class="flex shrink-0 items-center gap-1 border-b border-line px-3 py-1 text-xs">
-          <For each={[false, true]}>
-            {(conversation) => (
-              <button
-                onClick={() => setShowConversation(conversation)}
-                class={`flex items-center gap-1.5 rounded-md px-2 py-1 ${showConversation() === conversation ? 'bg-surface text-fg' : 'text-fg-3 hover:text-fg-2'}`}
-              >
-                {conversation ? 'Conversation' : 'Guided review'}
-                <Show when={conversation && working()}>
-                  <span class="size-1.5 animate-pulse rounded-full bg-accent" />
-                </Show>
-              </button>
-            )}
-          </For>
-        </div>
+        {/* On the review, the first thing in its toolbar; on the conversation, a row of their own. */}
+        <Show when={!reviewing()}>
+          <div class="flex h-9 shrink-0 items-center border-b border-line px-3">{reviewTabs()}</div>
+        </Show>
         <Show when={reviewing()}>
-          {reviewPage(true)}
+          {reviewPage(true, { lead: reviewTabs() })}
           {/* Claude asking for something can't wait for you to switch to the conversation. */}
           <Show when={state.permissions.length || state.error}>
             <div class="flex shrink-0 flex-col gap-2 border-t border-line p-3">

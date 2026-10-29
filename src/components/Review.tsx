@@ -1,4 +1,5 @@
-import { For, Show, createContext, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack, useContext } from 'solid-js'
+import { For, Show, createContext, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack, useContext, type JSX } from 'solid-js'
+import { Portal } from 'solid-js/web'
 import { Check, ChevronDown, ChevronRight, MessageSquarePlus, RotateCw, Sparkles, Trash2 } from '../icons'
 import type { ReviewAttention, ReviewDiff, ReviewFile, ReviewGroup, ReviewGuide, ReviewHunk, WireMessage } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
@@ -532,6 +533,10 @@ export function ReviewPage(props: {
   onGuide?: () => void
   /** In a panel: how to focus it. */
   onReady?: (focus: () => void) => void
+  /** In a panel: where in its tab strip the toolbar goes, while it's the tab shown. */
+  bar?: () => HTMLElement | undefined
+  /** Put first in the toolbar's row, e.g. a review chat's tabs. */
+  lead?: JSX.Element
   /** What's streaming in, for answers to show as the conversation does. */
   partial: Streaming | null
   bashOutput: Record<string, string>
@@ -846,74 +851,99 @@ export function ReviewPage(props: {
     cwd: () => props.cwd,
   }
 
+  /** What the changes are against, how much of them, and what to do with them: in a row of its own, or the panel's tab strip. */
+  const tools = (compact: boolean) => (
+    <div class="flex min-w-0 flex-1 items-center gap-3 text-xs whitespace-nowrap text-fg-3">
+      <Show when={diff()}>
+        {(d) => (
+          <>
+            {/* The branch is in the bar above; what it's compared with is the review's own. */}
+            <Show when={props.cwd}>
+              {(dir) => (
+                <BasePicker
+                  dir={dir()}
+                  machine={props.machine}
+                  title={d().base ? `Compared with ${d().base}, ${howText[d().baseHow ?? 'nearest']}. Pick another` : 'Pick a branch to compare with'}
+                  triggerClass={(open) => `-mx-1.5 flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors hover:bg-surface ${open ? 'bg-surface' : ''}`}
+                  trigger={() => (
+                    <>
+                      <Show when={d().base} fallback="Uncommitted only">
+                        <Show when={!compact}>against </Show>
+                        <span class="min-w-0 truncate font-mono text-fg-2">{d().base}</span>
+                      </Show>
+                      <ChevronDown class="size-3 shrink-0" />
+                    </>
+                  )}
+                />
+              )}
+            </Show>
+            <DiffCount
+              files={d().files.length}
+              added={d().files.reduce((n, f) => n + f.added, 0)}
+              removed={d().files.reduce((n, f) => n + f.removed, 0)}
+              class="shrink-0"
+            />
+          </>
+        )}
+      </Show>
+      <div class="flex-1" />
+      <Show when={total()}>
+        <span class="shrink-0 tabular-nums" title={`${viewedCount()} of ${plural(total(), 'hunk')} viewed`}>
+          {viewedCount()}/{total()}
+          <Show when={!compact}> viewed</Show>
+        </span>
+      </Show>
+      <div class="-mx-1.5 flex shrink-0 items-center">
+        <Show when={!commenting()}>
+          <GhostButton title="Comment on the changes as a whole. To comment on lines, select them." onClick={startComment}>
+            <MessageSquarePlus class="size-3.5" />
+          </GhostButton>
+        </Show>
+        <GhostButton title="Read the changes again" onClick={() => void load()}>
+          <RotateCw class={`size-3.5 ${loading() ? 'animate-spin' : ''}`} />
+        </GhostButton>
+        <Show when={props.onGuide}>
+          {(guide) => (
+            <button
+              onClick={guide()}
+              disabled={!total()}
+              class="flex h-7 items-center gap-1.5 rounded-md px-1.5 text-fg-2 transition-colors hover:bg-surface hover:text-fg disabled:opacity-50"
+              title="Guided review: a chat of its own where Claude groups these changes, explains each group, and answers and acts on your comments"
+            >
+              <Sparkles class="size-3.5" />
+              <Show when={!compact}>Guided review</Show>
+            </button>
+          )}
+        </Show>
+      </div>
+    </div>
+  )
+
   return (
     <TranscriptIndex.Provider value={props.index}>
     <LiveChatContext.Provider value={live}>
     <div class="@container flex min-h-0 flex-1 flex-col text-ui">
-      {/* One row; how much has been viewed is the line along its foot. */}
-      <div class="relative flex h-9 shrink-0 items-center gap-3 border-b border-line px-3 text-xs whitespace-nowrap text-fg-3">
-        <Show when={diff()}>
-          {(d) => (
-            <>
-              {/* The branch is in the bar above; what it's compared with is the review's own. */}
-              <Show when={props.cwd}>
-                {(dir) => (
-                  <BasePicker
-                    dir={dir()}
-                    machine={props.machine}
-                    title={d().base ? `Compared with ${d().base}, ${howText[d().baseHow ?? 'nearest']}. Pick another` : 'Pick a branch to compare with'}
-                    triggerClass={(open) => `-mx-1.5 flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors hover:bg-surface ${open ? 'bg-surface' : ''}`}
-                    trigger={() => (
-                      <>
-                        <Show when={d().base} fallback="Uncommitted only">
-                          against <span class="min-w-0 truncate font-mono text-fg-2">{d().base}</span>
-                        </Show>
-                        <ChevronDown class="size-3" />
-                      </>
-                    )}
-                  />
-                )}
-              </Show>
-              <DiffCount
-                files={d().files.length}
-                added={d().files.reduce((n, f) => n + f.added, 0)}
-                removed={d().files.reduce((n, f) => n + f.removed, 0)}
-              />
-            </>
-          )}
-        </Show>
-        <div class="flex-1" />
-        <Show when={total()}>
-          <span class="tabular-nums" title={`${viewedCount()} of ${plural(total(), 'hunk')} viewed`}>
-            {viewedCount()}/{total()} viewed
-          </span>
-          <div class="absolute inset-x-0 -bottom-px h-0.5">
+      {/* In a panel, up in its tab strip; otherwise one row, after whatever leads it, like the review's tabs. */}
+      <Show
+        when={props.bar?.()}
+        keyed
+        fallback={
+          <div class="flex h-9 shrink-0 items-center gap-3 border-b border-line px-3">
+            {props.lead}
+            {tools(false)}
+          </div>
+        }
+      >
+        {(el) => <Portal mount={el}>{tools(true)}</Portal>}
+      </Show>
+      {/* How much has been viewed, as a line along the foot of what's above. */}
+      <Show when={total()}>
+        <div class="relative z-20 h-0">
+          <div class="absolute inset-x-0 -top-px h-0.5">
             <div class="h-full bg-ok transition-[width]" style={{ width: `${(viewedCount() / total()) * 100}%` }} />
           </div>
-        </Show>
-        <div class="-mr-1.5 flex items-center">
-          <Show when={!commenting()}>
-            <GhostButton title="Comment on the changes as a whole. To comment on lines, select them." onClick={startComment}>
-              <MessageSquarePlus class="size-3.5" />
-            </GhostButton>
-          </Show>
-          <GhostButton title="Read the changes again" onClick={() => void load()}>
-            <RotateCw class={`size-3.5 ${loading() ? 'animate-spin' : ''}`} />
-          </GhostButton>
-          <Show when={props.onGuide}>
-            {(guide) => (
-              <button
-                onClick={guide()}
-                disabled={!total()}
-                class="flex h-7 items-center gap-1.5 rounded-md px-2 text-fg-2 transition-colors hover:bg-surface hover:text-fg disabled:opacity-50"
-                title="A chat of its own where Claude groups these changes, explains each group, and answers and acts on your comments"
-              >
-                <Sparkles class="size-3.5" /> Guided review
-              </button>
-            )}
-          </Show>
         </div>
-      </div>
+      </Show>
 
       <div class="flex min-h-0 flex-1">
         <nav class="hidden w-72 shrink-0 overflow-y-auto border-r border-line py-2 @6xl:block">
@@ -1494,8 +1524,9 @@ function HunkView(props: {
             {props.open ? <ChevronDown class="size-3.5" /> : <ChevronRight class="size-3.5" />}
           </button>
           <button onClick={props.onToggle} class="flex min-w-0 items-center gap-2 text-left font-mono">
-            <Show when={startLine()}>
-              <span class="shrink-0 tabular-nums">line {startLine()}</span>
+            {/* A hunk that starts by removing lines has no new line to start at: it starts where they were. */}
+            <Show when={startLine() ?? props.rows.find((r): r is Line => r.kind !== 'hunk')?.old}>
+              {(n) => <span class="shrink-0 tabular-nums">line {n()}</span>}
             </Show>
             <Show when={context()}>
               <span class="min-w-0 truncate">{context()}</span>
