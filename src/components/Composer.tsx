@@ -1,17 +1,18 @@
 import { For, Show, createEffect, createSignal, on, onCleanup, type JSX } from 'solid-js'
-import { ArrowUp, ListChevronsDownUp, ListChevronsUpDown, Paperclip, SlidersHorizontal, Square } from '../icons'
+import { ArrowUp, ChevronDown, ListChevronsDownUp, ListChevronsUpDown, Paperclip, SlidersHorizontal, Square } from '../icons'
 import { isLongPaste } from '../../shared/pastes.ts'
 import { IMAGE_EXTENSIONS, type Card, type DraftAttachments, type PermissionMode } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { isScratch } from '../folders.ts'
 import { readImage } from '../images.ts'
+import type { ModelChoice } from '../models.ts'
 import { detail, toggleDetail } from '../prefs.ts'
 import type { Chat } from '../useChat.ts'
 import { Attachments } from './Attachments.tsx'
 import { FileBrowser } from './FileBrowser.tsx'
 import { showError } from './Popover.tsx'
 import { ContextMeter } from './Usage.tsx'
-import { IconButton, Select, createDismiss, touch, type Option } from './ui.tsx'
+import { IconButton, Menu, Select, createDismiss, touch, type Option } from './ui.tsx'
 
 export const MODES: Option<PermissionMode>[] = [
   { value: 'default', label: 'Ask before edits', description: 'Claude asks before changing files or running commands.' },
@@ -47,7 +48,7 @@ export function Composer(props: {
   onMode: (mode: PermissionMode) => void
   /** Unset until Claude Code has listed its models. */
   model?: string
-  models: Option<string>[]
+  models: ModelChoice[]
   onModel: (model: string) => void
   /** A card going out with the first message, shown as attached until then. */
   pendingCard?: { card: Card }
@@ -223,7 +224,7 @@ export function Composer(props: {
       <div class="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 pb-2">
         <div class="hidden items-center gap-2 @md:flex">
           <Select value={props.mode} options={MODES} onChange={props.onMode} title="Permission mode" />
-          <Show when={props.model}>{(model) => <Select value={model()} options={props.models} onChange={props.onModel} title="Model" />}</Show>
+          <Show when={props.model}>{(model) => <ModelSelect value={model()} options={props.models} onChange={props.onModel} />}</Show>
         </div>
         <button
           type="button"
@@ -315,7 +316,7 @@ function ComposerPanel(props: {
   onMode: (mode: PermissionMode) => void
   /** Unset until Claude Code has listed its models. */
   model?: string
-  models: Option<string>[]
+  models: ModelChoice[]
   onModel: (model: string) => void
   onClose: () => void
 }) {
@@ -330,7 +331,7 @@ function ComposerPanel(props: {
     >
       <PanelChoices label="Permission mode" options={MODES} value={props.mode} onPick={props.onMode} />
       <Show when={props.model}>
-        {(model) => <PanelChoices label="Model" options={props.models} value={model()} onPick={props.onModel} />}
+        {(model) => <PanelModels options={props.models} value={model()} onPick={props.onModel} />}
       </Show>
       <div class="mx-2.5 my-1 border-t border-line" />
       <PanelButton onClick={pick(toggleDetail)}>
@@ -344,7 +345,14 @@ function ComposerPanel(props: {
 }
 
 /** One setting's options as chips, with what the current one means underneath. Picking one leaves the panel open. */
-function PanelChoices<T extends string>(props: { label: string; options: Option<T>[]; value: T; onPick: (value: T) => void }) {
+function PanelChoices<T extends string>(props: {
+  label: string
+  options: Option<T>[]
+  value: T
+  onPick: (value: T) => void
+  /** After the last chip, e.g. one that shows more. */
+  children?: JSX.Element
+}) {
   const current = () => props.options.find((o) => o.value === props.value)
   return (
     <div class="px-2.5 pt-2.5 pb-2">
@@ -368,6 +376,7 @@ function PanelChoices<T extends string>(props: { label: string; options: Option<
             </button>
           )}
         </For>
+        {props.children}
       </div>
       <Show when={current()?.description}>
         <p class="mt-2 text-xs leading-snug text-fg-3">{current()!.description}</p>
@@ -385,5 +394,69 @@ function PanelButton(props: { onClick: () => void; children: JSX.Element }) {
     >
       {props.children}
     </button>
+  )
+}
+
+/**
+ * The newest of each family and the one picked, then the other older ones once shown. The picked one stays put
+ * when they're shown or hidden, so the toggle after it doesn't move.
+ */
+function shownModels(options: ModelChoice[], value: string, older: boolean) {
+  const main = options.filter((o) => !o.older || o.value === value)
+  const rest = options.filter((o) => o.older && o.value !== value)
+  return { main, older: older ? rest : [], any: rest.length > 0 }
+}
+
+/** The toolbar's model menu, with older versions behind a row that shows them. */
+function ModelSelect(props: { value: string; options: ModelChoice[]; onChange: (model: string) => void }) {
+  const [older, setOlder] = createSignal(false)
+  const items = () => {
+    const { main, older: rest, any } = shownModels(props.options, props.value, older())
+    const toggle = { value: '', label: 'Older models', expands: { open: older() } }
+    return [...main, ...(any ? [toggle] : []), ...rest]
+  }
+  const current = () => props.options.find((o) => o.value === props.value)
+  return (
+    <Menu
+      items={items().map((o) => ({ ...o, selected: o.value === props.value }))}
+      onPick={(i) => {
+        const o = items()[i]
+        if ('expands' in o) setOlder((v) => !v)
+        else props.onChange(o.value)
+      }}
+      title="Model"
+      triggerClass={(open) =>
+        `flex h-7 items-center gap-1 rounded-button-md px-2 text-xs transition-colors hover:bg-surface pointer-coarse:h-9 ${
+          open ? 'bg-surface text-fg-2' : 'text-fg-3 hover:text-fg-2'
+        }`
+      }
+      trigger={(open) => (
+        <>
+          {current()?.label}
+          <ChevronDown class={`size-3 transition-transform ${open() ? 'rotate-180' : ''}`} />
+        </>
+      )}
+    />
+  )
+}
+
+/** The narrow composer's model chips, with older versions behind a chip that shows them. */
+function PanelModels(props: { options: ModelChoice[]; value: string; onPick: (model: string) => void }) {
+  const [older, setOlder] = createSignal(false)
+  const shown = () => shownModels(props.options, props.value, older())
+  return (
+    <PanelChoices label="Model" options={[...shown().main, ...shown().older]} value={props.value} onPick={props.onPick}>
+      <Show when={shown().any}>
+        <button
+          type="button"
+          onClick={() => setOlder((v) => !v)}
+          aria-expanded={older()}
+          class="flex h-9 items-center gap-1 rounded-button-round px-3 text-ui text-fg-3 transition-colors hover:bg-surface hover:text-fg-2"
+        >
+          {older() ? 'Fewer' : 'Older models'}
+          <ChevronDown class={`size-3.5 transition-transform ${older() ? 'rotate-180' : ''}`} />
+        </button>
+      </Show>
+    </PanelChoices>
   )
 }

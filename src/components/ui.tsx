@@ -259,6 +259,8 @@ export interface MenuItem {
   tone?: 'danger'
   /** Monospace description, truncated from the start (for paths). */
   mono?: boolean
+  /** Shows or hides more items, with a chevron for which; picking it leaves the menu open. */
+  expands?: { open: boolean }
 }
 
 /**
@@ -296,7 +298,7 @@ export function Menu(props: {
     if (refocus) trigger.focus()
   }
   const pick = (i: number) => {
-    close()
+    if (!props.items[i].expands) close()
     props.onPick(i)
   }
 
@@ -359,20 +361,28 @@ export function Menu(props: {
                 id={`${id}-${i()}`}
                 role="option"
                 aria-selected={!!o.selected}
+                aria-expanded={o.expands?.open}
                 onPointerMove={() => setActive(i())}
                 onClick={() => pick(i())}
                 class={`flex cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2 pointer-coarse:py-3 ${active() === i() ? 'bg-surface' : ''}`}
               >
                 <div class="min-w-0 flex-1">
-                  <div class={`truncate text-ui ${o.tone === 'danger' ? 'text-danger' : 'text-fg'}`}>{o.label}</div>
+                  <div class={`truncate text-ui ${o.tone === 'danger' ? 'text-danger' : o.expands ? 'text-fg-3' : 'text-fg'}`}>{o.label}</div>
                   <Show when={o.description}>
                     <div class={`mt-0.5 leading-snug text-fg-3 ${o.mono ? 'truncate font-mono text-meta text-left [direction:rtl]' : 'text-xs'}`}>
                       {o.mono ? ltr(o.description!) : o.description}
                     </div>
                   </Show>
                 </div>
-                <Show when={checkable()}>
-                  <Check class={`mt-0.5 size-3.5 shrink-0 text-fg-2 ${o.selected ? '' : 'invisible'}`} />
+                <Show
+                  when={o.expands}
+                  fallback={
+                    <Show when={checkable()}>
+                      <Check class={`mt-0.5 size-3.5 shrink-0 text-fg-2 ${o.selected ? '' : 'invisible'}`} />
+                    </Show>
+                  }
+                >
+                  {(x) => <ChevronDown class={`mt-0.5 size-3.5 shrink-0 text-fg-3 transition-transform ${x().open ? 'rotate-180' : ''}`} />}
                 </Show>
               </div>
             )}
