@@ -5,7 +5,7 @@ import { chatActions } from '../actions.ts'
 import { api, connected } from '../api.ts'
 import { cardWorktreeName, isScratch, worktreeOf } from '../folders.ts'
 import { diffView, openFile, openTerminal, openView, planView, setFileMode, viewKey, viewShown, wide } from '../layout.ts'
-import { OpenFile } from '../fileLinks.ts'
+import { OpenFile, useOpenFile } from '../fileLinks.ts'
 import { FileView } from './FileView.tsx'
 import { QuoteSelection } from './QuoteSelection.tsx'
 import { sideChatsOf, startSideChat } from '../btw.ts'
@@ -144,16 +144,21 @@ export function Chat(props: {
   /** Where tasks, plans and attachments open beside the chat. An embedded chat has nowhere: they stay in it. */
   const beside = () => (props.embedded ? undefined : ws())
 
-  /** Opens a file beside the chat; embedded, there's nowhere, so a link to one does nothing. */
-  const files = {
-    cwd: () => cwd(),
-    open: (path: string, line?: number) => {
-      const w = beside()
-      // Opening it is asking for the file, so a tab showing its diff switches back.
-      if (w) openFile(w, { kind: 'file', session: props.sessionId, path, line, mode: 'file' })
-      else showError("Couldn't open it", 'Files open in a panel beside the chat, and there’s none here.')
-    },
-  }
+  /**
+   * Opens a file beside the chat. Embedded, e.g. a side chat in its parent's panel, it has no panel of its own: its
+   * files open where its parent's do, or, with no parent opening them, its paths aren't links.
+   */
+  const outer = useOpenFile()
+  const files = props.embedded
+    ? outer
+    : {
+        cwd: () => cwd(),
+        open: (path: string, line?: number) => {
+          const w = beside()
+          // Opening it is asking for the file, so a tab showing its diff switches back.
+          if (w) openFile(w, { kind: 'file', session: props.sessionId, path, line, mode: 'file' })
+        },
+      }
 
   /** Scroll to a tool call, opening it and whatever it's folded into. */
   const jump = (toolUseId: string) => {
@@ -313,8 +318,6 @@ export function Chat(props: {
     guided: boolean,
     opts: { onReady?: (focus: () => void) => void; lead?: JSX.Element; underHeader?: boolean; only?: string; whole?: boolean } = {},
   ) => (
-    // In a panel it's drawn outside the chat, so it's given the chat's way of opening files again.
-    <OpenFile.Provider value={files}>
     <ChildChats.Provider value={children.state}>
       <Checking.Provider value={(id) => state.checking.includes(id)}>
         <ReviewPage
@@ -337,7 +340,6 @@ export function Chat(props: {
         />
       </Checking.Provider>
     </ChildChats.Provider>
-    </OpenFile.Provider>
   )
 
   /** A review chat's two ways of being seen. */
@@ -607,16 +609,19 @@ export function Chat(props: {
   )
   if (props.embedded) return body
   return (
-    <Workspace
-      ws={ws()}
-      cwd={cwd()}
-      sessionId={props.sessionId}
-      panes={panes}
-      onFocusChat={() => composer?.focus()}
-      onOpenPage={(id) => navigate({ kind: 'terminal', id })}
-    >
-      {body}
-    </Workspace>
+    // The panels beside it are drawn by the workspace, outside the body: links in them open files beside it too.
+    <OpenFile.Provider value={files}>
+      <Workspace
+        ws={ws()}
+        cwd={cwd()}
+        sessionId={props.sessionId}
+        panes={panes}
+        onFocusChat={() => composer?.focus()}
+        onOpenPage={(id) => navigate({ kind: 'terminal', id })}
+      >
+        {body}
+      </Workspace>
+    </OpenFile.Provider>
   )
 }
 

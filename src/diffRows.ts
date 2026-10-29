@@ -6,7 +6,8 @@ import type { ReviewHunk } from '../shared/protocol.ts'
  */
 
 export type Line = { kind: 'ctx' | 'add' | 'del'; old?: number; new?: number; text: string; /** The characters that changed, from..to: against its pair, or all of it. */ marks?: [number, number][] }
-export type Row = { kind: 'hunk'; text: string } | Line
+/** A hunk's @@ line: the function or such it's in, and the line, by its number now, its first line comes after. */
+export type Row = { kind: 'hunk'; text: string; after: number } | Line
 
 export const anchorOf = (r: Line) => (r.kind === 'del' ? `o${r.old}` : `n${r.new}`)
 export const SIGN = { ctx: ' ', add: '+', del: '-' } as const
@@ -24,11 +25,12 @@ function rowsOf(patch: string): Row[] {
   let o = 0
   let n = 0
   for (const l of patch.split('\n')) {
-    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@ ?(.*)$/.exec(l)
+    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,(\d+))? @@ ?(.*)$/.exec(l)
     if (h) {
       o = Number(h[1])
       n = Number(h[2])
-      rows.push({ kind: 'hunk', text: h[3] })
+      // A hunk with no lines now (only taken out) says the line it's after; any other says its first line.
+      rows.push({ kind: 'hunk', text: h[4], after: h[3] === '0' ? n : n - 1 })
     } else if (l.startsWith('+')) rows.push({ kind: 'add', new: n++, text: l.slice(1) })
     else if (l.startsWith('-')) rows.push({ kind: 'del', old: o++, text: l.slice(1) })
     else if (l.startsWith(' ')) rows.push({ kind: 'ctx', old: o++, new: n++, text: l.slice(1) })
@@ -135,22 +137,22 @@ export function startOf(rows: Row[]): number | undefined {
 export function changedLines(hunks: ReviewHunk[]): { added: Set<number>; removed: Map<number, number> } {
   const added = new Set<number>()
   const removed = new Map<number, number>()
+  // Lines taken out after `last`, the line now before them, go above the one after it.
+  const takenOut = (last: number, n: number) => n && removed.set(last + 1, (removed.get(last + 1) ?? 0) + n)
   for (const hunk of hunks) {
     let taken = 0
     let last = 0
     for (const r of rowsFor(hunk)) {
-      if (r.kind === 'hunk') continue
-      if (r.kind === 'del') {
-        taken++
-        continue
+      if (r.kind === 'hunk') last = r.after
+      else if (r.kind === 'del') taken++
+      else {
+        takenOut(last, taken)
+        taken = 0
+        last = r.new!
+        if (r.kind === 'add') added.add(r.new!)
       }
-      if (taken) removed.set(r.new!, (removed.get(r.new!) ?? 0) + taken)
-      taken = 0
-      last = r.new!
-      if (r.kind === 'add') added.add(r.new!)
     }
-    // Taken out at the end of the hunk: after its last line.
-    if (taken) removed.set(last + 1, (removed.get(last + 1) ?? 0) + taken)
+    takenOut(last, taken)
   }
   return { added, removed }
 }

@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createResource, createSignal, on, onMount, type JSX } from 'solid-js'
+import { For, Index, Show, createEffect, createMemo, createResource, createSelector, createSignal, on, onMount, type JSX } from 'solid-js'
 import { RotateCw } from '../icons'
 import type { ReviewDiff } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
@@ -11,7 +11,10 @@ import { DiffCount, GhostButton, PaneBar, PathLabel, Segmented } from './ui.tsx'
 
 /** Lines drawn per block; blocks off screen skip layout, so a long file costs little until it's scrolled through. */
 const BLOCK = 200
-const IMAGE = /\.(png|jpe?g|gif|webp|svg|avif|bmp|ico)$/i
+/** Past this many lines, a file shows its start: drawing every line of a big log would hang the tab. */
+const MAX_LINES = 20_000
+/** The images the server sends as images; anything else, an SVG say, comes as text. */
+const IMAGE = /\.(png|jpe?g|gif|webp)$/i
 
 export type FileMode = 'file' | 'diff'
 
@@ -63,12 +66,22 @@ export function FileView(props: {
   )
   const [changes] = createResource(
     () => (props.cwd ? { cwd: props.cwd, machine: props.machine, v: version() } : false),
-    ({ cwd, machine }) => api.review(cwd, 'base', 0, machine).catch(() => undefined),
+    ({ cwd, machine }): Promise<ReviewDiff | { error: string }> => api.review(cwd, 'base', 0, machine).catch((e: Error) => ({ error: e.message })),
   )
-  const changed = createMemo(() => changesIn(changes(), props.path))
+  const diff = () => {
+    const c = changes()
+    return c && 'files' in c ? c : undefined
+  }
+  const changed = createMemo(() => changesIn(diff(), props.path))
   const relative = () => {
-    const root = changes()?.root
+    const root = diff()?.root
     return root && props.path.startsWith(`${root}/`) ? props.path.slice(root.length + 1) : undefined
+  }
+  /** Why its Diff can't be shown: the changes couldn't be read, or it isn't in them. */
+  const noDiff = () => {
+    const c = changes()
+    if (changes.loading && !c) return 'Reading the changes…'
+    return c && 'error' in c ? `Couldn’t read the changes: ${c.error}` : 'This file isn’t in the checkout’s changes.'
   }
 
   const text = () => {
@@ -82,17 +95,24 @@ export function FileView(props: {
     if (all.length > 1 && all[all.length - 1] === '') all.pop()
     return all
   })
-  const [html] = createResource(
+  /** The lines drawn: all of them, or the start of a file too long to draw. */
+  const shown = createMemo(() => (lines().length > MAX_LINES ? lines().slice(0, MAX_LINES) : lines()))
+  const [colours] = createResource(
     () => text() !== undefined && { text: text()!, lang: languageOf(props.path) },
     async ({ text, lang }) => {
       const out = await highlight(text.replace(/\n$/, ''), lang)
       const split = out?.split('<br>')
-      return split && split.length === lines().length ? split : undefined
+      return { text, lines: split && split.length === lines().length ? split : undefined }
     },
   )
+  /** Each line highlighted, only for the text as it is now: while a new read is highlighted, it's plain, not the last one's. */
+  const html = () => {
+    const c = colours()
+    return c && c.text === text() ? c.lines : undefined
+  }
   const blocks = createMemo(() => {
     const out: number[] = []
-    for (let i = 0; i < lines().length; i += BLOCK) out.push(i)
+    for (let i = 0; i < shown().length; i += BLOCK) out.push(i)
     return out
   })
 
@@ -104,16 +124,29 @@ export function FileView(props: {
    */
   const quoted = (range: Range) => {
     const lineOf = (n: Node) => Number((n instanceof Element ? n : n.parentElement)?.closest<HTMLElement>('[data-line]')?.dataset.line)
-    // A selection ending at the very start of a line hasn't taken any of it.
-    const endsAtStart = range.endOffset === 0 && range.endContainer !== range.startContainer
-    const from = lineOf(range.startContainer) || 1
-    const to = Math.max(from, (lineOf(range.endContainer) || lines().length) - (endsAtStart ? 1 : 0))
+    /** Whether any of line n's code is selected, rather than only where it starts or ends. */
+    const takes = (n: number) => {
+      const code = linesEl?.querySelector(`[data-line="${n}"]`)?.lastElementChild
+      if (!code || !range.intersectsNode(code)) return false
+      const part = document.createRange()
+      part.selectNodeContents(code)
+      if (range.compareBoundaryPoints(Range.START_TO_START, part) > 0) part.setStart(range.startContainer, range.startOffset)
+      if (range.compareBoundaryPoints(Range.END_TO_END, part) < 0) part.setEnd(range.endContainer, range.endOffset)
+      return part.toString() !== ''
+    }
+    let from = lineOf(range.startContainer) || 1
+    let to = lineOf(range.endContainer) || shown().length
+    // A drag can start after one line's end or stop at the next one's start without taking any of either.
+    if (from < to && !takes(from)) from++
+    if (to > from && !takes(to)) to--
     const code = lines().slice(from - 1, to).join('\n')
     const fence = code.includes('```') ? '````' : '```'
     return `\`${relative() ?? props.path}:${from}${to > from ? `-${to}` : ''}\`\n${fence}${languageOf(props.path) ?? ''}\n${code}\n${fence}`
   }
   onMount(() => props.onReady?.(() => scroller?.focus({ preventScroll: true })))
   const [lit, setLit] = createSignal<number>()
+  // So going to a line changes the two rows lit and unlit, not every row.
+  const isLit = createSelector(lit)
   /** To the line asked for, once its block is drawn; it stays lit for a moment, so the eye finds it. */
   const goTo = (n: number) => {
     const el = scroller?.querySelector<HTMLElement>(`[data-line="${n}"]`)
@@ -122,9 +155,16 @@ export function FileView(props: {
     setLit(n)
     setTimeout(() => lit() === n && setLit(undefined), 1600)
   }
+  // Once each time it's asked to, when the lines are there: not again when they're read again after a turn, which
+  // would take the reader away from wherever they'd got to. Coming back from its Diff, the file is drawn afresh.
+  let gone = ''
+  createEffect(on(() => props.mode, () => (gone = '')))
   createEffect(
-    on([() => props.nav, () => props.line, () => lines().length, () => props.mode], ([, line, count, mode]) => {
-      if (mode === 'file' && line && count) requestAnimationFrame(() => goTo(line))
+    on([() => props.nav, () => props.line, () => lines().length > 0, () => props.mode], ([nav, line, ready, mode]) => {
+      const asked = `${nav}:${line}`
+      if (mode !== 'file' || !line || !ready || asked === gone) return
+      gone = asked
+      requestAnimationFrame(() => goTo(line))
     }),
   )
 
@@ -143,7 +183,7 @@ export function FileView(props: {
     <Show
       when={props.mode === 'file'}
       fallback={
-        <Show when={relative()} fallback={<p class="p-6 text-center text-ui text-fg-3">{changes.loading ? 'Reading the changes…' : 'This file isn’t in the checkout’s changes.'}</p>}>
+        <Show when={relative()} fallback={<p class="p-6 text-center text-ui text-fg-3">{noDiff()}</p>}>
           {(only) =>
             props.renderDiff(
               only(),
@@ -179,17 +219,18 @@ export function FileView(props: {
                   <Show when={props.onQuote}>{(q) => <QuoteSelection within={() => linesEl} onQuote={(_, range) => q()(quoted(range))} />}</Show>
                   <For each={blocks()}>
                     {(start) => (
-                      <div style={{ 'content-visibility': 'auto', 'contain-intrinsic-size': `auto ${Math.min(BLOCK, lines().length - start) * 20}px` }}>
-                        <For each={lines().slice(start, start + BLOCK)}>
+                      <div style={{ 'content-visibility': 'auto', 'contain-intrinsic-size': `auto ${Math.min(BLOCK, shown().length - start) * 20}px` }}>
+                        {/* By place, not by text: read again with a line put in above, each row keeps its number and takes the new text. */}
+                        <Index each={shown().slice(start, start + BLOCK)}>
                           {(text, i) => {
-                            const n = start + i() + 1
+                            const n = start + i + 1
                             const added = () => changed().added.has(n)
                             const removed = () => changed().removed.get(n)
                             return (
                               <CodeRow
                                 data-line={n}
                                 numbers={[n]}
-                                lit={lit() === n}
+                                lit={isLit(n)}
                                 // Changes only marked in the margin, so the file reads as the file: a green edge by a
                                 // line added, a small red notch where lines were taken out. Its Diff shows them.
                                 gutter={{
@@ -199,16 +240,21 @@ export function FileView(props: {
                                   title: added() ? 'Added' : removed() ? `${plural(removed()!, 'line')} taken out above this one` : undefined,
                                 }}
                               >
-                                <Show when={html()?.[n - 1]} fallback={<span class="whitespace-pre pr-4 pl-2 text-fg">{text}</span>}>
+                                <Show when={html()?.[n - 1]} fallback={<span class="whitespace-pre pr-4 pl-2 text-fg">{text()}</span>}>
                                   {(h) => <span class="whitespace-pre pr-4 pl-2 text-fg" innerHTML={h()} />}
                                 </Show>
                               </CodeRow>
                             )
                           }}
-                        </For>
+                        </Index>
                       </div>
                     )}
                   </For>
+                  <Show when={lines().length > shown().length}>
+                    <p class="px-4 py-3 font-sans text-fg-3">
+                      Only the first {MAX_LINES.toLocaleString()} of its {lines().length.toLocaleString()} lines are shown here.
+                    </p>
+                  </Show>
                 </div>
               </Show>
             )}
