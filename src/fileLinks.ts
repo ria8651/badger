@@ -1,8 +1,11 @@
 import { createContext, useContext } from 'solid-js'
 import { api } from './api.ts'
 
-/** Opens a file beside the chat, at a line if given; `cwd` is what relative links are from. Absent where there's nowhere to open one. */
-export const OpenFile = createContext<{ open: (path: string, line?: number) => void; cwd: () => string | undefined }>()
+/**
+ * Opens a file beside the chat, at a line if given; `cwd` is what relative links are from. Absent where there's nowhere
+ * to open one. `run` runs a shell command in a terminal beside the chat, in its folder.
+ */
+export const OpenFile = createContext<{ open: (path: string, line?: number) => void; cwd: () => string | undefined; run?: (command: string) => void }>()
 export const useOpenFile = () => useContext(OpenFile)
 
 /**

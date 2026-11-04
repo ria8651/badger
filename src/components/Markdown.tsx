@@ -21,6 +21,19 @@ const render = (text: string) => DOMPurify.sanitize(marked.parse(text, { gfm: tr
 /** Whether the text ends inside a code fence still being written. */
 const openFence = (text: string) => (text.match(/^ {0,3}(```|~~~)/gm)?.length ?? 0) % 2 === 1
 
+/** Fences whose code is shell commands, which get a button to run them. */
+const SHELLS = new Set(['bash', 'sh', 'shell', 'zsh', 'console', 'shellscript'])
+
+/** A shell fence's commands: a console one's are its `$ ` lines, without the prompt; the rest is their output. */
+const commands = (source: string, lang: string) =>
+  lang === 'console'
+    ? source
+        .split('\n')
+        .filter((l) => /^\s*\$ /.test(l))
+        .map((l) => l.replace(/^\s*\$ /, ''))
+        .join('\n')
+    : source.trim()
+
 /** Whether the text has a mermaid fence, whose diagram is drawn in the palette's colours. */
 const hasDiagram = (text: string) => /^ {0,3}(```|~~~)[ \t]*mermaid\b/m.test(text)
 
@@ -47,15 +60,16 @@ function keepInPlace(el: HTMLElement, change: () => void) {
  * Highlights the fenced code in rendered markdown, after DOMPurify: Shiki's
  * output is trusted, since it escapes the code itself. A fence that's still
  * streaming stays plain until it closes. Each block gets a copy button and a
- * wrap toggle, and a mermaid one is drawn as its diagram (src/diagram.ts sanitizes that itself).
+ * wrap toggle, a shell one a button to run it too once it's closed, given `run`,
+ * and a mermaid one is drawn as its diagram (src/diagram.ts sanitizes that itself).
  */
-function decorate(root: HTMLElement, text: string): () => void {
+function decorate(root: HTMLElement, text: string, run?: (command: string) => void): () => void {
   const blocks = [...root.querySelectorAll<HTMLElement>('pre > code')]
   const open = openFence(text)
   const stops = blocks.map((code, i) => {
     const pre = code.parentElement!
     const lang = /\blanguage-(\S+)/.exec(code.className)?.[1]?.toLowerCase()
-    // A header above the code, outside what scrolls: its language, and buttons to wrap and copy it.
+    // A header above the code, outside what scrolls: its language, and buttons to wrap, copy and maybe run it.
     const block = document.createElement('div')
     block.className = 'code-block'
     const head = document.createElement('div')
@@ -82,6 +96,15 @@ function decorate(root: HTMLElement, text: string): () => void {
     pre.replaceWith(block)
     block.append(head, pre)
     if (open && i === blocks.length - 1) return () => {}
+    const command = run && lang && SHELLS.has(lang) ? commands(source, lang) : ''
+    if (command) {
+      const go = document.createElement('button')
+      go.textContent = 'Run'
+      go.type = 'button'
+      go.title = 'Run in a terminal beside the chat'
+      go.onclick = () => run!(command)
+      head.append(go)
+    }
     const highlight = () => highlightWhenSeen(code, source.replace(/\n$/, ''), lang)
     if (lang !== 'mermaid') return highlight()
     return diagramWhenSeen(block, source, highlight, (url) => viewImages([url]))
@@ -124,7 +147,7 @@ export function Markdown(props: {
         const url = src && image(src)
         if (url) img.src = url
       }
-    onCleanup(decorate(el, props.text))
+    onCleanup(decorate(el, props.text, files?.run))
   })
   createEffect(() => {
     const on = wrap()

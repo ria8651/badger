@@ -183,6 +183,11 @@ export function Chat(props: {
           // Opening it is asking for the file, so a tab showing its diff switches back.
           void expandHome(path, machine()).then((path) => openFile(w, { kind: 'file', session: props.sessionId, path, line, mode: openingMode(path, line) }))
         },
+        run: (command: string) => {
+          const w = beside()
+          const dir = cwd()
+          if (w && dir) void openTerminal(w, props.sessionId, dir, undefined, command).catch((e: Error) => showError("Couldn't open a terminal", e.message))
+        },
       }
 
   /** Scroll to a tool call, opening it and whatever it's folded into. */
