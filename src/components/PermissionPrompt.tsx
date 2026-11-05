@@ -6,7 +6,7 @@ import { socket } from '../api.ts'
 import { Markdown } from './Markdown.tsx'
 import { PlanActions, PlanEditor, planText, planTitle } from './Plan.tsx'
 import { ToolInput, relPath, toolLabel, toolSummary, type Question } from './ToolCard.tsx'
-import { Button, inputClass } from './ui.tsx'
+import { Button, noteClass } from './ui.tsx'
 
 /** What's typed in each prompt, by request id. Kept outside them so it survives switching chats. */
 const [notes, setNotes] = createSignal<Record<string, string>>({})
@@ -249,7 +249,7 @@ function QuestionPrompt(props: {
                     }}
                     placeholder={picked[q.question]?.length ? 'Add a note…' : 'Other…'}
                     rows={1}
-                    class={`${inputClass} block h-auto min-h-8 resize-none py-1.5 leading-5 [field-sizing:content]`}
+                    class={noteClass}
                   />
                 </div>
                 <Show when={preview()}>
@@ -316,11 +316,12 @@ function Shell(props: {
 
 function FeedbackInput(props: { value: string; onChange: (v: string) => void; placeholder: string }) {
   return (
-    <input
+    <textarea
       value={props.value}
       onInput={(e) => props.onChange(e.currentTarget.value)}
       placeholder={props.placeholder}
-      class={inputClass}
+      rows={1}
+      class={noteClass}
     />
   )
 }

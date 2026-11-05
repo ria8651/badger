@@ -7,7 +7,7 @@ import { Markdown } from './Markdown.tsx'
 import { MarkdownEditor } from './MarkdownEditor.tsx'
 import { resultText } from './ToolCard.tsx'
 import type { Index } from '../transcript/model.ts'
-import { Button, inputClass } from './ui.tsx'
+import { Button, noteClass } from './ui.tsx'
 
 /*
  * A plan Claude proposes with ExitPlanMode can be edited before it's approved, in the
@@ -112,11 +112,12 @@ export function PlanActions(props: { sessionId: string; permission: PendingPermi
           </button>
         </p>
       </Show>
-      <input
+      <textarea
         value={note()}
         onInput={(e) => setFeedback((f) => ({ ...f, [id()]: e.currentTarget.value }))}
         placeholder="Tell Claude what to change (optional)"
-        class={inputClass}
+        rows={1}
+        class={noteClass}
       />
       <div class="flex flex-wrap items-center gap-2 pt-1">
         <Button primary onClick={() => approve('auto')}>Approve, auto mode</Button>

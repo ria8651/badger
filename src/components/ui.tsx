@@ -184,6 +184,9 @@ export const touch = matchMedia('(pointer: coarse)')
 export const inputClass =
   'h-8 w-full border border-edge bg-transparent px-3 text-ui outline-none transition-colors rounded-lg placeholder:text-fg-3 focus:border-fg-3 pointer-coarse:text-base'
 
+/** For a `<textarea rows={1}>` of free text to Claude: one line until there's more, growing with what's typed up to eight lines, then scrolling. */
+export const noteClass = `${inputClass} block h-auto min-h-8 max-h-[calc(8lh+0.75rem)] resize-none py-1.5 leading-5 [field-sizing:content]`
+
 /**
  * Stands in for a page or chat until its data arrives. Says so when the server can't be reached, since then it
  * won't arrive until it's back. Fades in late so a quick load doesn't flash it.

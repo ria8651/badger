@@ -15,7 +15,7 @@ import { BasePicker, baseChanged, howText } from './BasePicker.tsx'
 import { useOpenFile } from '../fileLinks.ts'
 import { CodeRow } from './CodeRow.tsx'
 import { Markdown } from './Markdown.tsx'
-import { Button, DiffCount, GhostButton, LiveDot, PaneBar, PathLabel, inputClass } from './ui.tsx'
+import { Button, DiffCount, GhostButton, LiveDot, PaneBar, PathLabel, noteClass } from './ui.tsx'
 
 /*
  * SPIKE: a checkout's changes, every hunk. Two ways: a chat's diff, in a panel beside it, file by file; or a guided
@@ -1093,7 +1093,7 @@ export function ReviewPage(props: {
               placeholder={comments().length ? `Anything to add to the ${plural(comments().length, 'comment')} on lines? Optional` : 'A comment on the changes as a whole'}
               rows={1}
               // Grows with what's typed, as the composer does.
-              class={`${inputClass} h-auto max-h-[calc(8lh+0.75rem)] min-w-0 flex-1 resize-none py-1.5 [field-sizing:content]`}
+              class={`${noteClass} min-w-0 flex-1`}
             />
             <Button
               primary
