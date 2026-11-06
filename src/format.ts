@@ -2,6 +2,15 @@
 
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
+/** Text as a Markdown quote, cut to `max` characters, with runs of blank lines made one. */
+export const blockquote = (text: string, max = Infinity) => {
+  const t = text.trim().replace(/\n{3,}/g, '\n\n')
+  return (t.length > max ? `${t.slice(0, max).trimEnd()}…` : t)
+    .split('\n')
+    .map((line) => (line.trim() ? `> ${line}` : '>'))
+    .join('\n')
+}
+
 /** A count in few characters, e.g. 12.3K. */
 export const compact = (n: number) => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
 

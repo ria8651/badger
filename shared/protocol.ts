@@ -424,11 +424,18 @@ export const IMAGE_EXTENSIONS: Record<(typeof IMAGE_TYPES)[number], string[]> = 
 /** A pasted or dropped image, base64 encoded, sent to Claude as an image block. */
 export type ImageAttachment = { mediaType: (typeof IMAGE_TYPES)[number]; data: string }
 
-/** Big pastes and images waiting in the composer to be sent. */
-export type DraftAttachments = { pastes: string[]; images: ImageAttachment[] }
+/**
+ * A comment on part of one of Claude's replies, or of a plan waiting for an answer, kept with others to send together.
+ * `on`: the reply's id (see the transcript's text items), or `plan:<requestId>`. `quote`: what of it was selected, which
+ * in a reply is characters start..end of its text as shown.
+ */
+export type ReplyComment = { id: string; on: string; quote: string; start?: number; end?: number; text: string }
+
+/** Big pastes, images and comments on replies waiting in the composer to be sent. */
+export type DraftAttachments = { pastes: string[]; images: ImageAttachment[]; comments?: ReplyComment[] }
 
 export const NO_ATTACHMENTS: DraftAttachments = { pastes: [], images: [] }
-export const hasAttachments = (a: DraftAttachments) => a.pastes.length > 0 || a.images.length > 0
+export const hasAttachments = (a: DraftAttachments) => a.pastes.length > 0 || a.images.length > 0 || !!a.comments?.length
 
 /** Where a chat that hasn't started will run: its runner, the folder there, and whether in a new worktree of it. */
 export type StartAt = { machine: string; cwd?: string; worktree?: boolean }

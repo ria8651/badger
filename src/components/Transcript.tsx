@@ -9,6 +9,7 @@ import { ApiError, CardContextBadge, CompactDivider, CompactingLine, Idle, Notic
 import { buildView, duration, foldWork, lastContext, modelName, retryOf, stopReason, within, type Index, type Item, type Row, type Work } from '../transcript/model.ts'
 import { Attachments } from './Attachments.tsx'
 import { Markdown } from './Markdown.tsx'
+import { ReplyBody } from '../replyComments.tsx'
 import { Disclosure, Pre, ToolCard, ToolInput, toolLabel, toolSummary } from './ToolCard.tsx'
 import { parsePartialJson } from '../partialJson.ts'
 import { LiveDot, compact, plural } from './ui.tsx'
@@ -142,10 +143,15 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
         )
       }
       case 'text':
+        // The chat's own replies can be commented on, to send the comments together.
         return (
-          <div class="my-4">
-            <Markdown text={item.text} />
-          </div>
+          <Show when={!props.nested && item.id} fallback={<div class="my-4"><Markdown text={item.text} /></div>}>
+            {(id) => (
+              <div class="my-4">
+                <ReplyBody id={id()} text={item.text} />
+              </div>
+            )}
+          </Show>
         )
       case 'thinking':
         return <Thinking text={item.text} />

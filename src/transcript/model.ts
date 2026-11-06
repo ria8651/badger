@@ -20,7 +20,8 @@ export type ContentBlock = Block & { tool_use_id?: string; content?: unknown; is
 export type Item =
   /** `to`: the subagent it went to, for one the user sent a subagent through the chat. */
   | { kind: 'user'; text: string; pastes?: string[]; images?: ShownImage[]; to?: string; command?: boolean }
-  | { kind: 'text'; text: string }
+  /** `id`: the message's uuid and which of its blocks, for comments on it to find it by. */
+  | { kind: 'text'; text: string; id?: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; id: string; name: string; input: Record<string, unknown> }
   | { kind: 'result'; ok: boolean; seconds: number; tokens?: { input: number; output: number }; endedAt?: number; error?: string }
@@ -90,11 +91,12 @@ export function messageItems(m: WireMessage): Item[] {
     // Not Claude: a built-in command's output, live. (After a reload it's a local_command message.)
     if ((m.message as { model?: string })?.model === '<synthetic>') return said ? [{ kind: 'output', text: said }] : []
     const items: Item[] = []
-    for (const b of content) {
-      if (b.type === 'text' && b.text?.trim()) items.push({ kind: 'text', text: b.text })
+    const idOf = (i: number) => (typeof m.uuid === 'string' ? `${m.uuid}:${i}` : undefined)
+    for (const [i, b] of content.entries()) {
+      if (b.type === 'text' && b.text?.trim()) items.push({ kind: 'text', text: b.text, id: idOf(i) })
       else if (b.type === 'thinking' && b.thinking?.trim()) items.push({ kind: 'thinking', text: b.thinking })
       // How a subagent hands its report back: that's its reply, not a step.
-      else if (b.type === 'tool_use' && b.name === 'SubagentHandback') items.push({ kind: 'text', text: String(b.input?.message ?? '') })
+      else if (b.type === 'tool_use' && b.name === 'SubagentHandback') items.push({ kind: 'text', text: String(b.input?.message ?? ''), id: idOf(i) })
       else if (b.type === 'tool_use' && b.id) items.push({ kind: 'tool', id: b.id, name: b.name ?? '?', input: b.input ?? {} })
     }
     return items

@@ -380,7 +380,7 @@ export class Chats {
         const saved = meta.draft(event.sessionId)
         return this.editDraft(event.sessionId, {
           text: [message.text, saved.text].filter(Boolean).join('\n\n'),
-          attachments: { pastes: [...message.pastes, ...saved.attachments.pastes], images: [...message.images, ...saved.attachments.images] },
+          attachments: { ...saved.attachments, pastes: [...message.pastes, ...saved.attachments.pastes], images: [...message.images, ...saved.attachments.images] },
         })
       }
       case 'interrupt':
@@ -478,9 +478,10 @@ export class Chats {
       // Turned away, so it never started: it can go elsewhere. Anything else, e.g. the connection dropping, it may have.
       if (!placed && err instanceof BadRequest) placement.unassign(sessionId, machine)
       // The message goes back in the composer, unless something's been typed since; for a chat that's still to start,
-      // with where it was to.
+      // with where it was to. Comments added since stay.
       const start = placement.machineOf(sessionId) ? undefined : { machine, cwd: event.cwd, worktree: event.worktree !== undefined }
-      if (!meta.draft(sessionId).text) this.editDraft(sessionId, { text, attachments: { pastes, images }, start })
+      const saved = meta.draft(sessionId)
+      if (!saved.text) this.editDraft(sessionId, { text, attachments: { ...saved.attachments, pastes, images }, start })
       throw err
     }
   }

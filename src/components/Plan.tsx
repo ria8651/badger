@@ -1,13 +1,15 @@
-import { Show, createSignal, onCleanup, untrack } from 'solid-js'
+import { Show, createSignal, onCleanup, untrack, type JSX } from 'solid-js'
 import { PanelRight } from '../icons'
 import type { PendingPermission, PermissionMode } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
 import { chatCommands } from '../useChat.ts'
 import { Markdown } from './Markdown.tsx'
 import { MarkdownEditor } from './MarkdownEditor.tsx'
+import { QuoteSelection } from './QuoteSelection.tsx'
+import { PlanComments, commentsMessage, planAnchor, planCommentCount, takePlanComments, useReplyComments } from '../replyComments.tsx'
 import { resultText } from './ToolCard.tsx'
 import type { Index } from '../transcript/model.ts'
-import { Button, inputClass } from './ui.tsx'
+import { Button, inputClass, plural } from './ui.tsx'
 
 /*
  * A plan Claude proposes with ExitPlanMode can be edited before it's approved, in the
@@ -71,12 +73,33 @@ export function PlanEditor(props: { sessionId: string; permission: PendingPermis
   return <MarkdownEditor value={planText(props.permission)} onSave={save} saveDelay={0} placeholder="An empty plan" class={props.class} />
 }
 
-/** Approve or send back, with what to tell Claude. Edits go with either. */
+/** A waiting plan, with text selected in it offered to comment on, and the comments under it. */
+export function CommentablePlan(props: { requestId: string; class?: string; children: JSX.Element }) {
+  const api = useReplyComments()
+  const on = untrack(() => planAnchor(props.requestId))
+  let el!: HTMLDivElement
+  return (
+    <>
+      <div ref={el} data-reply={on} class={`relative ${props.class ?? ''}`}>
+        {props.children}
+        <Show when={api}>{(api) => <QuoteSelection within={() => el} onComment={(quote) => api().setDraft({ on, quote })} />}</Show>
+      </div>
+      <PlanComments on={on} />
+    </>
+  )
+}
+
+/** Approve or send back, with what to tell Claude. Edits and comments go with either. */
 export function PlanActions(props: { sessionId: string; permission: PendingPermission; onOpen?: () => void }) {
   const p = () => props.permission
   const id = () => p().requestId
   const note = () => feedback()[id()] ?? ''
 
+  /** What to tell Claude: the note, after comments on the plan if there are any, which go with it. */
+  const told = (lead: string) => {
+    const comments = takePlanComments(id())
+    return comments.length ? commentsMessage(comments, note(), lead) : note().trim()
+  }
   const respond = (decision: 'allow' | 'deny', extra: { message?: string; updatedInput?: Record<string, unknown> }) => {
     socket.send({ type: 'permission', sessionId: props.sessionId, requestId: id(), decision, ...extra })
     // As sent, edits and all, for the panel to show until Claude proposes the next one.
@@ -89,12 +112,12 @@ export function PlanActions(props: { sessionId: string; permission: PendingPermi
   const updated = () => (edited(p()) ? { ...p().input, plan: planText(p()) } : undefined)
   // Approving can't carry a message, so the server sends the note on as the next one.
   const approve = (mode: PermissionMode) => {
-    respond('allow', { message: note().trim() || undefined, updatedInput: updated() })
+    respond('allow', { message: told('I left %n on the plan. Take them into account as you carry it out.') || undefined, updatedInput: updated() })
     chatCommands(props.sessionId).setMode(mode)
   }
   // The server saves edits to the plan's file, which the next plan is read from; they go in the message too, for Claude to start from.
   const keepPlanning = () => {
-    const parts = [note().trim(), edited(p()) ? `I edited the plan and saved my version to the plan file. Carry on from it:\n\n${planText(p())}` : '']
+    const parts = [told('I left %n on the plan. Change it for them, and say if you disagree with any.'), edited(p()) ? `I edited the plan and saved my version to the plan file. Carry on from it:\n\n${planText(p())}` : '']
     respond('deny', { message: parts.filter(Boolean).join('\n\n') || undefined, updatedInput: updated() })
   }
   const revert = () => {
@@ -111,6 +134,9 @@ export function PlanActions(props: { sessionId: string; permission: PendingPermi
             Undo all edits
           </button>
         </p>
+      </Show>
+      <Show when={planCommentCount(id())}>
+        {(n) => <p class="text-xs text-fg-3">{n() === 1 ? 'Your comment on the plan goes' : `Your ${plural(n(), 'comment')} on the plan go`} with your answer.</p>}
       </Show>
       <input
         value={note()}
@@ -203,7 +229,9 @@ export function PlanPane(props: {
                   <span class="size-1.5 shrink-0 rounded-full bg-accent" />
                   Waiting for you. Edit it here, then approve or send it back.
                 </p>
-                <PlanEditor sessionId={props.sessionId} permission={p} class="min-h-[6.6em]" />
+                <CommentablePlan requestId={p.requestId}>
+                  <PlanEditor sessionId={props.sessionId} permission={p} class="min-h-[6.6em]" />
+                </CommentablePlan>
               </>
             )}
           </Show>

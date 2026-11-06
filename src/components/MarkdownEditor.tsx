@@ -95,12 +95,20 @@ export function MarkdownEditor(props: {
   // The Markdown this editor last loaded or saved; what comes back from the server matching it is our own echo.
   let synced = props.value
   let dirty = false
+  /**
+   * What was last loaded, and how the editor writes it back. Clicking or selecting in it can count as an edit that changes
+   * nothing, and saving its own rewriting of the Markdown would make it look edited, e.g. a plan Claude then hears was
+   * changed; so that's saved as it was loaded.
+   */
+  let loaded = { value: props.value, as: '' }
+  const markLoaded = (value: string) => (loaded = { value, as: editor ? tidy(editor.getMarkdown()) : '' })
 
   const flush = () => {
     clearTimeout(timer)
     if (!editor || !dirty) return
     dirty = false
-    synced = tidy(editor.getMarkdown())
+    const markdown = tidy(editor.getMarkdown())
+    synced = markdown === loaded.as ? loaded.value : markdown
     props.onSave(synced)
   }
 
@@ -155,6 +163,7 @@ export function MarkdownEditor(props: {
       },
       onBlur: flush,
     })
+    markLoaded(props.value)
   })
 
   /** Asks for the URL by the selection. Emptying it takes the link off. */
@@ -184,6 +193,7 @@ export function MarkdownEditor(props: {
         synced = value
         const { from, to } = editor.state.selection
         editor.commands.setContent(value, { contentType: 'markdown', emitUpdate: false })
+        markLoaded(value)
         const end = editor.state.doc.content.size
         if (editor.isFocused) editor.commands.setTextSelection({ from: Math.min(from, end), to: Math.min(to, end) })
       },

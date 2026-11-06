@@ -1,5 +1,5 @@
 import { For, Show, createSignal, type Component, type JSX } from 'solid-js'
-import { Columns3, FileText, GitFork, PanelRight, X } from '../icons'
+import { Columns3, FileText, GitFork, MessageSquare, PanelRight, X } from '../icons'
 import type { CardContext } from '../../shared/cardContext.ts'
 import type { Move, Place } from '../../shared/forkNote.ts'
 import { basename } from '../folders.ts'
@@ -25,6 +25,10 @@ export function Attachments(props: {
   context?: ContextChip[]
   onRemovePaste?: (index: number) => void
   onRemoveImage?: (index: number) => void
+  /** How many comments on Claude's replies go with it; clicking the chip shows the first. */
+  comments?: number
+  onShowComments?: () => void
+  onRemoveComments?: () => void
   /** Given, an open paste or context can be opened in a panel beside the chat: `paste:<n>` or `context:<n>`. */
   onOpen?: (part: string) => void
   class?: string
@@ -114,6 +118,21 @@ export function Attachments(props: {
             )
           }}
         </For>
+        <Show when={props.comments}>
+          {(n) => (
+            <div class={`${chip} border-edge text-fg-3 hover:text-fg-2`}>
+              <button type="button" class="flex h-full items-center gap-1.5 pl-2 pr-2.5" title="Your comments on Claude's replies, sent with this message" onClick={() => props.onShowComments?.()}>
+                <MessageSquare class="size-3.5" />
+                {plural(n(), 'comment')}
+              </button>
+              <Show when={props.onRemoveComments}>
+                <button type="button" class="-ml-1 flex h-full items-center pr-2 hover:text-fg" title="Discard all of them" onClick={() => props.onRemoveComments!()}>
+                  <X class="size-3" />
+                </button>
+              </Show>
+            </div>
+          )}
+        </Show>
         <For each={props.images}>
           {(image, i) => (
             <div class="group relative">

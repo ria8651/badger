@@ -4,6 +4,7 @@ import { isLongPaste } from '../../shared/pastes.ts'
 import { IMAGE_EXTENSIONS, type Card, type DraftAttachments, type PermissionMode } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { isScratch } from '../folders.ts'
+import { blockquote } from '../format.ts'
 import { readImage } from '../images.ts'
 import type { ModelChoice } from '../models.ts'
 import { detail, toggleDetail } from '../prefs.ts'
@@ -14,6 +15,9 @@ import { PromptInput, type PromptInputControls } from './PromptInput.tsx'
 import { showError } from './Popover.tsx'
 import { ContextMeter } from './Usage.tsx'
 import { IconButton, Menu, Select, createDismiss, type Option } from './ui.tsx'
+
+/** Scrolls to the reply a comment is on. */
+const showComment = (on: string) => document.querySelector(`[data-reply="${CSS.escape(on)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
 
 export const MODES: Option<PermissionMode>[] = [
   { value: 'default', label: 'Ask before edits', description: 'Claude asks before changing files or running commands.' },
@@ -71,7 +75,9 @@ export function Composer(props: {
   const attach = (change: (a: DraftAttachments) => DraftAttachments) => props.chat.editDraft({ attachments: change(attached()) })
   const pastes = () => attached().pastes
   const images = () => attached().images
-  const hasInput = () => !!text().trim() || pastes().length > 0 || images().length > 0
+  /** Comments on Claude's replies, which go with the message. */
+  const comments = () => attached().comments ?? []
+  const hasInput = () => !!text().trim() || pastes().length > 0 || images().length > 0 || comments().length > 0
   let root!: HTMLDivElement
   let prompt: PromptInputControls | undefined
   let picker!: HTMLInputElement
@@ -115,15 +121,7 @@ export function Composer(props: {
     const before = text().trimEnd()
     replace(`${before ? `${before}\n\n` : ''}${block}\n\n`, true)
   }
-  const quote = (quoted: string) =>
-    insert(
-      quoted
-        .trim()
-        .replace(/\n{3,}/g, '\n\n')
-        .split('\n')
-        .map((line) => (line.trim() ? `> ${line}` : '>'))
-        .join('\n'),
-    )
+  const quote = (quoted: string) => insert(blockquote(quoted))
   props.ref?.({ focus: () => prompt?.focus(), flush, quote, insert })
 
   const submit = () => {
@@ -197,11 +195,14 @@ export function Composer(props: {
           onClose={() => setMore(false)}
         />
       </Show>
-      <Show when={pastes().length || images().length || props.pendingCard}>
+      <Show when={pastes().length || images().length || comments().length || props.pendingCard}>
         <Attachments
           pastes={pastes()}
           images={images()}
           card={props.pendingCard}
+          comments={comments().length}
+          onShowComments={() => showComment(comments()[0].on)}
+          onRemoveComments={() => attach((a) => ({ ...a, comments: [] }))}
           onRemovePaste={(i) => attach((a) => ({ ...a, pastes: a.pastes.filter((_, j) => j !== i) }))}
           onRemoveImage={(i) => attach((a) => ({ ...a, images: a.images.filter((_, j) => j !== i) }))}
           class="px-3 pt-3"
@@ -215,7 +216,7 @@ export function Composer(props: {
         noFiles={!props.cwd || isScratch(props.cwd)}
         above={props.above}
         disabled={props.disabled}
-        placeholder={props.placeholder ?? (state.running ? 'Queue a message' : 'Message Claude')}
+        placeholder={props.placeholder ?? (comments().length ? 'Anything to add to your comments? Optional' : state.running ? 'Queue a message' : 'Message Claude')}
         onInput={edit}
         onSubmit={submit}
         onPaste={(e) => {

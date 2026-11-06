@@ -17,6 +17,9 @@ const text = (max = 128) => z.string().max(max).optional().catch(undefined)
 const attachments = z.object({
   pastes: z.array(z.string()).default([]),
   images: z.array(imageAttachment).default([]),
+  comments: z
+    .array(z.object({ id: z.string(), on: z.string(), quote: z.string(), start: z.number().optional(), end: z.number().optional(), text: z.string() }))
+    .optional(),
 }) satisfies ZodType<DraftAttachments, unknown>
 
 const start = z.object({
