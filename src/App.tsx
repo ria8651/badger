@@ -1,10 +1,12 @@
-import { Match, Show, Switch, createEffect, createSignal, onCleanup, onMount, on } from 'solid-js'
+import { For, Match, Show, Switch, createEffect, createSignal, onCleanup, onMount, on } from 'solid-js'
 import { PanelLeft, Plus } from './icons'
 import { descendants } from '../shared/cardTree.ts'
 import { socket } from './api.ts'
 import { attention, looking, needsYou, notify, onAttention } from './attention.ts'
 import { chatStarted, homeId, newChat as newChatIn } from './drafts.ts'
 import { lastWorkedIn } from './folders.ts'
+import { LEADER } from './layout.ts'
+import { leaderBindings, leaderKeys, leaderWaiting } from './leader.ts'
 import { focus } from './focus.ts'
 import { navigate, replace, route } from './router.tsx'
 import { cardById, cards, cardsLoaded } from './stores/cards.ts'
@@ -19,6 +21,7 @@ import { Chat } from './components/Chat.tsx'
 import { TerminalPage } from './components/Terminals.tsx'
 import { Settings } from './components/Settings.tsx'
 import { Sidebar } from './components/Sidebar.tsx'
+import { Switcher } from './components/Switcher.tsx'
 import { ImageViewer } from './components/ImageViewer.tsx'
 import { Loading, modalOpen } from './components/ui.tsx'
 
@@ -48,6 +51,14 @@ export function App() {
   }
   addEventListener('keydown', onKey)
   onCleanup(() => removeEventListener('keydown', onKey))
+
+  // The leader keys there are on every page. A chat's panels add theirs after these.
+  const [switcher, setSwitcher] = createSignal(false)
+  leaderKeys(() => [
+    // K again, so holding Cmd or Ctrl and pressing K twice does it.
+    { keys: ['k'], hint: ['K', 'Switch chat'], run: () => setSwitcher(true) },
+    { keys: ['n'], hint: ['N', 'New chat'], run: () => newHomeChat() },
+  ])
 
   const startSidebarDrag = (e: PointerEvent) => {
     if (e.button !== 0) return
@@ -218,6 +229,22 @@ export function App() {
       </div>
       <Show when={settings()}>
         <Settings onClose={() => setSettings(false)} />
+      </Show>
+      <Show when={switcher()}>
+        <Switcher current={current()} onClose={() => setSwitcher(false)} />
+      </Show>
+      <Show when={leaderWaiting()}>
+        <div class="pointer-events-none fixed bottom-6 left-1/2 z-50 w-64 -translate-x-1/2 animate-[pop-in_120ms_ease-out] rounded-xl border border-edge bg-bg p-2 text-ui pop shadow-(--shadow-pop)">
+          <div class="px-1.5 pb-1 text-meta text-fg-3">{LEADER}, then</div>
+          <For each={leaderBindings().flatMap((b) => (b.hint ? [b.hint] : []))}>
+            {([key, what]) => (
+              <div class="flex items-center gap-3 px-1.5 py-0.5">
+                <kbd class="min-w-12 font-mono text-xs text-fg">{key}</kbd>
+                <span class="text-fg-2">{what}</span>
+              </div>
+            )}
+          </For>
+        </div>
       </Show>
       <ImageViewer />
     </div>

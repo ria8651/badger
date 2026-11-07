@@ -15,7 +15,6 @@ import {
   focusRequest,
   groupOf,
   groupsOf,
-  isLeader,
   layoutOf,
   measure,
   moveShown,
@@ -56,7 +55,8 @@ import { PreviewFrame } from './PreviewFrame.tsx'
 import { PortButtons, RenameTerminal, RestartButton, StatusDot } from './Terminals.tsx'
 import { TerminalView } from './TerminalView.tsx'
 import { showError } from './Popover.tsx'
-import { LiveDot, ghostClass, modalOpen } from './ui.tsx'
+import { LiveDot, ghostClass } from './ui.tsx'
+import { leaderKeys } from '../leader.ts'
 
 /** Height of a group's tab bar, which its views sit under. */
 const BAR = 36
@@ -109,18 +109,6 @@ export interface ChatPanes {
   renderFile: (v: () => FileView, onReady: (focus: () => void) => void) => JSX.Element
 }
 
-const BINDINGS: [string, string][] = [
-  ['T', 'New terminal'],
-  ['\\', 'Split right'],
-  ['-', 'Split down'],
-  ['← ↑ ↓ →', 'Move focus'],
-  ['W', 'Close tab'],
-  ['0', 'Back to the chat'],
-  ['P', 'Show or hide panels'],
-  ['D', 'Changes'],
-  ['L', 'Plan'],
-  ['B', 'Side chats'],
-]
 
 /**
  * A chat with its workspace's panels tiled around it. The chat is the anchor:
@@ -400,70 +388,51 @@ export function Workspace(props: {
 
   // ── Keyboard: the leader chord, then one key ──
 
-  const [leader, setLeader] = createSignal(false)
-  const onKey = (e: KeyboardEvent) => {
-    // Behind a modal: its keys aren't for the panels.
-    if (modalOpen()) return setLeader(false)
-    if (!leader()) {
-      if (!isLeader(e) || !props.ws) return
-      // Caught on the way down, so neither the composer nor a terminal sees it.
-      e.preventDefault()
-      e.stopPropagation()
-      setLeader(true)
-      return
-    }
-    if (['Shift', 'Meta', 'Control', 'Alt'].includes(e.key)) return
-    e.preventDefault()
-    e.stopPropagation()
-    setLeader(false)
-    const here = groupById(current()) ? current() : 'chat'
-    const arrows: Record<string, Edge> = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'top', ArrowDown: 'bottom' }
-    if (arrows[e.key]) {
-      const next = neighbour(here, arrows[e.key])
+  // Only once the workspace is known: before that there's nowhere to put panels.
+  leaderKeys(() => {
+    const ws = props.ws
+    if (!ws) return []
+    const here = () => (groupById(current()) ? current() : 'chat')
+    const go = (edge: Edge) => () => {
+      const next = neighbour(here(), edge)
       if (next) focusLeaf(next)
-      return
     }
-    switch (e.key.toLowerCase()) {
-      case 't':
-        return newTerminal(here === 'chat' ? undefined : { group: here })
-      case '\\':
-      case '|':
-        return newTerminal({ beside: here, edge: 'right' })
-      case '-':
-      case '_':
-        return newTerminal({ beside: here, edge: 'bottom' })
-      case 'w': {
-        const g = groupById(here)
-        return g && close(activeOf(g))
-      }
-      case '0':
-        return props.onFocusChat()
-      case 'p':
-        if (panelsShown(props.ws!, props.sessionId)) return hide()
-        return props.cwd && void togglePanels(props.ws!, props.sessionId, props.cwd).catch(terminalFailed)
-      case 'd':
-        return props.panes.hasDiff() && togglePane(diffView(props.sessionId))
-      case 'l':
-        return props.panes.hasPlan() && togglePane(planView(props.sessionId))
-      case 'b':
-        return togglePane(btwView(props.sessionId))
-    }
-  }
+    return [
+      { keys: ['t'], hint: ['T', 'New terminal'], run: () => newTerminal(here() === 'chat' ? undefined : { group: here() }) },
+      { keys: ['\\', '|'], hint: ['\\', 'Split right'], run: () => newTerminal({ beside: here(), edge: 'right' }) },
+      { keys: ['-', '_'], hint: ['-', 'Split down'], run: () => newTerminal({ beside: here(), edge: 'bottom' }) },
+      { keys: ['ArrowLeft'], hint: ['← ↑ ↓ →', 'Move focus'], run: go('left') },
+      { keys: ['ArrowRight'], run: go('right') },
+      { keys: ['ArrowUp'], run: go('top') },
+      { keys: ['ArrowDown'], run: go('bottom') },
+      {
+        keys: ['w'],
+        hint: ['W', 'Close tab'],
+        run: () => {
+          const g = groupById(here())
+          if (g) close(activeOf(g))
+        },
+      },
+      { keys: ['0'], hint: ['0', 'Back to the chat'], run: () => props.onFocusChat() },
+      {
+        keys: ['p'],
+        hint: ['P', 'Show or hide panels'],
+        run: () => {
+          if (panelsShown(ws, props.sessionId)) return hide()
+          if (props.cwd) void togglePanels(ws, props.sessionId, props.cwd).catch(terminalFailed)
+        },
+      },
+      { keys: ['d'], hint: ['D', 'Changes'], run: () => props.panes.hasDiff() && togglePane(diffView(props.sessionId)) },
+      { keys: ['l'], hint: ['L', 'Plan'], run: () => props.panes.hasPlan() && togglePane(planView(props.sessionId)) },
+      { keys: ['b'], hint: ['B', 'Side chats'], run: () => togglePane(btwView(props.sessionId)) },
+    ]
+  })
   /** Shows one of the chat's own panels, or closes it if it's already showing. */
   const togglePane = (view: View) => {
     const key = viewKey(view)
     if (viewShown(props.ws!, props.sessionId, key)) close(key)
     else openView(props.ws!, view)
   }
-  const cancelLeader = () => setLeader(false)
-  addEventListener('keydown', onKey, true)
-  addEventListener('pointerdown', cancelLeader)
-  addEventListener('blur', cancelLeader)
-  onCleanup(() => {
-    removeEventListener('keydown', onKey, true)
-    removeEventListener('pointerdown', cancelLeader)
-    removeEventListener('blur', cancelLeader)
-  })
 
   // ── Rendering ──
 
@@ -769,20 +738,6 @@ export function Workspace(props: {
             {d().label}
           </div>
         )}
-      </Show>
-
-      <Show when={leader()}>
-        <div class="pointer-events-none absolute bottom-4 left-1/2 z-50 w-64 -translate-x-1/2 animate-[pop-in_120ms_ease-out] rounded-xl border border-edge bg-bg p-2 text-ui pop shadow-(--shadow-pop)">
-          <div class="px-1.5 pb-1 text-meta text-fg-3">{LEADER}, then</div>
-          <For each={BINDINGS}>
-            {([key, what]) => (
-              <div class="flex items-center gap-3 px-1.5 py-0.5">
-                <kbd class="min-w-12 font-mono text-xs text-fg">{key}</kbd>
-                <span class="text-fg-2">{what}</span>
-              </div>
-            )}
-          </For>
-        </div>
       </Show>
     </div>
   )
