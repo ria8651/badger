@@ -13,7 +13,6 @@ import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '.
 import { lastModel, modelChoices, modelName, modelValue, models, setLastModel, type ModelChoice } from '../models.ts'
 import { navigate } from '../router.tsx'
 import { createStickyScroll } from '../stickyScroll.ts'
-import { sentToSubagentBy } from '../../shared/toSubagent.ts'
 import { cardOf } from '../stores/cards.ts'
 import { sessionById } from '../stores/sessions.ts'
 import { knownRoot, workspaceOf, type Ws } from '../terminals.ts'
@@ -576,21 +575,7 @@ export function Chat(props: {
             class="sticky bottom-0 flex max-h-[calc(100cqh-2rem)] flex-col -mx-6 bg-bg px-6 pb-5 md:-mx-9 md:px-9 before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-bg"
           >
             {/* Laid out like the transcript's own messages, since that's where they're headed. */}
-            <For each={state.queued}>
-              {(m) => {
-                // One for a subagent says so, and can't be edited here: it would go back in as what Claude is asked to pass on.
-                const to = props.host ? undefined : sentToSubagentBy(m.text)
-                const relayed = !!props.host || !!to
-                return (
-                  <Queued
-                    message={to ? { ...m, text: to.text } : m}
-                    to={to?.description}
-                    onEdit={relayed ? undefined : () => unqueue(m.id, true)}
-                    onRemove={() => unqueue(m.id)}
-                  />
-                )
-              }}
-            </For>
+            <For each={state.queued}>{(m) => <Queued message={m} onEdit={() => unqueue(m.id, true)} onRemove={() => unqueue(m.id)} />}</For>
             {/* Everything here hangs out as far as the composer, so prompts and notices read as part of it, not the transcript. */}
             <div class="-mx-[calc(1rem+1px)] flex min-h-0 flex-col gap-2">
               <For each={prompts()}>
@@ -649,26 +634,26 @@ export function Chat(props: {
                   </span>
                 </Notice>
               </Show>
-              <Composer
-                ref={(c) => (composer = c)}
-                above={() => bottom}
-                chat={chat}
-                machine={machine()}
-                cwd={cwd()}
-                // A subagent is reached by its id, which isn't known until it has started.
-                disabled={state.gone || stranded() || (!!props.host && !props.host.agent.agentId())}
-                working={working()}
-                mode={mode()}
-                onMode={changeMode}
-                // A subagent's model is its own; switching here would switch the chat's.
-                model={!props.host && models()?.length ? modelValue(model(), models()!) : undefined}
-                models={modelOptions()}
-                onModel={changeModel}
-                pendingCard={pendingCard()}
-                canBackground={() => !props.host && state.running && waitingOnTask(index())}
-                placeholder={props.host ? 'Message the agent' : undefined}
-                onSubmit={send}
-              />
+              {/* A subagent is only read here: messages to it go through its chat's Claude. */}
+              <Show when={!props.host}>
+                <Composer
+                  ref={(c) => (composer = c)}
+                  above={() => bottom}
+                  chat={chat}
+                  machine={machine()}
+                  cwd={cwd()}
+                  disabled={state.gone || stranded()}
+                  working={working()}
+                  mode={mode()}
+                  onMode={changeMode}
+                  model={models()?.length ? modelValue(model(), models()!) : undefined}
+                  models={modelOptions()}
+                  onModel={changeModel}
+                  pendingCard={pendingCard()}
+                  canBackground={() => state.running && waitingOnTask(index())}
+                  onSubmit={send}
+                />
+              </Show>
             </div>
           </div>
         </div>
@@ -695,18 +680,14 @@ export function Chat(props: {
 }
 
 /** A message waiting for Claude's next break: your message as it'll appear, with ways to take it back. */
-function Queued(props: { message: QueuedMessage; to?: string; onEdit?: () => void; onRemove: () => void }) {
+function Queued(props: { message: QueuedMessage; onEdit: () => void; onRemove: () => void }) {
   const button = 'grid size-7 shrink-0 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:size-9'
   return (
     // Clamped shorter than in the transcript so a long one doesn't push the chat out of view above the composer.
-    <UserMessage text={props.message.text} to={props.to} pastes={props.message.pastes} images={props.message.images} class="mb-2" maxHeight="6lh">
-      <Show when={props.onEdit}>
-        {(edit) => (
-          <button type="button" onClick={edit()} title="Edit" class={button}>
-            <Pencil class="size-3.5" />
-          </button>
-        )}
-      </Show>
+    <UserMessage text={props.message.text} pastes={props.message.pastes} images={props.message.images} class="mb-2" maxHeight="6lh">
+      <button type="button" onClick={props.onEdit} title="Edit" class={button}>
+        <Pencil class="size-3.5" />
+      </button>
       <button type="button" onClick={props.onRemove} title="Remove" class={button}>
         <X class="size-3.5" />
       </button>

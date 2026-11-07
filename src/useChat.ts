@@ -15,7 +15,6 @@ import {
   type StartAt,
   type WireMessage,
 } from '../shared/protocol.ts'
-import { sentToSubagentBy, toSubagent } from '../shared/toSubagent.ts'
 import { socket } from './api.ts'
 
 /** What the composer changes of a draft: what's typed, saved after a pause in typing, or what's attached, saved at once. */
@@ -261,34 +260,20 @@ export function createChat(sessionId: string, start?: () => StartAt | undefined)
 
 export type Chat = ReturnType<typeof createChat>
 
-/** What's typed to subagents and not sent, by chat and Agent call. Only in this tab: a subagent's chat is its parent's. */
-const [agentDrafts, setAgentDrafts] = createStore<Record<string, Draft>>({})
-
 /**
- * A subagent as a chat of its own, inside the chat running it: it reads that chat's state, its own conversation
- * being the messages from its call, and what's sent to it goes to that chat's Claude to pass on, since only Claude
- * can reach a subagent. Stopping it stops just it.
+ * A subagent as a chat of its own, inside the chat running it, to read: it reads that chat's state, its own
+ * conversation being the messages from its call. Nothing is sent to it from here; that's for the chat's Claude.
+ * Stopping it stops just it.
  */
-export function agentChat(
-  parent: Chat,
-  sessionId: string,
-  agent: { toolUseId: string; id: () => string | undefined; description: () => string; running: () => boolean; stop: () => void },
-): Chat {
-  const key = `${sessionId}:${agent.toolUseId}`
-  const draft = () => agentDrafts[key] ?? NO_DRAFT
+export function agentChat(parent: Chat, agent: { toolUseId: string; running: () => boolean; stop: () => void }): Chat {
   const own: { [K in keyof ChatState]?: () => unknown } = {
-    draft,
+    draft: () => NO_DRAFT,
     running: agent.running,
     partial: () => null,
     makingWorktree: () => false,
     compacting: () => undefined,
-    // The parent's: its context window and its errors.
-    // What's waiting to go to it, of the parent's queue.
-    queued: () =>
-      parent.state.queued.flatMap((q) => {
-        const sent = sentToSubagentBy(q.text)
-        return sent && sent.id === agent.id() ? [{ ...q, text: sent.text }] : []
-      }),
+    queued: () => [],
+    // Not the parent's: its context window and its errors.
     context: () => undefined,
     error: () => null,
   }
@@ -300,14 +285,6 @@ export function agentChat(
     state,
     interrupt: agent.stop,
     background: () => parent.background(agent.toolUseId),
-    send: (message: Outgoing) => {
-      const id = agent.id()
-      // SendMessage takes text, so big pastes go in it; images can't go.
-      const text = [message.text, ...(message.pastes ?? [])].filter(Boolean).join('\n\n')
-      if (id && text) parent.send({ text: toSubagent({ id, description: agent.description() }, text) })
-    },
-    clearDraft: () => setAgentDrafts(key, undefined!),
-    editDraft: (edit: DraftEdit) => setAgentDrafts(key, { ...draft(), ...edit }),
     startAt: () => {},
   }
 }

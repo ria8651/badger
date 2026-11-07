@@ -59,8 +59,6 @@ export function Composer(props: {
   canBackground: () => boolean
   onSubmit: (text: string, attachments: DraftAttachments) => void
   ref?: (controls: ComposerControls) => void
-  /** What the empty box says, if not that it messages Claude. */
-  placeholder?: string
   /** What's stacked above the composer, prompts and queued messages, which its completions cover while open. */
   above?: () => HTMLElement | undefined
 }) {
@@ -215,7 +213,7 @@ export function Composer(props: {
         noFiles={!props.cwd || isScratch(props.cwd)}
         above={props.above}
         disabled={props.disabled}
-        placeholder={props.placeholder ?? (state.running ? 'Queue a message' : 'Message Claude')}
+        placeholder={state.running ? 'Queue a message' : 'Message Claude'}
         onInput={edit}
         onSubmit={submit}
         onPaste={(e) => {
