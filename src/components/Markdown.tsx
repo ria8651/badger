@@ -1,9 +1,10 @@
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { createEffect, onCleanup } from 'solid-js'
+import { createEffect, onCleanup, untrack } from 'solid-js'
 import { diagramWhenSeen } from '../diagram.ts'
 import { fileLink, useOpenFile } from '../fileLinks.ts'
 import { highlightWhenSeen } from '../highlight.ts'
+import { toggleWrap, wrap } from '../prefs.ts'
 import { appliedPalette } from '../theme.ts'
 import { viewImageIn, viewImages } from './ImageViewer.tsx'
 
@@ -23,11 +24,30 @@ const openFence = (text: string) => (text.match(/^ {0,3}(```|~~~)/gm)?.length ??
 /** Whether the text has a mermaid fence, whose diagram is drawn in the palette's colours. */
 const hasDiagram = (text: string) => /^ {0,3}(```|~~~)[ \t]*mermaid\b/m.test(text)
 
+/** A code block's wrap button says what it'll do, like Copy says what it did. */
+function labelWrap(button: HTMLElement, on: boolean) {
+  button.textContent = on ? 'Unwrap' : 'Wrap'
+  button.title = on ? 'Don’t wrap long lines' : 'Wrap long lines'
+}
+
+/**
+ * Runs a change that resizes what's above an element, then scrolls back so it
+ * stays where it was on screen. Wrapping changes every code block's height at
+ * once, and the chat doesn't anchor its scroll, so the one clicked would jump.
+ */
+function keepInPlace(el: HTMLElement, change: () => void) {
+  const before = el.getBoundingClientRect().top
+  change()
+  let scroller = el.parentElement
+  while (scroller && !/auto|scroll/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement
+  if (scroller) scroller.scrollTop += el.getBoundingClientRect().top - before
+}
+
 /**
  * Highlights the fenced code in rendered markdown, after DOMPurify: Shiki's
  * output is trusted, since it escapes the code itself. A fence that's still
- * streaming stays plain until it closes. Each block gets a copy button, and a
- * mermaid one is drawn as its diagram (src/diagram.ts sanitizes that itself).
+ * streaming stays plain until it closes. Each block gets a copy button and a
+ * wrap toggle, and a mermaid one is drawn as its diagram (src/diagram.ts sanitizes that itself).
  */
 function decorate(root: HTMLElement, text: string): () => void {
   const blocks = [...root.querySelectorAll<HTMLElement>('pre > code')]
@@ -35,7 +55,7 @@ function decorate(root: HTMLElement, text: string): () => void {
   const stops = blocks.map((code, i) => {
     const pre = code.parentElement!
     const lang = /\blanguage-(\S+)/.exec(code.className)?.[1]?.toLowerCase()
-    // A header above the code, outside what scrolls: its language, and a button to copy it.
+    // A header above the code, outside what scrolls: its language, and buttons to wrap and copy it.
     const block = document.createElement('div')
     block.className = 'code-block'
     const head = document.createElement('div')
@@ -52,7 +72,13 @@ function decorate(root: HTMLElement, text: string): () => void {
         setTimeout(() => (copy.textContent = 'Copy'), 1200)
       })
     }
-    head.append(name, copy)
+    // One setting for every block, and files too. The .md's wrap-code class does the wrapping, so nothing's drawn again.
+    const wrapping = document.createElement('button')
+    wrapping.type = 'button'
+    wrapping.className = 'code-wrap'
+    labelWrap(wrapping, untrack(wrap))
+    wrapping.onclick = () => keepInPlace(wrapping, toggleWrap)
+    head.append(name, wrapping, copy)
     pre.replaceWith(block)
     block.append(head, pre)
     if (open && i === blocks.length - 1) return () => {}
@@ -100,5 +126,9 @@ export function Markdown(props: {
       }
     onCleanup(decorate(el, props.text))
   })
-  return <div ref={el} class="md" onClick={onClick} />
+  createEffect(() => {
+    const on = wrap()
+    for (const b of el.querySelectorAll<HTMLElement>('.code-wrap')) labelWrap(b, on)
+  })
+  return <div ref={el} class="md" classList={{ 'wrap-code': wrap() }} onClick={onClick} />
 }
