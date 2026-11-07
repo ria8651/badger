@@ -280,14 +280,58 @@ export function buildView(messages: WireMessage[], nested: boolean) {
   }
   // A refused reply is withdrawn when another model answers instead.
   const retracted = new Set(messages.flatMap((m) => (m.subtype === 'model_refusal_fallback' && Array.isArray(m.retracted_message_uuids) ? m.retracted_message_uuids : [])))
+  const updates = nested ? new Set<Item>() : updatesAsThinking(messages)
   let items = messages
     .filter((m) => !retracted.has(m.uuid) && !(nested && isNoise(m, messages)))
     .flatMap(itemsFor)
     .filter((i) => !attached.has(i))
+    .map((i) => (updates.has(i) ? asText(i) : i))
   items = tidyCompactions(items)
   // A subagent's prompt is shown with the call that started it, so it goes from its first message; ones sent to it later stay.
   const prompt = nested && messages[0]?.type === 'user' ? itemsFor(messages[0]).find((i) => i.kind === 'user') : undefined
   return { items: prompt ? items.filter((i) => i !== prompt) : items, idleUntil, extras, promptIds, forkAt, interrupted, shownError, answeredBy, summaries }
+}
+
+/**
+ * Claude 5.1 and later sometimes write an update to the user as thinking: a second thinking block in a row, just
+ * before a tool call. Those are what Claude said, not what it thought. Claude Code saves each block as its own
+ * message, with the API message's id, so the run is followed across messages.
+ */
+function updatesAsThinking(messages: WireMessage[]): Set<Item> {
+  const updates = new Set<Item>()
+  let last: { id: string; item: Item; followsThinking: boolean } | undefined
+  for (const m of messages) {
+    if (m.type !== 'assistant') continue
+    const message = m.message as { id?: string; model?: string; content?: Block[] }
+    const id = message?.id ?? ''
+    const thoughts = itemsFor(m).filter((i) => i.kind === 'thinking')
+    for (const b of message?.content ?? []) {
+      if (b.type !== 'thinking') {
+        if (b.type === 'tool_use' && last?.id === id && last.followsThinking && writesUpdatesAsThinking(message.model)) updates.add(last.item)
+        last = undefined
+        continue
+      }
+      // An empty block (redacted, or not summarized) has no item and ends the run.
+      const item = b.thinking?.trim() ? thoughts.shift() : undefined
+      last = item && { id, item, followsThinking: last?.id === id }
+    }
+  }
+  return updates
+}
+
+function writesUpdatesAsThinking(model?: string): boolean {
+  const version = model?.match(/claude-[a-z]+-(\d+)(?:-(\d{1,2}))?(?!\d)/)
+  if (!version) return false
+  const major = Number(version[1])
+  return major > 5 || (major === 5 && Number(version[2] ?? 0) >= 1)
+}
+
+/** The same text item each time, so its row is kept. */
+const textOf = new WeakMap<Item, Item>()
+function asText(item: Item): Item {
+  let text = textOf.get(item)
+  if (!text && item.kind === 'thinking') textOf.set(item, (text = { kind: 'text', text: item.text }))
+  return text ?? item
 }
 
 /**
@@ -326,15 +370,15 @@ export function tidyCompactions(items: Item[]): Item[] {
   return out
 }
 
-const isWork = (i: Item) => i.kind === 'text' || i.kind === 'thinking' || i.kind === 'tool'
+const isWork = (i: Item) => i.kind === 'thinking' || i.kind === 'tool'
 
 /** Work rows keyed by their first item, which never changes as the run grows. */
 const workCache = new WeakMap<Item, Work>()
 
 /**
- * Result-only rows. In each unbroken run of assistant items, trailing text is
- * the response and stays; everything before it folds into one work row.
- * `tail` is the work row of a run still at the end, the one that can be live.
+ * Result-only rows. What Claude says stays, the updates it gives as it works as
+ * well as its reply; each stretch of thinking and tool calls between folds into
+ * one work row. `tail` is the work row at the end, the one that can be live.
  */
 export function foldWork(items: Item[]) {
   const rows: Row[] = []
@@ -348,16 +392,11 @@ export function foldWork(items: Item[]) {
     }
     let end = i
     while (end < items.length && isWork(items[end])) end++
-    let reply = end
-    while (reply > i && items[reply - 1].kind === 'text') reply--
-    if (reply > i) {
-      let work = workCache.get(items[i])
-      if (!work) workCache.set(items[i], (work = { kind: 'work' }))
-      groups.set(work, items.slice(i, reply))
-      rows.push(work)
-      tail = work
-    }
-    rows.push(...items.slice(reply, end))
+    let work = workCache.get(items[i])
+    if (!work) workCache.set(items[i], (work = { kind: 'work' }))
+    groups.set(work, items.slice(i, end))
+    rows.push(work)
+    tail = work
     i = end
   }
   return { rows, groups, tail }
