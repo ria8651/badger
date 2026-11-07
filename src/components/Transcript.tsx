@@ -87,13 +87,23 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
     return last?.kind === 'thinking' ? 'Thinking' : ''
   }
 
-  const WorkRow = (p: { work: Work }) => {
-    const items = () => folded().groups.get(p.work) ?? []
-    const live = () => props.running && folded().tail === p.work
+  // Whether the user opened the live work row to watch. Work goes on in a new row after anything Claude says, which
+  // opens too, until the turn ends; and the rows they watched stay open, as one row would have.
+  const [following, setFollowing] = createSignal(false)
+  createEffect(() => props.running || setFollowing(false))
+  const [watched, setWatched] = createSignal(new Set<Work>())
+
+  /** A stretch of work; without `work`, the one just starting, of which only the streaming block has come yet. */
+  const WorkRow = (p: { work?: Work }) => {
+    const items = () => (p.work && folded().groups.get(p.work)) || []
+    const live = () => props.running && (!p.work || folded().tail === p.work)
     const checking = () => live() && !props.partial && items().some((i) => i.kind === 'tool' && isChecking(i.id))
     const steps = () => items().filter((i) => i.kind === 'tool').length
+    createEffect(() => p.work && live() && following() && !watched().has(p.work) && setWatched(new Set(watched()).add(p.work)))
     return (
       <Disclosure
+        live={(live() && following()) || (!!p.work && watched().has(p.work))}
+        onToggle={(open) => live() && setFollowing(open)}
         holds={(id) => items().some((i) => i.kind === 'tool' && (i.id === id || within(index(), id, i.id)))}
         label={live() ? 'Working' : steps() ? 'Worked' : 'Thought'}
         detail={live() ? activity(items()) : steps() ? plural(steps(), 'step') : ''}
@@ -253,9 +263,11 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
       <Show
         when={full()}
         fallback={
-          // Nothing to fold yet: the turn has just started, or it's only thinking so far.
+          // No work row at the end: the turn has just started, or Claude has just said something.
           <Show when={props.running && !props.compacting && !folded().tail && props.partial?.type !== 'text'}>
-            <WorkingLine detail={activity([])} />
+            <Show when={props.partial} fallback={<WorkingLine />}>
+              <WorkRow />
+            </Show>
           </Show>
         }
       >
