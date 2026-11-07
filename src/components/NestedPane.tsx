@@ -10,8 +10,8 @@ import { toolLabel } from './ToolCard.tsx'
 import { LiveDot } from './ui.tsx'
 
 /**
- * A nested chat in a panel beside the chat it's in, as a chat you can write to: a child chat is a chat of its own,
- * and a subagent is its part of its chat's, which a message to goes through.
+ * A nested chat in a panel beside the chat it's in: a child chat is a chat of its own, which you can write to,
+ * and a subagent is its part of its chat's.
  */
 export function NestedPane(props: {
   sessionId: string
@@ -46,16 +46,10 @@ export function NestedPane(props: {
   )
 }
 
-/** A subagent as a chat: its conversation out of its chat's, and a composer whose messages Claude passes on. */
+/** A subagent as a chat: its conversation out of its chat's, to read. Messages to it go through the chat's Claude. */
 function AgentPane(props: Parameters<typeof NestedPane>[0] & { input: Record<string, unknown> }) {
   const agent = agentState(props)
-  const chat = agentChat(props.chat, props.sessionId, {
-    toolUseId: props.id,
-    id: agent.agentId,
-    description: agent.description,
-    running: agent.running,
-    stop: agent.stop,
-  })
+  const chat = agentChat(props.chat, { toolUseId: props.id, running: agent.running, stop: agent.stop })
   return (
     <Frame
       label={agentLabel(props.input)}
