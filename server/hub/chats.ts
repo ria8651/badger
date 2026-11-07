@@ -199,7 +199,10 @@ export class Chats {
         })
       }
     }
-    summaries.sort((a, b) => b.lastModified - a.lastModified)
+    // A working chat writes to its transcript all the time, so it's placed by when it started working instead: it moves
+    // up once when its turn starts and once when it ends, rather than with every line. The runner's clock might be ahead.
+    const position = (s: SessionSummary) => (s.runningSince ? Math.min(s.runningSince, Date.now()) : s.lastModified)
+    summaries.sort((a, b) => position(b) - position(a))
     // Sent with the list so a chat's panels are known before it's opened, not looked up after.
     // A chat with no machine on record is the hub's, as the browser takes it to be.
     const roots = await Promise.all(summaries.map((s) => s.cwd && this.workspaceRoot(s.machine ?? LOCAL_MACHINE, s.cwd)))
