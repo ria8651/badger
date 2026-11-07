@@ -7,6 +7,11 @@ import {
   CHAT,
   LEADER,
   activeOf,
+  btwView,
+  diffView,
+  planView,
+  openView,
+  viewShown,
   focusRequest,
   groupOf,
   groupsOf,
@@ -88,6 +93,8 @@ export interface ChatPanes {
   render: (toolUseId: string, onReady: (focus: () => void) => void) => JSX.Element
   /** A plan is waiting on the user. */
   planWaiting: () => boolean
+  /** It has a plan to show, waiting or past. */
+  hasPlan: () => boolean
   renderPlan: (onReady: (focus: () => void) => void) => JSX.Element
   /** Something sent with a prompt, if it's still there. */
   attachment: (v: AttachmentView) => ContextChip | undefined
@@ -95,7 +102,8 @@ export interface ChatPanes {
   /** Its side chats: whether one is working, and the panel showing them. */
   btwLive: () => boolean
   renderBtw: (onReady: (focus: () => void) => void) => JSX.Element
-  /** The diff of its checkout. */
+  /** The diff of its checkout, if it has one to show. */
+  hasDiff: () => boolean
   renderDiff: (onReady: (focus: () => void) => void) => JSX.Element
   /** A file on its machine, all of it or its diff, as its tab says now. */
   renderFile: (v: () => FileView, onReady: (focus: () => void) => void) => JSX.Element
@@ -109,6 +117,9 @@ const BINDINGS: [string, string][] = [
   ['W', 'Close tab'],
   ['0', 'Back to the chat'],
   ['P', 'Show or hide panels'],
+  ['D', 'Changes'],
+  ['L', 'Plan'],
+  ['B', 'Side chats'],
 ]
 
 /**
@@ -430,7 +441,19 @@ export function Workspace(props: {
       case 'p':
         if (panelsShown(props.ws!, props.sessionId)) return hide()
         return props.cwd && void togglePanels(props.ws!, props.sessionId, props.cwd).catch(terminalFailed)
+      case 'd':
+        return props.panes.hasDiff() && togglePane(diffView(props.sessionId))
+      case 'l':
+        return props.panes.hasPlan() && togglePane(planView(props.sessionId))
+      case 'b':
+        return togglePane(btwView(props.sessionId))
     }
+  }
+  /** Shows one of the chat's own panels, or closes it if it's already showing. */
+  const togglePane = (view: View) => {
+    const key = viewKey(view)
+    if (viewShown(props.ws!, props.sessionId, key)) close(key)
+    else openView(props.ws!, view)
   }
   const cancelLeader = () => setLeader(false)
   addEventListener('keydown', onKey, true)

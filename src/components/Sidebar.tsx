@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, type Component, type JSX } from 'solid-js'
+import { For, Show, createMemo, createSignal, onCleanup, type Component, type JSX } from 'solid-js'
 import { Dynamic } from 'solid-js/web'
 import { Archive, ArchiveRestore, Bell, BellOff, Bot, ChevronDown, ChevronRight, Columns3, FolderInput, MessagesSquare, Pencil, Plus, Radar as RadarIcon, Search, Settings as SettingsIcon, Trash2, X } from '../icons'
 import type { Card, NestedChat, SessionSummary } from '../../shared/protocol.ts'
@@ -6,7 +6,7 @@ import { api } from '../api.ts'
 import { attention, needsYou, notifications, toggleNotifications } from '../attention.ts'
 import { basename, folderLabel } from '../folders.ts'
 import { focus, focusId, inFocus, setFocusId, unfiled } from '../focus.ts'
-import { openView, viewKey, viewShown } from '../layout.ts'
+import { mac, openView, viewKey, viewShown } from '../layout.ts'
 import { LOCAL, onMachine } from '../machines.ts'
 import { navigate, route } from '../router.tsx'
 import { cardOf, cards, cardsLoaded, projectOfChat, projects } from '../stores/cards.ts'
@@ -19,7 +19,7 @@ import { confirmBy, showError } from './Popover.tsx'
 import { RenameChat } from './RenameChat.tsx'
 import { StatusDot } from './Terminals.tsx'
 import { AccountLimits } from './Usage.tsx'
-import { GhostButton, LiveDot, Menu, ghostClass, inputClass } from './ui.tsx'
+import { GhostButton, LiveDot, Menu, ghostClass, inputClass, modalOpen } from './ui.tsx'
 
 /**
  * What's in the sidebar: the project switcher and pages, terminals, and the chats in focus, or every chat that
@@ -63,6 +63,41 @@ export function Sidebar(props: {
     })
     return [...matches.filter((s) => !s.archived), ...matches.filter((s) => s.archived)]
   })
+
+  // ── Keyboard: Alt+↑/↓ steps through the chats listed, and with Shift, through the ones that need you ──
+
+  /** The chats as listed, top to bottom, leaving out the nested ones under them. */
+  const listed = () => found() ?? [...active(), ...(showArchived() ? archived() : archived().filter((s) => s.id === currentRow()))]
+  const step = (by: 1 | -1) => {
+    const list = listed()
+    const i = list.findIndex((s) => s.id === currentRow())
+    // From a page that isn't one of them, down starts at the top and up at the bottom.
+    const next = list[i < 0 ? (by > 0 ? 0 : list.length - 1) : i + by]
+    if (next) navigate({ kind: 'chat', id: next.id })
+  }
+  /** On to the next chat along that needs you, in any project, wrapping round. */
+  const nextNeedingYou = (by: 1 | -1) => {
+    const list = sessions().filter((s) => !s.archived)
+    const n = list.length
+    const i = list.findIndex((s) => s.id === currentRow())
+    const from = i >= 0 ? i : by > 0 ? -1 : n
+    for (let k = 1; k <= n; k++) {
+      const s = list[(((from + by * k) % n) + n) % n]
+      if (attention()[s.id] && s.id !== currentRow()) return navigate({ kind: 'chat', id: s.id })
+    }
+  }
+  const onKey = (e: KeyboardEvent) => {
+    if ((e.key !== 'ArrowUp' && e.key !== 'ArrowDown') || !e.altKey || e.metaKey || e.ctrlKey || modalOpen()) return
+    const by = e.key === 'ArrowDown' ? 1 : -1
+    if (!keysFree(e.target, by)) return
+    // Caught on the way down, so the composer doesn't move its cursor too.
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.shiftKey) nextNeedingYou(by)
+    else step(by)
+  }
+  addEventListener('keydown', onKey, true)
+  onCleanup(() => removeEventListener('keydown', onKey, true))
 
   /** The chat whose project picker or rename box is open, so its row keeps its buttons showing. */
   const [filing, setFiling] = createSignal<string>()
@@ -264,6 +299,29 @@ export function Sidebar(props: {
       <Show when={accountUsage()}>{(u) => <AccountLimits usage={u()} />}</Show>
     </>
   )
+}
+
+/**
+ * Whether Alt+↑/↓ is free for going between chats where it was pressed. A terminal has its own use for it. On a
+ * Mac it moves through text, so in a box with text in it, it's only free once there's nowhere further to go.
+ */
+function keysFree(target: EventTarget | null, by: 1 | -1): boolean {
+  if (!(target instanceof Element)) return true
+  if (target.closest('.xterm')) return false
+  if (!mac) return true
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+    return by < 0 ? target.selectionEnd === 0 : target.selectionStart === target.value.length
+  }
+  const editable = target.closest<HTMLElement>('[contenteditable="true"]')
+  const sel = getSelection()
+  if (!editable || !sel?.rangeCount) return true
+  // What's between the cursor and that end of the box.
+  const caret = sel.getRangeAt(0)
+  const rest = document.createRange()
+  rest.selectNodeContents(editable)
+  if (by < 0) rest.setEnd(caret.startContainer, caret.startOffset)
+  else rest.setStart(caret.endContainer, caret.endOffset)
+  return !rest.toString().trim()
 }
 
 /** A chat in the sidebar's list, with buttons to file, rename and archive it on hover. */
