@@ -281,6 +281,8 @@ export function Disclosure(props: {
   live?: boolean
   /** Whether a row with this id is folded inside, so revealing it opens this too. */
   holds?: (id: string) => boolean
+  /** The user opened or folded it. */
+  onToggle?: (open: boolean) => void
   children: JSX.Element
 }) {
   // Derived rather than synced by an effect: once the user picks, nothing else
@@ -293,6 +295,7 @@ export function Disclosure(props: {
     const next = !open()
     setPicked(next)
     if (props.id !== undefined) picks.set(props.id, next)
+    props.onToggle?.(next)
   }
   createEffect(
     on(

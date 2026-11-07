@@ -280,7 +280,7 @@ export function buildView(messages: WireMessage[], nested: boolean) {
   }
   // A refused reply is withdrawn when another model answers instead.
   const retracted = new Set(messages.flatMap((m) => (m.subtype === 'model_refusal_fallback' && Array.isArray(m.retracted_message_uuids) ? m.retracted_message_uuids : [])))
-  const updates = nested ? new Set<Item>() : updatesAsThinking(messages)
+  const updates = updatesAsThinking(messages)
   let items = messages
     .filter((m) => !retracted.has(m.uuid) && !(nested && isNoise(m, messages)))
     .flatMap(itemsFor)
