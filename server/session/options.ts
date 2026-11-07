@@ -56,6 +56,9 @@ export function sdkOptions(o: {
     perTaskStopAffordance: true,
     systemPrompt: { type: 'preset', preset: 'claude_code' },
     settingSources: ['user', 'project', 'local'],
+    // New worktrees branch from the checkout's HEAD, not origin's: chats merge back into the local branch,
+    // which is often ahead of what's pushed.
+    settings: { worktree: { baseRef: 'head' } },
     canUseTool: o.canUseTool,
     mcpServers: o.mcpServers,
     // Newer models omit thinking text by default; ask for summaries so it can stream.
