@@ -63,6 +63,9 @@ function broadcast(event: HostEvent): void {
 
 const list = () => [...terms.values()].map((t) => t.info)
 
+/** A title as long as a runner may send one (runnerProtocol's terminalInfo): a long command, or a program's, is cut. */
+const titled = (title: string) => title.slice(0, 1000)
+
 // Programs can retitle many times a second; tell servers at most every 100ms.
 let changeTimer: NodeJS.Timeout | null = null
 function changed(): void {
@@ -83,7 +86,7 @@ function create(spec: CreateSpec): TerminalInfo {
   const t: Term = {
     info: {
       id: randomBytes(4).toString('hex'),
-      title: spec.command ?? basename(SHELL),
+      title: titled(spec.command ?? basename(SHELL)),
       name: defaultName(root, spec.command, spec.name),
       cwd: spec.cwd,
       root,
@@ -104,8 +107,8 @@ function create(spec: CreateSpec): TerminalInfo {
   // always here, unlike a browser, so shells that wait on a reply at startup (fish) don't stall; viewers stay quiet.
   screen.onData((reply) => t.pty?.write(reply))
   screen.onTitleChange((title) => {
-    if (title.trim() && title !== t.info.title) {
-      t.info.title = title.trim()
+    if (title.trim() && titled(title.trim()) !== t.info.title) {
+      t.info.title = titled(title.trim())
       changed()
     }
   })

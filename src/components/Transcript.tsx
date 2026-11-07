@@ -144,7 +144,7 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
       case 'text':
         return (
           <div class="my-4">
-            <Markdown text={item.text} />
+            <Markdown text={item.text} runnable />
           </div>
         )
       case 'thinking':

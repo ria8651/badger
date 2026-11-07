@@ -930,7 +930,7 @@ export function ReviewPage(props: {
                 {(g) => (
                   <Show when={g().summary}>
                     <div class="mt-4 px-1 text-fg-2">
-                      <Markdown text={g().summary} />
+                      <Markdown text={g().summary} runnable />
                     </div>
                   </Show>
                 )}
@@ -1062,7 +1062,7 @@ export function ReviewPage(props: {
                               <p class="text-fg-3">New or changed since Claude last wrote the guide, so it doesn’t explain these yet.</p>
                             </Show>
                             <Show when={s.explanation}>
-                              <Markdown text={s.explanation!} />
+                              <Markdown text={s.explanation!} runnable />
                             </Show>
                           </aside>
                         </Show>
