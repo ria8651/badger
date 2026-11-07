@@ -415,18 +415,28 @@ export function moveShown(tree: Node, session: string, key: string, drop: Drop):
 }
 
 /**
- * Where a view goes when it isn't anywhere yet: with others of its kind, any chat's; else `into`, if it's
- * there; else a new group beside the chat.
+ * Where a view goes when it isn't anywhere yet: with others of its kind, any chat's, in `into` if they're
+ * there, else where its chat sees them; else `into`, if it's there; else a new group beside the chat.
  */
-function place(tree: Node, view: View, into: string | undefined, edge: Edge): { tree: Node; group: string } {
+function place(tree: Node, session: string, view: View, into: string | undefined, edge: Edge): { tree: Node; group: string } {
   const groups = groupsOf(tree)
-  const to = (groups.find((g) => g.views.some((v) => v.kind === view.kind)) ?? groups.find((g) => g.id === into))?.id
+  const shown = new Set(groupsOf(shownTree(tree, session)).map((g) => g.id))
+  const kin = groups.filter((g) => g.views.some((v) => v.kind === view.kind))
+  const to = (kin.find((g) => g.id === into) ?? kin.find((g) => shown.has(g.id)) ?? kin[0] ?? groups.find((g) => g.id === into))?.id
   if (to) return { tree: addToGroup(tree, to, view), group: to }
   return splitWith(tree, 'chat', edge, [view])
 }
 
-/** The group last worked in, else the first: one holding only other chats' views, or none, will do for a new view. */
-const focused = (l: Layout, tree = l.tree) => (groupsOf(tree).find((g) => g.id === l.focus) ?? groupsOf(tree)[0])?.id
+/**
+ * The group a chat's new view goes to if none of its kind are open: the one last worked in, if the chat sees it,
+ * else one it does. Failing those, one holding only other chats' views, or the one kept with every panel closed.
+ */
+function focused(l: Layout, tree: Node, session: string): string | undefined {
+  const groups = groupsOf(tree)
+  const shown = new Set(groupsOf(shownTree(tree, session)).map((g) => g.id))
+  const focus = groups.find((g) => g.id === l.focus)
+  return (focus && shown.has(focus.id) ? focus : (groups.find((g) => shown.has(g.id)) ?? focus ?? groups[0]))?.id
+}
 
 // ── State, per workspace: a root on a machine ──
 
@@ -449,7 +459,10 @@ function load(storage: Storage): Record<string, Layout> | undefined {
     // Saved before there were other machines, terminals were their bare ids; those are all the hub's own.
     for (const root in all) all[root] = { ...all[root], tree: mapGroups(all[root].tree, withMachine) }
     // Saved when every closed panel was kept, out of sight: now only one is, with nothing else open.
-    for (const root in all) all[root] = { ...all[root], tree: normalize(all[root].tree, all[root].focus) }
+    for (const root in all) {
+      const tree = normalize(all[root].tree, all[root].focus)
+      all[root] = { ...all[root], tree, focus: groupsOf(tree).some((g) => g.id === all[root].focus) ? all[root].focus : undefined }
+    }
     return all
   } catch {
     return undefined
@@ -483,8 +496,10 @@ function fresh(): Layout {
 
 export function updateLayout(ws: Ws, change: (l: Layout) => Layout): void {
   const before = layouts()[wsKey(ws)] ?? fresh()
-  const after = change(before)
+  let after = change(before)
   if (after === before) return
+  // Its group may have closed, or gone with a chat not opened for a while.
+  if (after.focus && !groupsOf(after.tree).some((g) => g.id === after.focus)) after = { ...after, focus: undefined }
   const next = { ...layouts(), [wsKey(ws)]: after }
   setLayouts(next)
   clearTimeout(saveTimer)
@@ -526,10 +541,10 @@ export function placeTerminals(ws: Ws, ids: string[]): void {
     const placed = new Set(viewsOf(tree).map(viewKey))
     const missing = ids.filter((id) => !placed.has(`terminal:${id}`)).map((id): View => ({ kind: 'terminal', id }))
     for (const v of missing) {
-      const shown = groupsOf(shownTree(tree, ''))
-      const placed = place(tree, v, focused(l, tree), 'bottom')
-      // Not brought to the front of tabs already showing: it wasn't asked for here.
-      tree = shown.some((g) => g.id === placed.group) ? addToGroup(tree, placed.group, v, false) : placed.tree
+      const placed = place(tree, '', v, focused(l, tree, ''), 'bottom')
+      // Not brought to the front of tabs already there, any chat's: it wasn't asked for here.
+      const open = groupsOf(tree).some((g) => g.id === placed.group && g.views.length)
+      tree = open ? addToGroup(tree, placed.group, v, false) : placed.tree
     }
     if (tree === l.tree) return l
     return { ...l, tree, hidden: l.hidden || !viewsOf(tree).length }
@@ -554,7 +569,7 @@ export async function openTerminal(ws: Ws, session: string, cwd: string, where?:
         ? splitWith(tree, where.beside, where.edge, [view])
         : where && groups.some((g) => g.id === where.group)
           ? { tree: addToGroup(tree, where.group, view), group: where.group }
-          : place(tree, view, focused(l, tree), 'bottom')
+          : place(tree, session, view, focused(l, tree, session), 'bottom')
     return { ...l, tree: placed.tree, focus: placed.group, hidden: false }
   })
   setFocusRequest(viewKey(view))
@@ -569,7 +584,8 @@ export function openView(ws: Ws, view: View): void {
   updateLayout(ws, (l) => {
     const at = groupOf(l.tree, key)
     if (at) return { ...l, tree: setActive(l.tree, key), focus: at.id, hidden: false }
-    const placed = place(l.tree, view, focused(l), 'right')
+    const session = sessionOf(view) ?? ''
+    const placed = place(l.tree, session, view, focused(l, l.tree, session), 'right')
     return { ...l, tree: placed.tree, focus: placed.group, hidden: false }
   })
   setFocusRequest(key)
@@ -618,7 +634,7 @@ export function openPreview(ws: Ws, port: number, opts: { name?: string; path?: 
     const view: View = { kind: 'preview', id, name: opts.name, path: opts.path }
     // Into the panel kept with every one closed, if that's all there is. Focus stays where it was.
     const into = groupsOf(l.tree).find((g) => !g.views.length)
-    return { ...l, tree: place(l.tree, view, into?.id, 'right').tree, hidden: false }
+    return { ...l, tree: place(l.tree, '', view, into?.id, 'right').tree, hidden: false }
   })
 }
 
