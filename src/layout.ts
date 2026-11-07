@@ -96,7 +96,7 @@ wideQuery.addEventListener('change', (e) => setWide(e.matches))
 /** Wide enough to tile panels; narrower, they share one group under the chat. */
 export { wide }
 
-const mac = /Mac|iPhone|iPad/.test(navigator.userAgent)
+export const mac = /Mac|iPhone|iPad/.test(navigator.userAgent)
 /** The key held to open a link where a plain click edits: Cmd on a Mac, Ctrl elsewhere. */
 export const MOD = mac ? '⌘' : 'Ctrl'
 /** The chord every layout shortcut starts with: Cmd+K on a Mac, Ctrl+K elsewhere. */

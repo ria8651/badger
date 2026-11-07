@@ -1,15 +1,16 @@
-import { For, Show, createMemo, createSignal, type Component, type JSX } from 'solid-js'
+import { For, Show, createMemo, createSignal, onCleanup, type Component, type JSX } from 'solid-js'
 import { Dynamic } from 'solid-js/web'
 import { Archive, ArchiveRestore, Bell, BellOff, Bot, ChevronDown, ChevronRight, Columns3, FolderInput, MessagesSquare, Pencil, Plus, Radar as RadarIcon, Search, Settings as SettingsIcon, Trash2, X } from '../icons'
 import type { Card, NestedChat, SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { attention, needsYou, notifications, toggleNotifications } from '../attention.ts'
-import { basename, folderLabel } from '../folders.ts'
+import { searchChats } from '../chatSearch.ts'
+import { basename } from '../folders.ts'
 import { focus, focusId, inFocus, setFocusId, unfiled } from '../focus.ts'
-import { openView, viewKey, viewShown } from '../layout.ts'
+import { mac, openView, viewKey, viewShown } from '../layout.ts'
 import { LOCAL, onMachine } from '../machines.ts'
 import { navigate, route } from '../router.tsx'
-import { cardOf, cards, cardsLoaded, projectOfChat, projects } from '../stores/cards.ts'
+import { cardOf, cards, cardsLoaded, projects } from '../stores/cards.ts'
 import { discardDraft, parentOf, sessions, sessionsLoaded, toggleArchived } from '../stores/sessions.ts'
 import { terminalLabel, terminalTooltip, terminalWs, terminals, wsKey } from '../terminals.ts'
 import { accountUsage } from '../usage.ts'
@@ -19,7 +20,7 @@ import { confirmBy, showError } from './Popover.tsx'
 import { RenameChat } from './RenameChat.tsx'
 import { StatusDot } from './Terminals.tsx'
 import { AccountLimits } from './Usage.tsx'
-import { GhostButton, LiveDot, Menu, ghostClass, inputClass } from './ui.tsx'
+import { GhostButton, LiveDot, Menu, ghostClass, inputClass, modalOpen } from './ui.tsx'
 
 /**
  * What's in the sidebar: the project switcher and pages, terminals, and the chats in focus, or every chat that
@@ -47,22 +48,60 @@ export function Sidebar(props: {
   const active = createMemo(() => sessions().filter((s) => !s.archived && shown(s)))
   const archived = createMemo(() => sessions().filter((s) => s.archived && shown(s)))
   const [showArchived, setShowArchived] = createSignal(false)
-  /**
-   * What the search box has in it. Searching looks through every chat, archived ones and other projects'
-   * too, since a chat you can't find is usually one that isn't in front of you: every word has to be in its title,
-   * folder, card or project. Archived ones come after the rest.
-   */
+  /** What the search box has in it, and the chats that match it: see searchChats. */
   const [query, setQuery] = createSignal('')
-  const found = createMemo(() => {
-    const words = query().toLowerCase().split(/\s+/).filter(Boolean)
-    if (!words.length) return
-    const matches = sessions().filter((s) => {
-      const card = cardOf(s.id)
-      const text = [s.title, s.cwd && folderLabel(s.cwd), card && `#${card.id} ${card.title}`, projectOfChat(s.id)?.title].join(' ').toLowerCase()
-      return words.every((w) => text.includes(w))
-    })
-    return [...matches.filter((s) => !s.archived), ...matches.filter((s) => s.archived)]
-  })
+  const found = createMemo(() => searchChats(query()))
+  const openBoard = () => navigate(focus() ? { kind: 'card', id: focus()!.id } : { kind: 'board' })
+
+  // ── Keyboard: Alt+↑/↓ steps through what's listed, and with Shift, through the chats that need you ──
+
+  /** The chats as listed, top to bottom, leaving out the nested ones under them. */
+  const listed = () => found() ?? [...active(), ...(showArchived() ? archived() : archived().filter((s) => s.id === currentRow()))]
+  /**
+   * A new chat is on screen: home's, or in a project, one on its card. That one has a page of its own, but isn't
+   * listed until something's typed in it.
+   */
+  const newChatShown = () => route().kind === 'home' || (route().kind === 'chat' && sessionsLoaded() && !sessions().some((s) => s.id === props.current))
+  /** Everything listed to go to, top to bottom: the pages, the terminals, then the chats. */
+  const stops = (): { here: boolean; go: () => void }[] => {
+    const r = route().kind
+    return [
+      { here: r === 'radar', go: () => navigate({ kind: 'radar' }) },
+      { here: r === 'board' || r === 'card', go: openBoard },
+      { here: newChatShown(), go: props.onNewChat },
+      ...sortedTerminals().map((t) => ({ here: t.id === currentTerminal(), go: () => navigate({ kind: 'terminal', id: t.id }) })),
+      ...listed().map((s) => ({ here: s.id === currentRow(), go: () => navigate({ kind: 'chat', id: s.id }) })),
+    ]
+  }
+  const step = (by: 1 | -1) => {
+    const list = stops()
+    const i = list.findIndex((s) => s.here)
+    // From somewhere not listed, down starts at the top and up at the bottom.
+    list[i < 0 ? (by > 0 ? 0 : list.length - 1) : i + by]?.go()
+  }
+  /** On to the next chat along that needs you, in any project, wrapping round. Side chats are their chat's, so not. */
+  const nextNeedingYou = (by: 1 | -1) => {
+    const list = sessions().filter((s) => !s.archived && !s.sideOf)
+    const n = list.length
+    const i = list.findIndex((s) => s.id === currentRow())
+    const from = i >= 0 ? i : by > 0 ? -1 : n
+    for (let k = 1; k <= n; k++) {
+      const s = list[(((from + by * k) % n) + n) % n]
+      if (attention()[s.id] && s.id !== currentRow()) return navigate({ kind: 'chat', id: s.id })
+    }
+  }
+  const onKey = (e: KeyboardEvent) => {
+    if ((e.key !== 'ArrowUp' && e.key !== 'ArrowDown') || !e.altKey || e.metaKey || e.ctrlKey || modalOpen()) return
+    const by = e.key === 'ArrowDown' ? 1 : -1
+    if (!keysFree(e.target, by)) return
+    // Caught on the way down, so the composer doesn't move its cursor too.
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.shiftKey) nextNeedingYou(by)
+    else step(by)
+  }
+  addEventListener('keydown', onKey, true)
+  onCleanup(() => removeEventListener('keydown', onKey, true))
 
   /** The chat whose project picker or rename box is open, so its row keeps its buttons showing. */
   const [filing, setFiling] = createSignal<string>()
@@ -149,13 +188,13 @@ export function Sidebar(props: {
         </NavItem>
         <NavItem
           icon={Columns3}
-          onClick={() => navigate(focus() ? { kind: 'card', id: focus()!.id } : { kind: 'board' })}
+          onClick={openBoard}
           active={route().kind === 'board' || route().kind === 'card'}
           class="mb-px"
         >
           {focus() ? 'Board' : 'Projects'}
         </NavItem>
-        <NavItem icon={Plus} onClick={props.onNewChat} active={route().kind === 'home'} title={focus() ? `A chat on ${focus()!.title}` : undefined}>
+        <NavItem icon={Plus} onClick={props.onNewChat} active={newChatShown()} title={focus() ? `A chat on ${focus()!.title}` : undefined}>
           New chat
         </NavItem>
       </div>
@@ -264,6 +303,30 @@ export function Sidebar(props: {
       <Show when={accountUsage()}>{(u) => <AccountLimits usage={u()} />}</Show>
     </>
   )
+}
+
+/**
+ * Whether Alt+↑/↓ is free for going between chats where it was pressed. A terminal has its own use for it, and a
+ * dropdown opens with it off a Mac. On a Mac it moves through text, so in a box with text in it, it's only free
+ * once there's nowhere further to go. A box without a cursor, like a checkbox, leaves it free.
+ */
+function keysFree(target: EventTarget | null, by: 1 | -1): boolean {
+  if (!(target instanceof Element)) return true
+  if (target.closest('.xterm') || target instanceof HTMLSelectElement) return false
+  if (!mac) return true
+  if ((target instanceof HTMLInputElement && target.selectionStart !== null) || target instanceof HTMLTextAreaElement) {
+    return by < 0 ? target.selectionEnd === 0 : target.selectionStart === target.value.length
+  }
+  const editable = target.closest<HTMLElement>('[contenteditable="true"]')
+  const sel = getSelection()
+  if (!editable || !sel?.rangeCount) return true
+  // What's between the cursor and that end of the box.
+  const caret = sel.getRangeAt(0)
+  const rest = document.createRange()
+  rest.selectNodeContents(editable)
+  if (by < 0) rest.setEnd(caret.startContainer, caret.startOffset)
+  else rest.setStart(caret.endContainer, caret.endOffset)
+  return !rest.toString().trim()
 }
 
 /** A chat in the sidebar's list, with buttons to file, rename and archive it on hover. */
