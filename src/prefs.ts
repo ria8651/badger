@@ -19,7 +19,7 @@ const WRAP_KEY = 'badger.fileWrap'
 const [wrap, setWrapSignal] = createSignal(localStorage.getItem(WRAP_KEY) === '1')
 export { wrap }
 
-/** Whether files wrap their long lines: one setting for every file, left as it was last used in this browser. */
+/** Whether files and Claude's code blocks wrap their long lines: one setting for all of them, left as it was last used in this browser. */
 export function toggleWrap(): void {
   setWrapSignal(!wrap())
   localStorage.setItem(WRAP_KEY, wrap() ? '1' : '0')
