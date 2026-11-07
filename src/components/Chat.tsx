@@ -170,11 +170,23 @@ export function Chat(props: {
 
   /**
    * Opens a file beside the chat. Embedded, e.g. a side chat in its parent's panel, it has no panel of its own: its
-   * files open where its parent's do, or, with no parent opening them, its paths aren't links.
+   * files open where its parent's do, or, with no parent opening them, its paths aren't links. Its commands run
+   * where its parent's do too, so only while it's in the same folder: the parent's would be the wrong place.
    */
   const outer = useOpenFile()
+  const run = (command: string) => {
+    const w = beside()
+    const dir = cwd()
+    if (w && dir) void openTerminal(w, props.sessionId, dir, undefined, command).catch((e: Error) => showError("Couldn't open a terminal", e.message))
+  }
   const files = props.embedded
-    ? outer
+    ? outer && {
+        cwd: outer.cwd,
+        open: outer.open,
+        get run() {
+          return cwd() === outer.cwd() ? outer.run : undefined
+        },
+      }
     : {
         cwd: () => cwd(),
         open: (path: string, line?: number) => {
@@ -183,10 +195,9 @@ export function Chat(props: {
           // Opening it is asking for the file, so a tab showing its diff switches back.
           void expandHome(path, machine()).then((path) => openFile(w, { kind: 'file', session: props.sessionId, path, line, mode: openingMode(path, line) }))
         },
-        run: (command: string) => {
-          const w = beside()
-          const dir = cwd()
-          if (w && dir) void openTerminal(w, props.sessionId, dir, undefined, command).catch((e: Error) => showError("Couldn't open a terminal", e.message))
+        // Read where it's used, so a chat with nowhere to run one yet gets no Run buttons until it has.
+        get run() {
+          return beside() && cwd() ? run : undefined
         },
       }
 

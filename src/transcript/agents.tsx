@@ -186,7 +186,7 @@ export function AgentConversation(props: { agent: Agent; bashOutput: Record<stri
       <Show when={a.report()}>
         {(r) => (
           <div class="my-4">
-            <Markdown text={r()} />
+            <Markdown text={r()} runnable />
           </div>
         )}
       </Show>

@@ -1,4 +1,4 @@
-import { marked } from 'marked'
+import { Marked, Renderer } from 'marked'
 import DOMPurify from 'dompurify'
 import { createEffect, onCleanup, untrack } from 'solid-js'
 import { diagramWhenSeen } from '../diagram.ts'
@@ -16,7 +16,26 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   }
 })
 
-const render = (text: string) => DOMPurify.sanitize(marked.parse(text, { gfm: true, async: false }))
+/**
+ * What this render's fences are tagged with, a new one each time. Only they get a Run button: a `<pre><code>`
+ * written as HTML in the text can't guess it, and could hide some of what it'd run with CSS.
+ */
+let fence = ''
+const plain = new Renderer()
+const md = new Marked({
+  gfm: true,
+  renderer: {
+    code(token) {
+      return plain.code(token).replace('<code', `<code data-fence="${fence}"`)
+    },
+  },
+})
+
+/** The text as HTML, and what its own fences are tagged with. */
+function render(text: string): { html: string; fence: string } {
+  fence = Math.random().toString(36).slice(2)
+  return { html: DOMPurify.sanitize(md.parse(text, { async: false })), fence }
+}
 
 /** Whether the text ends inside a code fence still being written. */
 const openFence = (text: string) => (text.match(/^ {0,3}(```|~~~)/gm)?.length ?? 0) % 2 === 1
@@ -60,10 +79,10 @@ function keepInPlace(el: HTMLElement, change: () => void) {
  * Highlights the fenced code in rendered markdown, after DOMPurify: Shiki's
  * output is trusted, since it escapes the code itself. A fence that's still
  * streaming stays plain until it closes. Each block gets a copy button and a
- * wrap toggle, a shell one a button to run it too once it's closed, given `run`,
- * and a mermaid one is drawn as its diagram (src/diagram.ts sanitizes that itself).
+ * wrap toggle, a shell fence a button to run it too, given `run`, and a mermaid
+ * one is drawn as its diagram (src/diagram.ts sanitizes that itself).
  */
-function decorate(root: HTMLElement, text: string, run?: (command: string) => void): () => void {
+function decorate(root: HTMLElement, text: string, fence: string, run?: (command: string) => void): () => void {
   const blocks = [...root.querySelectorAll<HTMLElement>('pre > code')]
   const open = openFence(text)
   const stops = blocks.map((code, i) => {
@@ -96,14 +115,15 @@ function decorate(root: HTMLElement, text: string, run?: (command: string) => vo
     pre.replaceWith(block)
     block.append(head, pre)
     if (open && i === blocks.length - 1) return () => {}
-    const command = run && lang && SHELLS.has(lang) ? commands(source, lang) : ''
+    // Left of the others, so a hand going for Copy where it's always been doesn't run it.
+    const command = run && code.dataset.fence === fence && lang && SHELLS.has(lang) ? commands(source, lang) : ''
     if (command) {
       const go = document.createElement('button')
       go.textContent = 'Run'
       go.type = 'button'
       go.title = 'Run in a terminal beside the chat'
       go.onclick = () => run!(command)
-      head.append(go)
+      head.insertBefore(go, wrapping)
     }
     const highlight = () => highlightWhenSeen(code, source.replace(/\n$/, ''), lang)
     if (lang !== 'mermaid') return highlight()
@@ -116,6 +136,11 @@ export function Markdown(props: {
   text: string
   /** Where an image it links to is fetched from, e.g. one beside the file it's in; undefined leaves it as written. */
   image?: (src: string) => string | undefined
+  /**
+   * Its shell blocks get a Run button, where the chat can run them: for what Claude wrote for the user, once it's
+   * all there. Not for what's written for Claude to read, e.g. skills and instructions, whose commands are its to run.
+   */
+  runnable?: boolean
 }) {
   let el!: HTMLDivElement
   const files = useOpenFile()
@@ -139,7 +164,8 @@ export function Markdown(props: {
   createEffect(() => {
     // A diagram is drawn again in the new colours when the theme changes.
     if (hasDiagram(props.text)) appliedPalette()
-    el.innerHTML = render(props.text)
+    const { html, fence } = render(props.text)
+    el.innerHTML = html
     const image = props.image
     if (image)
       for (const img of el.querySelectorAll('img')) {
@@ -147,7 +173,7 @@ export function Markdown(props: {
         const url = src && image(src)
         if (url) img.src = url
       }
-    onCleanup(decorate(el, props.text, files?.run))
+    onCleanup(decorate(el, props.text, fence, props.runnable ? files?.run : undefined))
   })
   createEffect(() => {
     const on = wrap()
