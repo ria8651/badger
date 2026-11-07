@@ -9,9 +9,6 @@ import {
   activeOf,
   btwView,
   diffView,
-  planView,
-  openView,
-  viewShown,
   focusRequest,
   groupOf,
   groupsOf,
@@ -20,8 +17,10 @@ import {
   moveShown,
   openPreview,
   openTerminal,
+  openView,
   openedIn,
   panelsShown,
+  planView,
   placeTerminals,
   movePreview,
   reloadPreview,
@@ -33,6 +32,7 @@ import {
   togglePanels,
   updateLayout,
   viewKey,
+  viewShown,
   viewsOf,
   wide,
   part,
@@ -108,7 +108,6 @@ export interface ChatPanes {
   /** A file on its machine, all of it or its diff, as its tab says now. */
   renderFile: (v: () => FileView, onReady: (focus: () => void) => void) => JSX.Element
 }
-
 
 /**
  * A chat with its workspace's panels tiled around it. The chat is the anchor:

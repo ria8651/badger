@@ -40,8 +40,11 @@ const onKey = (e: KeyboardEvent) => {
     return
   }
   if (['Shift', 'Meta', 'Control', 'Alt'].includes(e.key)) return
+  // Nothing else, the sidebar's Alt+arrows included, acts on it too.
   e.preventDefault()
-  e.stopPropagation()
+  e.stopImmediatePropagation()
+  // K held a moment too long repeats, which isn't K pressed again; nor is an input method's key a choice.
+  if (e.repeat || e.isComposing || e.key === 'Process') return
   setWaiting(false)
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key
   leaderBindings()

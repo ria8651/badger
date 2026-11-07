@@ -25,6 +25,8 @@ export function Switcher(props: { current: string | null; onClose: () => void })
     return [...rest.filter((s) => attention()[s.id]), ...rest.filter((s) => !attention()[s.id])].slice(0, MAX)
   })
   createEffect(on(query, () => setActive(0)))
+  // Chats can go while it's open, leaving the highlight past the end.
+  createEffect(on(items, (list) => active() >= list.length && setActive(Math.max(0, list.length - 1))))
   createEffect(on(active, (i) => document.getElementById(`${id}-${i}`)?.scrollIntoView({ block: 'nearest' })))
 
   const pick = (i: number) => {

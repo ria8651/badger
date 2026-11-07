@@ -57,13 +57,18 @@ export function Sidebar(props: {
 
   /** The chats as listed, top to bottom, leaving out the nested ones under them. */
   const listed = () => found() ?? [...active(), ...(showArchived() ? archived() : archived().filter((s) => s.id === currentRow()))]
+  /**
+   * A new chat is on screen: home's, or in a project, one on its card. That one has a page of its own, but isn't
+   * listed until something's typed in it.
+   */
+  const newChatShown = () => route().kind === 'home' || (route().kind === 'chat' && sessionsLoaded() && !sessions().some((s) => s.id === props.current))
   /** Everything listed to go to, top to bottom: the pages, the terminals, then the chats. */
   const stops = (): { here: boolean; go: () => void }[] => {
     const r = route().kind
     return [
       { here: r === 'radar', go: () => navigate({ kind: 'radar' }) },
       { here: r === 'board' || r === 'card', go: openBoard },
-      { here: r === 'home', go: props.onNewChat },
+      { here: newChatShown(), go: props.onNewChat },
       ...sortedTerminals().map((t) => ({ here: t.id === currentTerminal(), go: () => navigate({ kind: 'terminal', id: t.id }) })),
       ...listed().map((s) => ({ here: s.id === currentRow(), go: () => navigate({ kind: 'chat', id: s.id }) })),
     ]
@@ -74,9 +79,9 @@ export function Sidebar(props: {
     // From somewhere not listed, down starts at the top and up at the bottom.
     list[i < 0 ? (by > 0 ? 0 : list.length - 1) : i + by]?.go()
   }
-  /** On to the next chat along that needs you, in any project, wrapping round. */
+  /** On to the next chat along that needs you, in any project, wrapping round. Side chats are their chat's, so not. */
   const nextNeedingYou = (by: 1 | -1) => {
-    const list = sessions().filter((s) => !s.archived)
+    const list = sessions().filter((s) => !s.archived && !s.sideOf)
     const n = list.length
     const i = list.findIndex((s) => s.id === currentRow())
     const from = i >= 0 ? i : by > 0 ? -1 : n
@@ -189,7 +194,7 @@ export function Sidebar(props: {
         >
           {focus() ? 'Board' : 'Projects'}
         </NavItem>
-        <NavItem icon={Plus} onClick={props.onNewChat} active={route().kind === 'home'} title={focus() ? `A chat on ${focus()!.title}` : undefined}>
+        <NavItem icon={Plus} onClick={props.onNewChat} active={newChatShown()} title={focus() ? `A chat on ${focus()!.title}` : undefined}>
           New chat
         </NavItem>
       </div>
@@ -301,14 +306,15 @@ export function Sidebar(props: {
 }
 
 /**
- * Whether Alt+↑/↓ is free for going between chats where it was pressed. A terminal has its own use for it. On a
- * Mac it moves through text, so in a box with text in it, it's only free once there's nowhere further to go.
+ * Whether Alt+↑/↓ is free for going between chats where it was pressed. A terminal has its own use for it, and a
+ * dropdown opens with it off a Mac. On a Mac it moves through text, so in a box with text in it, it's only free
+ * once there's nowhere further to go. A box without a cursor, like a checkbox, leaves it free.
  */
 function keysFree(target: EventTarget | null, by: 1 | -1): boolean {
   if (!(target instanceof Element)) return true
-  if (target.closest('.xterm')) return false
+  if (target.closest('.xterm') || target instanceof HTMLSelectElement) return false
   if (!mac) return true
-  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+  if ((target instanceof HTMLInputElement && target.selectionStart !== null) || target instanceof HTMLTextAreaElement) {
     return by < 0 ? target.selectionEnd === 0 : target.selectionStart === target.value.length
   }
   const editable = target.closest<HTMLElement>('[contenteditable="true"]')
