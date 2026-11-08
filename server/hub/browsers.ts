@@ -5,6 +5,7 @@ import type { Attention } from '../attention.ts'
 import { parseClientEvent } from '../clientProtocol.ts'
 import { message } from '../errors.ts'
 import type { Machines } from '../machines.ts'
+import type { SourceMaps } from '../sourceMaps.ts'
 import type { AccountLimits } from '../usage.ts'
 import type { Chats } from './chats.ts'
 import type { HubTerminals } from './terminals.ts'
@@ -18,6 +19,7 @@ export interface BrowserDeps {
   attention: Attention
   account: AccountLimits
   analytics: Analytics
+  sourceMaps: SourceMaps
 }
 
 /**
@@ -79,8 +81,8 @@ export function serveBrowser(ws: WebSocket, d: BrowserDeps): void {
   })
 }
 
-/** What a tab says about itself, for analytics. */
-const INSTANT = new Set(['hello', 'activity', 'ui_event'])
+/** What a tab says about itself and its errors, for analytics. */
+const INSTANT = new Set(['hello', 'activity', 'ui_event', 'client_error'])
 
 async function handle(ws: WebSocket, event: ClientEvent, d: BrowserDeps): Promise<void> {
   const tab = d.viewers.identity(ws)
@@ -119,9 +121,31 @@ async function handle(ws: WebSocket, event: ClientEvent, d: BrowserDeps): Promis
       if (/^https?:\/\/\{port\}\.[a-z0-9.-]+(:\d+)?$/i.test(event.url)) d.viewers.setPreviewUrl(ws, event.url)
       return
     case 'client_error': {
-      const text = (v: string) => v.slice(0, 4000)
-      console.error(`[browser] ${text(event.message)} at ${text(event.url)}${event.stack ? `\n${text(event.stack)}` : ''}`)
-      d.analytics.event('client.error', { ...from, data: { message: text(event.message), url: text(event.url) } })
+      const text = (v: string, max = 4000) => v.slice(0, max)
+      const minified = event.stack && text(event.stack, 16000)
+      const stack = minified && (d.sourceMaps.map(minified) ?? minified)
+      if (event.count === 1) console.error(`[browser] ${text(event.message)} at ${text(event.url)}${stack ? `\n${stack}` : ''}`)
+      // Enough to find it again: the stack in source terms (and as sent, if that differs, for when the maps are
+      // gone), the page's build beside the hub's, and what the tab was showing.
+      d.analytics.event('client.error', {
+        ...from,
+        sessionId: event.sessionId,
+        cardId: event.cardId,
+        data: {
+          message: text(event.message),
+          url: text(event.url),
+          stack,
+          minified: stack !== minified ? minified : undefined,
+          count: event.count,
+          request: event.request,
+          status: event.status,
+          build: event.build,
+          hub: d.analytics.version,
+          route: event.route,
+          views: event.views,
+          pane: event.pane,
+        },
+      })
       return
     }
     default:

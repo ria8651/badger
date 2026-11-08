@@ -1,5 +1,5 @@
 import { createEffect, createRoot, createSignal, on } from 'solid-js'
-import type { ActivityBeat, ClientHello } from '../shared/protocol.ts'
+import type { ActivityBeat, ClientHello, ErrorContext } from '../shared/protocol.ts'
 import { socket } from './api.ts'
 import { route } from './router.tsx'
 
@@ -11,6 +11,7 @@ import { route } from './router.tsx'
  */
 
 declare const __BADGER_BUILD__: string | undefined
+const build = typeof __BADGER_BUILD__ === 'string' ? __BADGER_BUILD__ : undefined
 
 /** How often a visible tab says it's still there. */
 const TICK_MS = 15 * 1000
@@ -53,9 +54,15 @@ function hello(): ClientHello {
       viewport: { width: innerWidth, height: innerHeight },
       touch: matchMedia('(pointer: coarse)').matches,
       standalone: matchMedia('(display-mode: standalone)').matches,
-      build: typeof __BADGER_BUILD__ === 'string' ? __BADGER_BUILD__ : undefined,
+      build,
     },
   }
+}
+
+/** What this tab is showing, and its build, for an error report. */
+export function errorContext(): ErrorContext {
+  const { route, sessionId, cardId, views, pane } = state('error')
+  return { route, sessionId, cardId, views, pane, build }
 }
 
 function state(reason: string): ActivityBeat {

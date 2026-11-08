@@ -18,6 +18,8 @@ function build(): string | undefined {
 export default defineConfig({
   plugins: [solid({ hot: false }), tailwindcss()],
   define: { __BADGER_BUILD__: JSON.stringify(build()) },
+  // Not linked from the bundles; the server reads them to turn the page's error stacks back into source lines.
+  build: { sourcemap: 'hidden' },
   server: {
     // No hot updates or auto-reloads; changes show up when the page is refreshed.
     hmr: false,

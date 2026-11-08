@@ -20,15 +20,19 @@ import type {
   WorktreeStatus,
 } from '../shared/protocol.ts'
 
+/** A failed call says which it was, so an error report left uncaught can tell. */
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const call = `${method} ${path}`
   const res = await fetch(path, {
     method,
     headers: body ? { 'content-type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
+  }).catch((err: unknown) => {
+    throw Object.assign(err instanceof Error ? err : new Error(String(err)), { request: call })
   })
   if (!res.ok) {
     const message = await res.json().then((b) => b.error, () => null)
-    throw Object.assign(new Error(message ?? `${res.status} ${res.statusText}`), { status: res.status })
+    throw Object.assign(new Error(message ?? `${res.status} ${res.statusText}`), { status: res.status, request: call })
   }
   return res.status === 204 ? (undefined as T) : res.json()
 }

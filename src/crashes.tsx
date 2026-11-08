@@ -1,5 +1,6 @@
 import { For, Show, createSignal } from 'solid-js'
 import { TriangleAlert, X } from './icons'
+import { errorContext } from './activity.ts'
 import { socket } from './api.ts'
 import { Button } from './components/ui.tsx'
 
@@ -8,7 +9,7 @@ import { Button } from './components/ui.tsx'
  * during a Solid update stops that update partway, so the page can be left
  * showing things that are no longer true; saying so, and offering a reload,
  * beats quietly being wrong. Each is also logged by the server, so whoever is
- * watching its output sees it too.
+ * watching its output sees it too, and recorded with what the tab was showing.
  */
 
 interface Crash {
@@ -23,21 +24,55 @@ const [crashes, setCrashes] = createSignal<Crash[]>([])
 /** Noise the browser reports as errors that breaks nothing. */
 const BENIGN = [/^ResizeObserver loop/, /^Script error\.?$/]
 
-function record(error: unknown, fallback = 'Unknown error'): void {
+/** A browser extension's script. Safari hides their URLs behind its own scheme. */
+const EXTENSION = /\b(?:[a-z-]+-extension|webkit-masked-url):\/\//
+
+/**
+ * An extension's error, which shares the page's error events but isn't Badger's to fix: one from an extension's
+ * script with none of the page's own in its stack. Extensions that wrap fetch or listeners put their frames on
+ * top of Badger's, so only a stack with no Badger frames at all counts.
+ */
+const fromExtension = (stack: string | undefined, file: string | undefined) => {
+  const where = stack || file || ''
+  return EXTENSION.test(where) && !where.includes(`${location.origin}/`)
+}
+
+/** How many times each error has happened in this page, which dismissing the crashes doesn't reset. */
+const totals = new Map<string, number>()
+
+function record(error: unknown, fallback = 'Unknown error', file?: string): void {
   const err = error instanceof Error ? error : undefined
   // An error event with no error object (ResizeObserver's, for one) has `error: null`, and its text only in the message.
   const message = err ? `${err.name}: ${err.message}` : error == null ? fallback : String(error)
   if (BENIGN.some((re) => re.test(message.replace(/^Error: /, '')))) return
   const stack = err?.stack
+  if (fromExtension(stack, file)) return
   setCrashes((all) => {
     const same = all.find((c) => c.message === message)
-    if (same) return all.map((c) => (c === same ? { ...c, count: c.count + 1 } : c))
-    socket.send({ type: 'client_error', message, stack, url: location.href })
-    return [...all, { message, stack, count: 1 }]
+    return same ? all.map((c) => (c === same ? { ...c, count: c.count + 1 } : c)) : [...all, { message, stack, count: 1 }]
   })
+  // Repeats are sent at 2, 4, 8…, so one thrown on every message is counted without flooding the hub. Counted by
+  // message, so a failed call's request is that of whichever one landed on the count.
+  const count = (totals.get(message) ?? 0) + 1
+  totals.set(message, count)
+  if (count & (count - 1)) return
+  // Read from whatever was thrown: another library's errors may have a `request` that isn't ours.
+  const { request, status } = (err ?? {}) as { request?: unknown; status?: unknown }
+  try {
+    socket.send({
+      type: 'client_error',
+      message,
+      stack,
+      url: location.href,
+      count,
+      request: typeof request === 'string' ? request : undefined,
+      status: typeof status === 'number' ? status : undefined,
+      ...errorContext(),
+    })
+  } catch {}
 }
 
-addEventListener('error', (e) => record(e.error, e.message))
+addEventListener('error', (e) => record(e.error, e.message, e.filename))
 addEventListener('unhandledrejection', (e) => record(e.reason))
 
 export function Crashes() {
