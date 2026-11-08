@@ -256,6 +256,12 @@ const MIGRATIONS = [
   `ALTER TABLE session_drafts ADD COLUMN machine TEXT;
    ALTER TABLE session_drafts ADD COLUMN cwd TEXT;
    ALTER TABLE session_drafts ADD COLUMN worktree INTEGER NOT NULL DEFAULT 0;`,
+  // Where a chat had got to when its last turn ended, for coming back to it; replaced or cleared by its next turn.
+  `CREATE TABLE session_recaps (
+     session_id TEXT PRIMARY KEY,
+     text TEXT NOT NULL,
+     at INTEGER NOT NULL
+   );`,
 ]
 
 /** Who made a change. There are no users yet, so for now it's where the change came from. */

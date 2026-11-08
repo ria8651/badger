@@ -1,5 +1,5 @@
 import { For, Show, createEffect, createMemo, createSignal, on, onMount, untrack, type Accessor, type JSX } from 'solid-js'
-import { FolderX, GitBranch, MonitorOff, Pencil, WifiOff, X } from '../icons'
+import { FolderX, GitBranch, MonitorOff, Pencil, ScrollText, WifiOff, X } from '../icons'
 import { NO_ATTACHMENTS, type DraftAttachments, type PermissionMode, type QueuedMessage, type StartAt } from '../../shared/protocol.ts'
 import { chatActions } from '../actions.ts'
 import { api, connected } from '../api.ts'
@@ -582,6 +582,15 @@ export function Chat(props: {
                     <GitBranch class="size-3.5 shrink-0 animate-pulse" /> Making worktree
                     <Show when={worktreeName()}>{(name) => <span class="min-w-0 truncate font-mono text-xs">{name()}</span>}</Show>
                   </div>
+                </Show>
+                {/* Made when the last turn went unread a while, for coming back to it; it goes once the chat's working again. */}
+                <Show when={!props.host && !working() && session()?.recap}>
+                  {(recap) => (
+                    <div class="mt-4 flex gap-2 text-ui text-fg-3" title="Where this chat had got to, written when you'd been away a while">
+                      <ScrollText class="mt-0.5 size-3.5 shrink-0" />
+                      <span>{recap()}</span>
+                    </div>
+                  )}
                 </Show>
               </Show>
             </Show>

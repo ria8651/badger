@@ -105,6 +105,23 @@ export class ChatMeta {
     return result.changes > 0
   }
 
+  /** Every chat's recap of where its last turn left it, by id. */
+  recaps(): Map<string, string> {
+    const rows = this.db.sql.prepare('SELECT session_id, text FROM session_recaps').all() as { session_id: string; text: string }[]
+    return new Map(rows.map((r) => [r.session_id, r.text]))
+  }
+
+  /** Returns whether anything changed. Null clears it. */
+  setRecap(sessionId: string, text: string | null): boolean {
+    const result =
+      text === null
+        ? this.db.sql.prepare('DELETE FROM session_recaps WHERE session_id = ?').run(sessionId)
+        : this.db.sql
+            .prepare('INSERT INTO session_recaps (session_id, text, at) VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET text = excluded.text, at = excluded.at')
+            .run(sessionId, text, Date.now())
+    return result.changes > 0
+  }
+
   /** The chat that started this one, if it's a child. */
   parentOf(sessionId: string): string | undefined {
     const row = this.db.sql.prepare('SELECT parent_session FROM child_sessions WHERE session_id = ?').get(sessionId) as { parent_session: string } | undefined
