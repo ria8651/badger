@@ -51,6 +51,13 @@ const LIVE_LIST_MS = 15 * 1000
 const QUICK_TIMEOUT_MS = 10 * 1000
 /** How many chats the sidebar lists. */
 const LIST_LIMIT = 200
+/**
+ * How long a chat's ended turn goes unread before it's recapped. Read before then, the user was there for it; much
+ * later, the chat's cached context may have expired, and recapping it would mean paying for the whole conversation again.
+ */
+const RECAP_AFTER_MS = 2 * 60 * 1000
+/** Most recaps made for a chat while it stays unread. */
+const RECAPS_UNREAD = 3
 
 /** Changes made through the REST API and WebSocket, i.e. by someone in the browser. */
 const UI: Actor = { source: 'ui' }
@@ -103,6 +110,8 @@ export class Chats {
   private reviewsStarting = new Map<string, Promise<{ sessionId: string }>>()
   /** Chats whose history grew with no live process, whose viewers get it again. */
   private stale = new Set<string>()
+  /** Chats whose turn ended, waiting to see if it's read before they're recapped. */
+  private recapTimers = new Map<string, NodeJS.Timeout>()
   private readonly soonListChanged: () => void
   private readonly liveListChanged: () => void
   private readonly resendStale: () => void
@@ -138,6 +147,7 @@ export class Chats {
     const listed = await transcripts.list(LIST_LIMIT, childIds)
     const archived = meta.archivedIds()
     const reviews = meta.reviewIds()
+    const recaps = meta.recaps()
     const where = placement.machinesOf(listed.map((s) => s.sessionId))
     const gone = await this.goneFolders(listed.flatMap((s) => (s.cwd && !machines.live(s.sessionId) ? [{ machine: where.get(s.sessionId), cwd: s.cwd }] : [])))
     const summaries: SessionSummary[] = listed.map((s) => {
@@ -152,6 +162,8 @@ export class Chats {
         lastModified: s.lastModified,
         running: !!live?.running,
         ...(live?.running && live.since ? { runningSince: live.since } : {}),
+        // Out of date once it's working again.
+        ...(recaps.has(s.sessionId) && !live?.running ? { recap: recaps.get(s.sessionId) } : {}),
         archived: archived.has(s.sessionId),
         gone: !live && !!s.cwd && !!gone.get(machine ?? '')?.has(s.cwd),
         ...(reviews.has(s.sessionId) ? { review: true } : {}),
@@ -716,6 +728,39 @@ export class Chats {
     this.turnsSeen.set(sessionId, turns)
     this.d.attention.turnEnded(sessionId, queued)
     this.sendContext(sessionId, undefined, true)
+    if (!queued) this.recapLater(sessionId)
+  }
+
+  /**
+   * The last recap is out of date now, though it's kept; a new one is made if the turn that just ended goes unread a
+   * while. Not for child chats, which are read in their parent, or side chats, which are read beside it.
+   */
+  private recapLater(sessionId: string): void {
+    clearTimeout(this.recapTimers.get(sessionId))
+    this.recapTimers.delete(sessionId)
+    if (this.d.meta.staleRecap(sessionId)) this.soonListChanged()
+    if (this.d.meta.parentOf(sessionId) || this.d.meta.sideChats().has(sessionId)) return
+    const timer = setTimeout(() => {
+      this.recapTimers.delete(sessionId)
+      void this.recap(sessionId).catch((err) => console.error(`Recapping ${sessionId} failed:`, message(err)))
+    }, RECAP_AFTER_MS)
+    timer.unref()
+    this.recapTimers.set(sessionId, timer)
+  }
+
+  private async recap(sessionId: string): Promise<void> {
+    const { meta } = this.d
+    const live = this.d.machines.live(sessionId)
+    const unreadSince = meta.unreadSince(sessionId)
+    if (!live || live.running || live.waiting || unreadSince === undefined || meta.archivedIds().has(sessionId)) return
+    // A chat nobody's reading, e.g. one working through a loop, would pay for a recap every turn. These few cover coming back to it.
+    if (meta.recapsSince(sessionId, unreadSince) >= RECAPS_UNREAD) return
+    const text = await this.d.machines.runnerFor(sessionId)?.remote.recap(sessionId)
+    // Read, or another turn ended, while it was being written.
+    if (typeof text !== 'string' || !text || this.recapTimers.has(sessionId) || !this.d.meta.unreadIds().has(sessionId)) return
+    this.d.meta.addRecap(sessionId, text.slice(0, 1000))
+    this.d.analytics.event('chat.recap', { actor: 'system', sessionId, data: { chars: text.length } })
+    this.soonListChanged()
   }
 
   /** A chat's runner says this many of its turns have ended; any the hub missed, e.g. with the runner offline, mark it unread. */
@@ -723,7 +768,9 @@ export class Chats {
     const seen = this.turnsSeen.get(sessionId)
     this.turnsSeen.set(sessionId, turns)
     // Unknown since the hub started; fewer since the runner restarted. Either way there's nothing to compare.
-    if (seen !== undefined && turns > seen) this.d.attention.turnEnded(sessionId, false)
+    if (seen === undefined || turns <= seen) return
+    this.d.attention.turnEnded(sessionId, false)
+    if (this.d.meta.staleRecap(sessionId)) this.soonListChanged()
   }
 
   /** A runner's transcript lines, already checked to be for one of its own chats. */

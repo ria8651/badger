@@ -57,7 +57,8 @@ socket.on((e) => {
   // Whether a chat is working shows at once. Anything else that changes with it, like its time, comes with the
   // sessions_changed the server sends too; a chat not listed yet needs the list.
   if (e.type === 'status') {
-    if (sessionById(e.sessionId)) patch(e.sessionId, e.cwd ? { running: e.running, cwd: e.cwd } : { running: e.running })
+    // Its recap is out of date once it starts working, and shouldn't show again under what the turn adds.
+    if (sessionById(e.sessionId)) patch(e.sessionId, { running: e.running, ...(e.cwd ? { cwd: e.cwd } : {}), ...(e.running ? { recap: undefined } : {}) })
     else refreshSoon()
   }
 })

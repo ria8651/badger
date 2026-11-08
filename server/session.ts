@@ -17,6 +17,18 @@ import { inaccessible } from './workspace.ts'
 /** Close an idle Claude Code process after this long; the next message resumes it. */
 const IDLE_CLOSE_MS = 15 * 60 * 1000
 
+/** The CLI's own words for asking for its session recap. Asked as a side question it comes with /btw's framing, which the CLI's doesn't. */
+const RECAP_PROMPT =
+  'The user stepped away and is coming back. Recap in under 40 words, 1-2 plain sentences, no markdown. Lead with the overall goal and current task, then the one next action. Skip root-cause narrative, fix internals, secondary to-dos, and em-dash tangents.'
+/** The CLI cuts its recap off here too. */
+const RECAP_LIMIT = 400
+
+/** In the SDK but not yet in its types: a one-off question beside the chat, as /btw asks, that reuses its cached context and doesn't join its transcript. */
+type SideQuestion = (question: string) => Promise<{ response: string | null; synthetic?: boolean } | null>
+
+/** What Claude Code adds to a side question's answer that ran out of room, in italics. A recap cut off isn't one. */
+const CUT_OFF = 'This answer was cut off before it finished'
+
 type Listener = (event: ServerEvent) => void
 
 /** Extra tools for one chat: MCP servers by name, and which of their tools skip the permission prompt. */
@@ -272,6 +284,23 @@ export class LiveSession {
   /** How full the chat's context is, as Claude Code's /context counts it. */
   contextUsage() {
     return readContext(this.agent)
+  }
+
+  /**
+   * Where the chat's got to, in a sentence or two, for someone coming back to it. Asked of this process as a side
+   * question, so it reads the conversation from the cache the last turn left rather than paying for it again.
+   * Undefined if it's working, or a turn started while it was being written, since that would make it out of date.
+   */
+  async recap(): Promise<string | undefined> {
+    const ask = (this.agent as Query & { askSideQuestion?: SideQuestion }).askSideQuestion
+    if (!ask || this.working || this.waiting) return
+    const started = this.live.length
+    const reply = await ask.call(this.agent, RECAP_PROMPT)
+    if (this.working || this.live.length !== started) return
+    // Synthetic: Claude Code wrote it because the model didn't, e.g. an API error, so it says nothing about the chat.
+    if (reply?.synthetic || reply?.response?.includes(CUT_OFF)) return
+    const text = reply?.response?.trim()
+    return text ? (text.length > RECAP_LIMIT ? text.slice(0, RECAP_LIMIT - 1).trimEnd() + '…' : text) : undefined
   }
 
   /** The account's plan limits, as this process reads them. */

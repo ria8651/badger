@@ -263,6 +263,10 @@ export class Runner implements RunnerApi {
     return this.contexts.context(sessionId)
   }
 
+  async recap(sessionId: string) {
+    return this.manager.get(sessionId)?.recap()
+  }
+
   accountUsage() {
     return readAccount(this.manager)
   }

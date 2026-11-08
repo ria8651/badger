@@ -39,7 +39,7 @@ import type { CreateSpec } from './ptyProtocol.ts'
  * Runners and the hub are updated separately, so bump this when either side
  * would misread the other; the hub turns away runners on another version.
  */
-export const RUNNER_PROTOCOL = 9
+export const RUNNER_PROTOCOL = 10
 
 /** Header a runner sends its protocol version in, so a mismatch is caught before the upgrade. */
 export const PROTOCOL_HEADER = 'x-badger-protocol'
@@ -156,6 +156,8 @@ export interface RunnerApi {
   /** Null when the chat has no live process. Settled in order with the chat's events. `known`: ids of messages the hub has. */
   liveSnapshot(sessionId: string, known: string[]): Later<LiveSnapshot | null>
   contextUsage(sessionId: string): Promise<ContextUsage | undefined>
+  /** Where the chat's got to, for someone coming back to it. Undefined unless it's live and idle. */
+  recap(sessionId: string): Promise<string | undefined>
   accountUsage(): Promise<AccountUsage>
   models(): Promise<ModelOption[]>
   /** The title goes in the transcript, where the CLI's /resume sees it too. */
@@ -209,6 +211,7 @@ export const RUNNER_METHODS = [
   'command',
   'liveSnapshot',
   'contextUsage',
+  'recap',
   'accountUsage',
   'models',
   'rename',
@@ -438,6 +441,8 @@ export const RUNNER_REPLIES = {
     .loose()
     .nullable(),
   command: z.union([queuedMessage, z.boolean()]).optional(),
+  // Kept in the database.
+  recap: z.string().max(1000).optional(),
   inaccessible: z.array(z.string()),
   workspaceRoot: z.string(),
   makeDir: z.string(),

@@ -109,6 +109,8 @@ export interface SessionSummary {
   running: boolean
   /** When it started running, while it is; ms since epoch. */
   runningSince?: number
+  /** Where its last turn left it, in a sentence or two, made when that went unread a while. Gone once it's working again. */
+  recap?: string
   /** Hidden from the sidebar's main list. Archiving never deletes the transcript. */
   archived: boolean
   /** Its directory no longer exists, e.g. a removed worktree. */
