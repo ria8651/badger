@@ -13,6 +13,13 @@ const mode = z.enum(PERMISSION_MODES)
 const id = z.string().regex(/^[\w-]{8,64}$/)
 /** Something a browser says about itself: kept if it's a short enough string, dropped otherwise. */
 const text = (max = 128) => z.string().max(max).optional().catch(undefined)
+/** Like text, but a long one is cut to fit rather than dropped, for what an error report would be missing without. */
+const clipped = (max: number) =>
+  z
+    .string()
+    .transform((s) => s.slice(0, max))
+    .optional()
+    .catch(undefined)
 
 const attachments = z.object({
   pastes: z.array(z.string()).default([]),
@@ -76,6 +83,19 @@ const CLIENT_EVENT = z.discriminatedUnion('type', [
     message: z.string().catch(''),
     stack: z.string().optional().catch(undefined),
     url: z.string().catch(''),
+    // Pages from before these were sent leave them out.
+    count: z.number().int().positive().catch(1),
+    request: clipped(512),
+    status: z.number().int().optional().catch(undefined),
+    build: clipped(128),
+    route: z.string().max(32).catch(''),
+    sessionId: z.string().regex(UUID).optional().catch(undefined),
+    cardId: z.number().int().optional().catch(undefined),
+    views: z
+      .array(z.string().transform((s) => s.slice(0, 256)))
+      .transform((v) => v.slice(0, 32))
+      .catch([]),
+    pane: clipped(256),
   }),
   z.object({ type: z.literal('seen'), sessionId }),
   z.object({ type: z.literal('term_subscribe'), id: z.string() }),

@@ -27,6 +27,7 @@ import { proxyPreview, proxyPreviewUpgrade, previewPort } from './preview.ts'
 import { bridgeOps } from './previewTools.ts'
 import { Runner } from './runner.ts'
 import { PROTOCOL_HEADER, RUNNER_MAX_FRAME, RUNNER_PROTOCOL } from './runnerProtocol.ts'
+import { SourceMaps } from './sourceMaps.ts'
 import { Transcripts } from './transcripts.ts'
 import { AccountLimits } from './usage.ts'
 import { prepareScratch } from './workspace.ts'
@@ -50,6 +51,7 @@ const PORT = Number(process.env.PORT ?? 3001)
 const HOST = process.env.HOST ?? '127.0.0.1'
 const WORKSPACE_DIR = resolve(process.env.WORKSPACE_DIR ?? process.cwd())
 const DIST = resolve('dist')
+const sourceMaps = new SourceMaps(DIST)
 const DATA_DIR = resolve(process.env.DATA_DIR ?? 'data')
 // Folderless chats run here. Outside DATA_DIR, which defaults to inside this repo.
 const SCRATCH_DIR = resolve(process.env.SCRATCH_DIR || join(homedir(), '.badger', 'scratch'))
@@ -184,7 +186,7 @@ server.on('upgrade', (req, socket, head) => {
   }
   if (url.pathname !== '/ws') return refuse('404 Not Found')
   if (!sameOrigin(req, CHECK_HOST)) return refuse('403 Forbidden')
-  wss.handleUpgrade(req, socket, head, (ws) => serveBrowser(ws, { viewers, chats, terminals, machines, attention, account, analytics }))
+  wss.handleUpgrade(req, socket, head, (ws) => serveBrowser(ws, { viewers, chats, terminals, machines, attention, account, analytics, sourceMaps }))
 })
 
 // ── The hub's own machine: a runner in this process, over an in-memory link ──

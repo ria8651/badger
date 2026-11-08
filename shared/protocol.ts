@@ -545,8 +545,11 @@ export type ClientEvent =
   | (Exclude<ChatCommand, { type: 'unqueue' }> & { sessionId: string })
   /** Parts of a chat's draft; each one given replaces what's saved. */
   | ({ type: 'draft'; sessionId: string } & DraftChange)
-  /** An uncaught error in the page, for the server to log. */
-  | { type: 'client_error'; message: string; stack?: string; url: string }
+  /**
+   * An uncaught error in the page, for the server to log and record. Sent the first time and again at 2, 4, 8…
+   * repeats, each with the count so far. A failed API call's `request` is its method and path.
+   */
+  | ({ type: 'client_error'; message: string; stack?: string; url: string; count: number; request?: string; status?: number } & ErrorContext)
   /** The user is looking at this chat, so it's no longer unread. */
   | { type: 'seen'; sessionId: string }
   | { type: 'term_subscribe'; id: string }
@@ -607,6 +610,9 @@ export interface ActivityBeat {
   /** Where the last input or focus was: chat, sidebar, page, or a panel's view key. */
   pane?: string
 }
+
+/** What a tab was showing when an error happened, and the build it was running. */
+export type ErrorContext = Pick<ActivityBeat, 'route' | 'sessionId' | 'cardId' | 'views' | 'pane'> & { build?: string }
 
 export type ServerEvent =
   /** Everything about a chat, for a viewer starting on it. A chat with no live process has the live state of an idle one. */
