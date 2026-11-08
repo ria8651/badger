@@ -194,6 +194,8 @@ export function MarkdownEditor(props: {
   onCleanup(() => {
     flush()
     editor?.destroy()
+    // So a link dialog still open when it goes finds no editor, not a dead one.
+    editor = undefined
   })
 
   return <div ref={el} />

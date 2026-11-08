@@ -5,7 +5,9 @@ import { socket } from './api.ts'
 import { attention, looking, needsYou, notify, onAttention } from './attention.ts'
 import { chatStarted, homeId, newChat as newChatIn } from './drafts.ts'
 import { lastWorkedIn } from './folders.ts'
-import { LEADER } from './layout.ts'
+import { LEADER, btwView, viewKey, viewShown } from './layout.ts'
+import { forkingSideChat, shownSideChat } from './btw.ts'
+import { LOCAL } from './machines.ts'
 import { leaderBindings, leaderKeys, leaderWaiting } from './leader.ts'
 import { focus } from './focus.ts'
 import { navigate, replace, route } from './router.tsx'
@@ -89,10 +91,17 @@ export function App() {
     const r = route()
     return r.kind === 'terminal' ? r.id : null
   }
-  // Looking at a chat reads it, including a turn that ends while you watch.
+  /** The side chat showing in the current chat's panel, if its panel is on screen. */
+  const shownSide = () => {
+    const s = sessionById(current() ?? '')
+    if (!s?.root) return
+    const ws = { machine: s.machine ?? LOCAL, root: s.root }
+    return viewShown(ws, s.id, viewKey(btwView(s.id))) && !forkingSideChat(s.id) ? shownSideChat(s.id) : undefined
+  }
+  // Looking at a chat reads it, including a turn that ends while you watch, and so does looking at its side chat.
   createEffect(() => {
-    const id = current()
-    if (id && looking() && attention()[id] === 'unread') socket.send({ type: 'seen', sessionId: id })
+    if (!looking()) return
+    for (const id of [current(), shownSide()]) if (id && attention()[id] === 'unread') socket.send({ type: 'seen', sessionId: id })
   })
 
   const newChat = (from: { cwd: string; machine: string; worktree: boolean } | undefined, cardId: number) =>

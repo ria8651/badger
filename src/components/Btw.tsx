@@ -1,4 +1,4 @@
-import { For, Show } from 'solid-js'
+import { For, Show, onCleanup } from 'solid-js'
 import { forkingSideChat, pickSideChat, shownSideChat, sideChatsOf } from '../btw.ts'
 import { Plus, SquareArrowOutUpRight } from '../icons'
 import { navigate } from '../router.tsx'
@@ -67,7 +67,11 @@ export function BtwPane(props: { parent: string; onNew: () => void; onReady: (fo
             </Show>
           }
         >
-          {(id) => <Chat sessionId={id} embedded onReady={(focus) => (focusChat = focus)} />}
+          {(id) => {
+            // The side chat going (to the next one, or while one's forked) takes its focus with it.
+            onCleanup(() => (focusChat = undefined))
+            return <Chat sessionId={id} embedded onReady={(focus) => (focusChat = focus)} />
+          }}
         </Show>
       </div>
     </div>

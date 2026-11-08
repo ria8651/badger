@@ -516,7 +516,11 @@ export function PromptInput(props: {
     })
     if (props.initial.startsWith('/')) loadCommands()
   })
-  onCleanup(() => editor?.destroy())
+  // Dropped as well as destroyed: a focus kept from before, like a side chat pane's, mustn't reach a dead editor.
+  onCleanup(() => {
+    editor?.destroy()
+    editor = undefined
+  })
 
   // Not as an update: that would save the empty editor over the draft before it's loaded.
   createEffect(() => editor?.setEditable(!props.disabled, false))
