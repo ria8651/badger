@@ -441,6 +441,8 @@ export const RUNNER_REPLIES = {
     .loose()
     .nullable(),
   command: z.union([queuedMessage, z.boolean()]).optional(),
+  // Kept in the database.
+  recap: z.string().max(1000).optional(),
   inaccessible: z.array(z.string()),
   workspaceRoot: z.string(),
   makeDir: z.string(),

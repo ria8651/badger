@@ -56,6 +56,8 @@ const LIST_LIMIT = 200
  * later, the chat's cached context may have expired, and recapping it would mean paying for the whole conversation again.
  */
 const RECAP_AFTER_MS = 2 * 60 * 1000
+/** Most recaps made for a chat while it stays unread. */
+const RECAPS_UNREAD = 3
 
 /** Changes made through the REST API and WebSocket, i.e. by someone in the browser. */
 const UI: Actor = { source: 'ui' }
@@ -729,12 +731,15 @@ export class Chats {
     if (!queued) this.recapLater(sessionId)
   }
 
-  /** The last recap is out of date now, though it's kept; a new one is made if the turn that just ended goes unread a while. Not for child chats, which are read in their parent. */
+  /**
+   * The last recap is out of date now, though it's kept; a new one is made if the turn that just ended goes unread a
+   * while. Not for child chats, which are read in their parent, or side chats, which are read beside it.
+   */
   private recapLater(sessionId: string): void {
     clearTimeout(this.recapTimers.get(sessionId))
     this.recapTimers.delete(sessionId)
     if (this.d.meta.staleRecap(sessionId)) this.soonListChanged()
-    if (this.d.meta.parentOf(sessionId)) return
+    if (this.d.meta.parentOf(sessionId) || this.d.meta.sideChats().has(sessionId)) return
     const timer = setTimeout(() => {
       this.recapTimers.delete(sessionId)
       void this.recap(sessionId).catch((err) => console.error(`Recapping ${sessionId} failed:`, message(err)))
@@ -744,8 +749,12 @@ export class Chats {
   }
 
   private async recap(sessionId: string): Promise<void> {
+    const { meta } = this.d
     const live = this.d.machines.live(sessionId)
-    if (!live || live.running || live.waiting || !this.d.meta.unreadIds().has(sessionId)) return
+    const unreadSince = meta.unreadSince(sessionId)
+    if (!live || live.running || live.waiting || unreadSince === undefined || meta.archivedIds().has(sessionId)) return
+    // A chat nobody's reading, e.g. one working through a loop, would pay for a recap every turn. These few cover coming back to it.
+    if (meta.recapsSince(sessionId, unreadSince) >= RECAPS_UNREAD) return
     const text = await this.d.machines.runnerFor(sessionId)?.remote.recap(sessionId)
     // Read, or another turn ended, while it was being written.
     if (typeof text !== 'string' || !text || this.recapTimers.has(sessionId) || !this.d.meta.unreadIds().has(sessionId)) return
@@ -759,7 +768,9 @@ export class Chats {
     const seen = this.turnsSeen.get(sessionId)
     this.turnsSeen.set(sessionId, turns)
     // Unknown since the hub started; fewer since the runner restarted. Either way there's nothing to compare.
-    if (seen !== undefined && turns > seen) this.d.attention.turnEnded(sessionId, false)
+    if (seen === undefined || turns <= seen) return
+    this.d.attention.turnEnded(sessionId, false)
+    if (this.d.meta.staleRecap(sessionId)) this.soonListChanged()
   }
 
   /** A runner's transcript lines, already checked to be for one of its own chats. */
