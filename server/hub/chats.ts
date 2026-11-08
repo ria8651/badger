@@ -729,11 +729,11 @@ export class Chats {
     if (!queued) this.recapLater(sessionId)
   }
 
-  /** The last recap is out of date now; a new one is made if the turn that just ended goes unread a while. Not for child chats, which are read in their parent. */
+  /** The last recap is out of date now, though it's kept; a new one is made if the turn that just ended goes unread a while. Not for child chats, which are read in their parent. */
   private recapLater(sessionId: string): void {
     clearTimeout(this.recapTimers.get(sessionId))
     this.recapTimers.delete(sessionId)
-    if (this.d.meta.setRecap(sessionId, null)) this.soonListChanged()
+    if (this.d.meta.staleRecap(sessionId)) this.soonListChanged()
     if (this.d.meta.parentOf(sessionId)) return
     const timer = setTimeout(() => {
       this.recapTimers.delete(sessionId)
@@ -749,7 +749,7 @@ export class Chats {
     const text = await this.d.machines.runnerFor(sessionId)?.remote.recap(sessionId)
     // Read, or another turn ended, while it was being written.
     if (typeof text !== 'string' || !text || this.recapTimers.has(sessionId) || !this.d.meta.unreadIds().has(sessionId)) return
-    this.d.meta.setRecap(sessionId, text.slice(0, 1000))
+    this.d.meta.addRecap(sessionId, text.slice(0, 1000))
     this.d.analytics.event('chat.recap', { actor: 'system', sessionId, data: { chars: text.length } })
     this.soonListChanged()
   }

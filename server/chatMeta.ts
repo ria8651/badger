@@ -107,19 +107,17 @@ export class ChatMeta {
 
   /** Every chat's recap of where its last turn left it, by id. */
   recaps(): Map<string, string> {
-    const rows = this.db.sql.prepare('SELECT session_id, text FROM session_recaps').all() as { session_id: string; text: string }[]
+    const rows = this.db.sql.prepare('SELECT session_id, text FROM session_recaps WHERE stale = 0 ORDER BY at').all() as { session_id: string; text: string }[]
     return new Map(rows.map((r) => [r.session_id, r.text]))
   }
 
-  /** Returns whether anything changed. Null clears it. */
-  setRecap(sessionId: string, text: string | null): boolean {
-    const result =
-      text === null
-        ? this.db.sql.prepare('DELETE FROM session_recaps WHERE session_id = ?').run(sessionId)
-        : this.db.sql
-            .prepare('INSERT INTO session_recaps (session_id, text, at) VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET text = excluded.text, at = excluded.at')
-            .run(sessionId, text, Date.now())
-    return result.changes > 0
+  addRecap(sessionId: string, text: string): void {
+    this.db.sql.prepare('INSERT INTO session_recaps (session_id, text, at) VALUES (?, ?, ?)').run(sessionId, text, Date.now())
+  }
+
+  /** Another turn has ended, so the chat's recap no longer says where it is. It's kept. Returns whether there was one. */
+  staleRecap(sessionId: string): boolean {
+    return this.db.sql.prepare('UPDATE session_recaps SET stale = 1 WHERE session_id = ? AND stale = 0').run(sessionId).changes > 0
   }
 
   /** The chat that started this one, if it's a child. */
