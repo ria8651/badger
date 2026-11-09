@@ -178,6 +178,8 @@ export interface Index {
   context: Map<string, ToolContext>
   /** Subagents' Agent calls, by agent id. */
   agents: Map<string, string>
+  /** The skills Claude called, by name. */
+  skills: Set<string>
 }
 
 /** Adds context about a call to the index's. */

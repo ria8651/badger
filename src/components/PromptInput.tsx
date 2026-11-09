@@ -10,7 +10,7 @@ import type { CommandInfo, CommandSource } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { fileLink, useOpenFile } from '../fileLinks.ts'
 import { File, Folder, SquareSlash } from '../icons'
-import { COMMAND, chipText, segments, spans, type Chip } from '../prompt.ts'
+import { chipText, chipsIn, segments, spans, type Chip } from '../prompt.ts'
 import { MOD } from '../layout.ts'
 import { tokens, type Tokens } from '../highlight.ts'
 import { PromptChip } from './PromptChip.tsx'
@@ -191,17 +191,22 @@ function textDoc(text: string, known: { command: (name: string) => boolean; file
     type: 'doc',
     content: text.split('\n').map((line, i) => ({
       type: 'paragraph',
-      content: segments(line, { command: i === 0 && known.command, file: known.file })
+      content: segments(line, { command: i === 0 && known.command, skill: known.command, file: known.file })
         .filter((s) => s !== '')
         .map((s) => (typeof s === 'string' ? { type: 'text', text: s } : chipNode(s))),
     })),
   }
 }
 
-/** What's being completed: a command at the start, or a file after `@`, and where its text is. */
+/** Whether there's a `/name` in the text that could be a command, so the list's worth asking for. */
+const MAY_COMMAND = /(?:^|\s)\/\w/
+
+/** What's being completed: a command at the start or after a space, or a file after `@`, and where its text is. */
 type Trigger = {
   kind: 'command' | 'file'
   query: string
+  /** A command past the start of the prompt, where it's more likely a path, like `/api`, than a command. */
+  later?: boolean
   from: number
   to: number
 }
@@ -231,8 +236,11 @@ function commandsIn(cwd: string, machine: string): Promise<CommandInfo[]> {
   return list
 }
 
-/** Commands matching what's typed after `/`, best first; ones another of the same name hides go after it. */
-function matchCommands(all: CommandInfo[], typed: string): CommandInfo[] {
+/**
+ * Commands matching what's typed after `/`, best first; ones another of the same name hides go after it. `names`:
+ * only by name, not by a description that mentions it.
+ */
+function matchCommands(all: CommandInfo[], typed: string, names = false): CommandInfo[] {
   const q = typed.toLowerCase()
   const score = (c: CommandInfo) => {
     const name = c.name.toLowerCase()
@@ -241,6 +249,7 @@ function matchCommands(all: CommandInfo[], typed: string): CommandInfo[] {
     if (!q) return 10 - SOURCE_ORDER.indexOf(runs.source)
     if (name.startsWith(q)) return 4
     if (name.split(/[:\-_]/).some((part) => part.startsWith(q))) return 3
+    if (names) return 0
     if (name.includes(q)) return 2
     return q.length > 2 && c.description.toLowerCase().includes(q) ? 1 : 0
   }
@@ -308,16 +317,26 @@ export function PromptInput(props: {
   const isCommand = (name: string) => !!commands()?.some((c) => c.name === name && !c.shadowed)
   const known = { command: isCommand, file: (path: string) => picked.has(path) }
 
-  /** Makes the `/name` a loaded draft starts with a chip, once the commands are in, unless it's being typed. */
+  /** Makes each `/name` in a loaded draft a chip, once the commands are in, unless it's the one being typed. */
   const chipLoadedCommand = () => {
-    const first = editor?.state.doc.firstChild?.firstChild
-    const command = first?.isText ? COMMAND.exec(first.text!) : null
-    if (!editor || !command || !isCommand(command[1])) return
-    // The first paragraph's text starts at 1.
-    const end = 1 + command[0].length
-    if (editor.isFocused && editor.state.selection.from <= end) return
-    const node = editor.schema.nodes.chip.create({ kind: 'command', value: command[1] })
-    editor.view.dispatch(editor.state.tr.replaceWith(1, end, node).setMeta('addToHistory', false))
+    if (!editor) return
+    const { doc, selection } = editor.state
+    const found: { from: number; to: number; name: string }[] = []
+    doc.descendants((node, pos, parent, index) => {
+      if (!node.isText || !parent) return
+      const prev = index > 0 ? parent.child(index - 1) : undefined
+      // Straight after a chip, a `/` is glued to it, as it is to a word.
+      const glued = !!prev && !(prev.isText && /\s$/.test(prev.text!))
+      for (const { chip, from, to } of chipsIn(node.text!, { command: !prev && parent === doc.firstChild && isCommand, skill: isCommand, glued }))
+        if (chip.kind === 'command') found.push({ from: pos + from, to: pos + to, name: chip.value })
+    })
+    let tr = editor.state.tr
+    // From the end, so the positions before each stay as they were.
+    for (const { from, to, name } of found.reverse()) {
+      if (editor.isFocused && selection.from >= from && selection.from <= to) continue
+      tr = tr.replaceWith(from, to, editor.schema.nodes.chip.create({ kind: 'command', value: name }))
+    }
+    if (tr.docChanged) editor.view.dispatch(tr.setMeta('addToHistory', false))
   }
   createEffect(on(commands, chipLoadedCommand, { defer: true }))
 
@@ -325,7 +344,7 @@ export function PromptInput(props: {
   const items = createMemo((): Item[] => {
     const t = trigger()
     if (!t || dismissed() === t.from) return []
-    if (t.kind === 'command') return matchCommands(commands() ?? [], t.query).map((command) => ({ kind: 'command', command }))
+    if (t.kind === 'command') return matchCommands(commands() ?? [], t.query, t.later).map((command) => ({ kind: 'command', command }))
     const f = found()
     return f && f.where === where() && f.query === t.query ? f.paths.map((path) => ({ kind: 'file', path })) : []
   })
@@ -347,6 +366,8 @@ export function PromptInput(props: {
   /** How tall the popup is to reach the top of the stack, from 8px above the composer. */
   const cover = () => stack().height + stack().border - 8
   const pickable = (i: Item) => i.kind === 'file' || !i.command.shadowed
+  /** Past the start, Enter picks a command only if what's typed begins its name; otherwise it sends, as it would for a path. */
+  const picksOnEnter = (i: Item) => i.kind === 'file' || !trigger()?.later || i.command.name.toLowerCase().startsWith(trigger()!.query.toLowerCase())
 
   // Files are looked up as the query changes; an answer to an older query is dropped.
   let lookup = 0
@@ -378,12 +399,14 @@ export function PromptInput(props: {
     if (!selection.empty) return
     const $at = selection.$from
     const before = $at.parent.textBetween(0, $at.parentOffset, undefined, '￼')
-    const command = /^\/([\w:.-]*)$/.exec(before)
-    if (command && doc.firstChild === $at.parent)
+    // At the start Claude Code runs it; after a space Claude reads it and calls the skill itself.
+    const command = /(?:^|\s)\/([\w:.-]*)$/.exec(before)
+    if (command)
       return {
         kind: 'command',
         query: command[1],
-        from: $at.pos - before.length,
+        later: doc.firstChild !== $at.parent || command.index > 0,
+        from: $at.pos - command[1].length - 1,
         to: $at.pos,
       }
     const file = /(?:^|\s)@([^\s@"]*)$/.exec(before)
@@ -472,7 +495,8 @@ export function PromptInput(props: {
           if (open()) {
             const item = items()[selected()]
             if (e.key === 'ArrowDown' || e.key === 'ArrowUp') return (move(e.key === 'ArrowDown' ? 1 : -1), true)
-            if ((e.key === 'Enter' || e.key === 'Tab') && !e.shiftKey && item && pickable(item)) return (pick(item, e.key === 'Tab'), true)
+            if ((e.key === 'Enter' || e.key === 'Tab') && !e.shiftKey && item && pickable(item) && (e.key === 'Tab' || picksOnEnter(item)))
+              return (pick(item, e.key === 'Tab'), true)
             if (e.key === 'Escape') return (setDismissed(trigger()?.from), true)
           }
           if (e.key === 'Enter' && e.shiftKey) return editor!.commands.splitBlock()
@@ -514,7 +538,7 @@ export function PromptInput(props: {
       onFocus: () => setDismissed(undefined),
       onBlur: () => setDismissed(trigger()?.from),
     })
-    if (props.initial.startsWith('/')) loadCommands()
+    if (MAY_COMMAND.test(props.initial)) loadCommands()
   })
   // Dropped as well as destroyed: a focus kept from before, like a side chat pane's, mustn't reach a dead editor.
   onCleanup(() => {
@@ -540,7 +564,7 @@ export function PromptInput(props: {
       // The draft coming back as saved is what's here already, and mustn't move the cursor.
       const same = text === docText(editor.state.doc)
       if (!same) editor.commands.setContent(textDoc(text, known), { emitUpdate: false })
-      if (!same && text.startsWith('/')) loadCommands()
+      if (!same && MAY_COMMAND.test(text)) loadCommands()
       if (focus || (!same && editor.isFocused)) editor.commands.focus('end')
     },
     mention: (paths) => {

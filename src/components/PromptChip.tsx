@@ -1,9 +1,10 @@
-import { For, Show, onCleanup, type JSX } from 'solid-js'
+import { For, Show, createMemo, onCleanup, untrack, useContext, type JSX } from 'solid-js'
 import { Dynamic } from 'solid-js/web'
 import { File, Folder, SquareSlash } from '../icons'
 import { fileLink, useOpenFile } from '../fileLinks.ts'
 import { highlightWhenSeen } from '../highlight.ts'
 import { chipText, segments, spans, type Chip } from '../prompt.ts'
+import { TranscriptIndex } from '../transcript/context.ts'
 
 const CHIP = 'rounded-md bg-well px-1 py-px box-decoration-clone text-fg'
 
@@ -36,11 +37,15 @@ export function PromptText(props: { text: string; command?: boolean }) {
     const link = fileLink(chip.value, files.cwd())
     return link && (() => files.open(link.path, link.line))
   }
+  // Only Claude Code knows which `/name`s are skills, so one past the start is a chip once Claude has called it.
+  const index = useContext(TranscriptIndex)
+  const called = createMemo(() => index?.().skills.size ?? 0)
+  const skill = (name: string) => (called(), untrack(() => !!index?.().skills.has(name)))
   /** The text from `at` to `to`; only a run that starts the prompt can start with its command. */
   const plain = (at: number, to: number) => {
     const glued = at > 0 && !/\s/.test(props.text[at - 1])
     return (
-      <For each={segments(props.text.slice(at, to), { command: at === 0 && !!props.command, glued })}>
+      <For each={segments(props.text.slice(at, to), { command: at === 0 && !!props.command, skill, glued })}>
         {(s) => (typeof s === 'string' ? s : <PromptChip chip={s} onClick={open(s)} />)}
       </For>
     )

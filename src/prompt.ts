@@ -1,6 +1,6 @@
 /**
- * Chips in a prompt: files mentioned as `@path` (`@"a path"` when it has spaces) and the slash command or skill it
- * starts with, as `/name`. A prompt is still plain text, which is what's saved and sent; chips are how it's shown.
+ * Chips in a prompt: files mentioned as `@path` (`@"a path"` when it has spaces), and slash commands and skills as
+ * `/name`. A prompt is still plain text, which is what's saved and sent; chips are how it's shown.
  */
 
 export type Chip = { kind: 'file'; value: string } | { kind: 'command'; value: string }
@@ -15,38 +15,64 @@ export function chipText(chip: Chip): string {
 
 /** A command at the very start: Claude Code only runs one there. A path like `/etc/hosts` isn't one. */
 export const COMMAND = /^\/([\w][\w:.-]*)(?=\s|$)/
-/** A mention starts the text or follows a space, so an email address isn't one. */
-const MENTION = /(^|\s)@(?:"([^"\n]+)"|([^\s"]+))/g
+/**
+ * A mention, or a skill past the start, starts the text or follows a space, so an email address or `and/or` isn't
+ * one. Claude Code doesn't run a skill there; Claude reads it and calls the skill itself.
+ */
+const MENTION = /(^|\s)(?:@(?:"([^"\n]+)"|([^\s"]+))|\/(\w[\w:.-]*)(?![^\s,;!?)\]}'"]))/g
 
 /**
  * The text as plain runs and chips. Only mentions that look like paths, with a `/` or a `.`, are chips, so
  * `@someone` or a Java `@Override` pasted in stays text, unless `file` knows it is one, like a picked `Makefile`.
- * `glued`: the text carries straight on from something before it, e.g. code, so an `@` it starts with is no mention.
+ * A `/name` past the start is one only if `skill` knows it, so `/tmp` stays a path.
+ * `glued`: the text carries straight on from something before it, e.g. code, so an `@` or `/` it starts with is neither.
  */
-export function segments(
-  text: string,
-  opts: { command?: boolean | ((name: string) => boolean); file?: (path: string) => boolean; glued?: boolean } = {},
-): Segment[] {
+export function segments(text: string, opts: ChipOptions = {}): Segment[] {
   const out: Segment[] = []
-  let rest = text
-  const command = opts.command !== false ? COMMAND.exec(rest) : null
-  if (command && (typeof opts.command !== 'function' || opts.command(command[1]))) {
-    out.push({ kind: 'command', value: command[1] })
-    rest = rest.slice(command[0].length)
-  }
   let at = 0
-  for (const m of rest.matchAll(MENTION)) {
+  for (const { chip, from, to } of chipsIn(text, opts)) {
+    if (from > at) out.push(text.slice(at, from))
+    out.push(chip)
+    at = to
+  }
+  if (at < text.length) out.push(text.slice(at))
+  return out
+}
+
+type ChipOptions = {
+  /** The text starts the prompt, so a command can start it; given a function, only one it knows. */
+  command?: boolean | ((name: string) => boolean)
+  file?: (path: string) => boolean
+  skill?: (name: string) => boolean
+  glued?: boolean
+}
+
+/** The chips in the text, as `segments` finds them, with where each one's written. */
+export function chipsIn(text: string, opts: ChipOptions = {}): { chip: Chip; from: number; to: number }[] {
+  const out: { chip: Chip; from: number; to: number }[] = []
+  const command = opts.command ? COMMAND.exec(text) : null
+  let offset = 0
+  if (command && (typeof opts.command !== 'function' || opts.command(command[1]))) {
+    out.push({ chip: { kind: 'command', value: command[1] }, from: 0, to: command[0].length })
+    offset = command[0].length
+  }
+  for (const m of text.slice(offset).matchAll(MENTION)) {
     if (opts.glued && m.index === 0 && !m[1]) continue
+    const start = offset + m.index + m[1].length
+    if (m[4] !== undefined) {
+      // At the start Claude Code takes the whole word as the command's name, punctuation and all, so it's not one.
+      if (opts.command && start === 0) continue
+      // Trailing punctuation is the sentence's.
+      const name = m[4].replace(/[.:-]+$/, '')
+      if (opts.skill?.(name)) out.push({ chip: { kind: 'command', value: name }, from: start, to: start + 1 + name.length })
+      continue
+    }
     const path = m[2] ?? m[3]
     // Trailing punctuation is the sentence's, not the path's, unless it's a folder's slash.
     const trimmed = m[2] ? path : path.replace(/[,;:!?)\]}'.]+$/, '')
     if (!(/[/.]/.test(trimmed) || opts.file?.(trimmed)) || trimmed === '.' || trimmed === '..') continue
-    const start = m.index + m[1].length
-    if (start > at) out.push(rest.slice(at, start))
-    out.push({ kind: 'file', value: trimmed })
-    at = start + 1 + (m[2] ? path.length + 2 : trimmed.length)
+    out.push({ chip: { kind: 'file', value: trimmed }, from: start, to: start + 1 + (m[2] ? path.length + 2 : trimmed.length) })
   }
-  if (at < rest.length) out.push(rest.slice(at))
   return out
 }
 

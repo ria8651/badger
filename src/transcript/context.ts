@@ -23,7 +23,7 @@ export function createIndex(messages: () => WireMessage[], sessionId?: () => str
     const all = unwrap(messages())
     const id = sessionId?.()
     if (!index || all !== indexed || all.length < count || index.sessionId !== id) {
-      index = { sessionId: id, groups: new Map(), results: new Map(), tasks: new Map(), parents: new Map(), uses: new Map(), context: new Map(), agents: new Map() }
+      index = { sessionId: id, groups: new Map(), results: new Map(), tasks: new Map(), parents: new Map(), uses: new Map(), context: new Map(), agents: new Map(), skills: new Set() }
       indexed = all
       count = 0
     }
@@ -31,7 +31,7 @@ export function createIndex(messages: () => WireMessage[], sessionId?: () => str
     count = all.length
     // A group that grows is a new array, so whatever reads it sees it change; the rest stay as they were.
     const grown = new Set<string>()
-    const { groups, results, parents, uses, context, agents } = index
+    const { groups, results, parents, uses, context, agents, skills } = index
     const group = (key: string) => {
       if (!grown.has(key)) {
         groups.set(key, [...(groups.get(key) ?? [])])
@@ -56,6 +56,7 @@ export function createIndex(messages: () => WireMessage[], sessionId?: () => str
         if (b.type !== 'tool_use' || !b.id) continue
         parents.set(b.id, parent)
         uses.set(b.id, { name: b.name ?? '?', input: b.input ?? {}, at: timeOf(m) })
+        if (b.name === 'Skill' && typeof b.input?.skill === 'string') skills.add(b.input.skill.replace(/^\//, ''))
         const sent = sentBy(m, b, agents)
         if (sent) place(group(sent.parent_tool_use_id as string), sent)
       }
