@@ -1,6 +1,7 @@
 import { parseCardContext, type CardContext } from '../../shared/cardContext.ts'
 import { splitMoveNote, splitSideNote, type Move } from '../../shared/forkNote.ts'
 import { splitGitNote } from '../../shared/gitNote.ts'
+import { splitComments, type SentComment } from '../../shared/comments.ts'
 import { unwrapPaste } from '../../shared/pastes.ts'
 import { sentToSubagentBy } from '../../shared/toSubagent.ts'
 import type { ImageAttachment, WireMessage } from '../../shared/protocol.ts'
@@ -19,7 +20,8 @@ export type ContentBlock = Block & { tool_use_id?: string; content?: unknown; is
 
 export type Item =
   /** `to`: the subagent it went to, for one the user sent a subagent through the chat. */
-  | { kind: 'user'; text: string; pastes?: string[]; images?: ShownImage[]; to?: string; command?: boolean }
+  /** `comments`: the comments on what Claude wrote that went with it (shared/comments.ts). */
+  | { kind: 'user'; text: string; pastes?: string[]; images?: ShownImage[]; comments?: SentComment[]; to?: string; command?: boolean }
   /**
    * `id`: its message's uuid and which of its blocks, for comments on it to find it by. `streamed`: the API message it's
    * in, for what was shown of it while it streamed to be found by.
@@ -84,8 +86,9 @@ export function messageItems(m: WireMessage): Item[] {
     if (relayed) return [{ kind: 'user', text: relayed.text, to: relayed.description }]
     const output = commandOutput(raw)
     if (output !== undefined) return output ? [{ kind: 'output', text: output }] : []
-    const { text, pastes, images, command } = userText(m)
-    return text || pastes.length || images.length ? [{ kind: 'user', text, pastes, images, command }] : []
+    const { text: typed, pastes, images, command } = userText(m)
+    const { text, comments } = splitComments(typed)
+    return text || pastes.length || images.length || comments.length ? [{ kind: 'user', text, pastes, images, comments: comments.length ? comments : undefined, command }] : []
   }
   if (m.type === 'assistant') {
     const content = ((m.message as { content?: Block[] })?.content ?? []) as Block[]
@@ -451,7 +454,8 @@ export function userText(m: WireMessage): { text: string; pastes: string[]; imag
     return { text: args ? `${command[1]} ${args}` : command[1], pastes, images, command: true }
   }
   // Harness-injected content (system reminders, command output) is wrapped in tags.
-  if (raw.trimStart().startsWith('<')) return { text: '', pastes, images }
+  // Comments are tagged too, but they're the user's (shared/comments.ts).
+  if (raw.trimStart().startsWith('<') && !raw.trimStart().startsWith('<comments>')) return { text: '', pastes, images }
   return { text: raw, pastes, images }
 }
 

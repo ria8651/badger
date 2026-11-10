@@ -93,10 +93,11 @@ export function PlanActions(props: { sessionId: string; permission: PendingPermi
   /** Comments on the plan, which go with the answer, ahead of the note. */
   const kept = useComments()
   const onPlan = () => (kept?.all() ?? []).filter((c) => c.on.kind === 'plan' && c.on.request === id())
-  const told = (lead: string) => {
+  /** `plain`: for sending the plan back, which Claude's told as the tool's result, not shown as a message. */
+  const told = (lead: string, plain = false) => {
     const comments = onPlan()
     for (const c of comments) kept!.remove(c.id)
-    return commentsMessage(comments, note(), { lead: lead.replace('%n', comments.length === 1 ? 'a comment' : `${comments.length} comments`) }).trim()
+    return commentsMessage(comments, note(), { lead: lead.replace('%n', comments.length === 1 ? 'a comment' : `${comments.length} comments`), plain }).trim()
   }
   // Approving can't carry a message, so the server sends the note on as the next one.
   const approve = (mode: PermissionMode) => {
@@ -106,7 +107,7 @@ export function PlanActions(props: { sessionId: string; permission: PendingPermi
   // The server saves edits to the plan's file, which the next plan is read from; they go in the message too, for Claude to start from.
   const keepPlanning = () => {
     const parts = [
-      told('I left %n on the plan. Change it for them, and say if you disagree with any.'),
+      told('I left %n on the plan. Change it for them, and say if you disagree with any.', true),
       edited(p()) ? `I edited the plan and saved my version to the plan file. Carry on from it:\n\n${planText(p())}` : '',
     ]
     respond('deny', { message: parts.filter(Boolean).join('\n\n') || undefined, updatedInput: updated() })

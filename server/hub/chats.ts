@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { WebSocket } from 'ws'
-import { commentsMessage } from '../../shared/comments.ts'
+import { commentsMessage, splitComments } from '../../shared/comments.ts'
 import { SIDE_NOTE, renderMoveNote } from '../../shared/forkNote.ts'
 import {
   LOCAL_MACHINE,
@@ -563,8 +563,9 @@ export class Chats {
     if (meta.sideChats().has(id)) throw new BadRequest("A side chat can't have side chats of its own")
     const at = machines.live(id)?.running ? busyForkPoint((await transcripts.store.load({ projectKey: '', sessionId: id })) ?? []) : undefined
     const text = body.text?.trim()
-    // Named for what it asks, so its parent's side chats can be told apart.
-    const title = text ? (text.length > 60 ? `${text.slice(0, 59).trimEnd()}…` : text).replace(/\s+/g, ' ') : 'Side chat'
+    // Named for what it asks, so its parent's side chats can be told apart: not what it's about, if that's tagged with it.
+    const asks = text && splitComments(text).text
+    const title = asks ? (asks.length > 60 ? `${asks.slice(0, 59).trimEnd()}…` : asks).replace(/\s+/g, ' ') : 'Side chat'
     const sessionId = await this.copy(id, { at, side: true, title })
     if (text) {
       const pastes = Array.isArray(body.pastes) ? (body.pastes as string[]) : []

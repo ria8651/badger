@@ -3,7 +3,7 @@ import { FileText } from '../icons'
 import { PasteBody, type ContextChip } from '../components/Attachments.tsx'
 import { plural } from '../format.ts'
 import { NONE } from './context.ts'
-import { contextChip } from './items.tsx'
+import { commentChip, contextChip } from './items.tsx'
 import { buildView, type Index } from './model.ts'
 
 /* What went in with a prompt, looked up by reference for a panel beside the chat. */
@@ -22,8 +22,12 @@ export function attachmentOf(index: Index, prompt: string, part: string): Contex
     const text = item.pastes?.[Number(n)]
     return text === undefined ? undefined : pasteChip(text)
   }
-  const chip = view.extras.get(item)?.chips[Number(n)]
-  return chip && contextChip(chip)
+  // The comments that went with it come after the rest of its context.
+  const chips = view.extras.get(item)?.chips ?? []
+  const chip = chips[Number(n)]
+  if (chip) return contextChip(chip)
+  const comment = item.comments?.[Number(n) - chips.length]
+  return comment && commentChip(comment)
 }
 
 const pasteChip = (text: string): ContextChip => ({

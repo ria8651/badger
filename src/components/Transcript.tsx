@@ -5,7 +5,7 @@ import { detail } from '../prefs.ts'
 import { chatCommands, useChecking, type Partial } from '../useChat.ts'
 import { AgentRun, ChildRun } from '../transcript/agents.tsx'
 import { NONE, TranscriptIndex, createIndex, useIndex } from '../transcript/context.ts'
-import { ApiError, CardContextBadge, CompactDivider, CompactingLine, Idle, Notice, Thinking, UserMessage, WorkingLine, contextChip } from '../transcript/items.tsx'
+import { ApiError, CardContextBadge, CompactDivider, CompactingLine, Idle, Notice, Thinking, UserMessage, WorkingLine, commentChip, contextChip } from '../transcript/items.tsx'
 import { buildView, duration, foldWork, lastContext, modelName, retryOf, stopReason, within, type Index, type Item, type Row, type Work } from '../transcript/model.ts'
 import { Attachments } from './Attachments.tsx'
 import { Markdown } from './Markdown.tsx'
@@ -173,7 +173,7 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
             images={item.images}
             card={view().extras.get(item)?.card}
             move={view().extras.get(item)?.move}
-            context={view().extras.get(item)?.chips.map(contextChip)}
+            context={[...(view().extras.get(item)?.chips.map(contextChip) ?? []), ...(item.comments?.map(commentChip) ?? [])]}
             onOpenAttachment={open() && ((part) => open()?.(id!, part))}
           />
         )

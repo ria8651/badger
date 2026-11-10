@@ -442,9 +442,14 @@ function isPrompt(m: WireMessage): boolean {
   return Array.isArray(content) && content.some((b) => b?.type === 'text' && typed(String(b.text)))
 }
 
-/** What a chat is called: the title someone gave it, else Claude Code's summary, else how it started. */
-export const titleOf = (info: Pick<SDKSessionInfo, 'customTitle' | 'summary' | 'firstPrompt'> | undefined): string | undefined =>
-  info?.customTitle || info?.summary || info?.firstPrompt
+/**
+ * What a chat is called: the title someone gave it, else Claude Code's summary, else how it started, up to any comments
+ * that went with it (shared/comments.ts), which are tagged, and maybe cut off.
+ */
+export const titleOf = (info: Pick<SDKSessionInfo, 'customTitle' | 'summary' | 'firstPrompt'> | undefined): string | undefined => {
+  const title = info?.customTitle || info?.summary || info?.firstPrompt
+  return title && (title.split('<comment')[0].trim() || 'Comments')
+}
 
 /** The model a transcript's main agent last answered with: a model id, e.g. `claude-opus-5-5`. */
 export function transcriptModel(messages: WireMessage[]): string | undefined {

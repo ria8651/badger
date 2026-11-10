@@ -37,7 +37,8 @@ import { BtwPane } from './Btw.tsx'
 import { TranscriptIndex, createIndex } from '../transcript/context.ts'
 import { within, type Index } from '../transcript/model.ts'
 import { NestedPane } from './NestedPane.tsx'
-import { UserMessage } from '../transcript/items.tsx'
+import { UserMessage, commentChip } from '../transcript/items.tsx'
+import { splitComments } from '../../shared/comments.ts'
 import { Workspace, type ChatPanes } from './Workspace.tsx'
 import { Loading, Notice, PaneBar, Segmented, touch } from './ui.tsx'
 
@@ -774,10 +775,19 @@ export function Chat(props: {
 
 /** A message waiting for Claude's next break: your message as it'll appear, with ways to take it back. */
 function Queued(props: { message: QueuedMessage; onEdit: () => void; onRemove: () => void }) {
+  /** The comments that went with it as chips, as the transcript shows them. */
+  const shown = createMemo(() => splitComments(props.message.text))
   const button = 'grid size-7 shrink-0 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:size-9'
   return (
     // Clamped shorter than in the transcript so a long one doesn't push the chat out of view above the composer.
-    <UserMessage text={props.message.text} pastes={props.message.pastes} images={props.message.images} class="mb-2" maxHeight="6lh">
+    <UserMessage
+      text={shown().text}
+      pastes={props.message.pastes}
+      images={props.message.images}
+      context={shown().comments.map(commentChip)}
+      class="mb-2"
+      maxHeight="6lh"
+    >
       <button type="button" onClick={props.onEdit} title="Edit" class={button}>
         <Pencil class="size-3.5" />
       </button>

@@ -1,5 +1,6 @@
 import { createContext, createSignal, useContext } from 'solid-js'
 import { questionMessage } from '../shared/comments.ts'
+export { commentLabel } from '../shared/comments.ts'
 import type { CommentAnchor, DraftComment, WireMessage } from '../shared/protocol.ts'
 
 /*
@@ -130,23 +131,4 @@ export function inOrder(comments: DraftComment[], messages: WireMessage[]): Draf
   const keyed = comments.map((c, i) => ({ c, i, k: key(c) }))
   keyed.sort((a, b) => a.k[0] - b.k[0] || a.k[1].localeCompare(b.k[1]) || a.k[2] - b.k[2] || a.k[3] - b.k[3] || a.i - b.i)
   return keyed.map((x) => x.c)
-}
-
-/** What a comment's on, in a few words, e.g. for its chip. */
-export function commentLabel(c: DraftComment): string {
-  const on = c.on
-  const words = (s: string) => {
-    const t = s.replace(/\s+/g, ' ').trim()
-    return t.length > 40 ? `${t.slice(0, 40).trimEnd()}…` : t
-  }
-  switch (on.kind) {
-    case 'reply':
-      return `“${words(c.quote)}”`
-    case 'plan':
-      return `Plan: “${words(c.quote)}”`
-    case 'diff':
-      return `${on.path.split('/').pop()}, ${on.where}`
-    case 'file':
-      return `${on.path.split('/').pop()}:${on.from === on.to ? on.from : `${on.from}–${on.to}`}`
-  }
 }
