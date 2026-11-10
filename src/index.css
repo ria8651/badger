@@ -375,6 +375,9 @@
     font-feature-settings: "cv11", "ss01";
     text-shadow: var(--glow);
   }
+  /* Where the page shows past the app, overscrolling or under the browser's own bars, it's the app's edge: tiles
+     sit on the canvas there, but classic's panes run to the edge. */
+  [data-frame="modern"] body { @apply bg-canvas; }
   /* The browser's own styles turn the glow off on controls. */
   :where(button, input, textarea, select) { text-shadow: inherit; }
   * {
