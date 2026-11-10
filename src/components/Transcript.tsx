@@ -9,6 +9,7 @@ import { ApiError, CardContextBadge, CompactDivider, CompactingLine, Idle, Notic
 import { buildView, duration, foldWork, lastContext, modelName, retryOf, stopReason, within, type Index, type Item, type Row, type Work } from '../transcript/model.ts'
 import { Attachments } from './Attachments.tsx'
 import { Markdown } from './Markdown.tsx'
+import { ReplyBody } from './ReplyComments.tsx'
 import { Disclosure, Pre, ToolCard, ToolInput, toolLabel, toolSummary } from './ToolCard.tsx'
 import { parsePartialJson } from '../partialJson.ts'
 import { LiveDot, compact, plural } from './ui.tsx'
@@ -72,7 +73,7 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
       seen.set(r.streamed, n + 1)
       const s = streams.get(`${r.streamed}#${n}`)
       if (!s) return r
-      s.set(r.text)
+      s.set(r.text, r.id)
       return s.item
     })
     const p = props.partial
@@ -178,9 +179,10 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
         )
       }
       case 'text':
+        // The chat's own replies can be commented on, once they're done; not a subagent's shown in it.
         return (
           <div class="my-4">
-            <Markdown text={item.text} runnable />
+            <ReplyBody id={props.nested ? undefined : item.id} text={item.text} />
           </div>
         )
       case 'thinking':
@@ -306,19 +308,26 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
   )
 }
 
-type Streamed = { item: Extract<Item, { kind: 'text' }>; set: (text: string) => void }
+type Streamed = { item: Extract<Item, { kind: 'text' }>; set: (text: string, id?: string) => void }
 
-/** A reply's row whose text changes: as it streams, then as the message it became. */
+/** A reply's row whose text changes: as it streams, then as the message it became, which gives it its id. */
 function streamedRow(): Streamed {
   const [text, setText] = createSignal('')
+  const [id, setId] = createSignal<string>()
   return {
     item: {
       kind: 'text',
       get text() {
         return text()
       },
+      get id() {
+        return id()
+      },
     },
-    set: setText,
+    set: (t, i) => {
+      setText(t)
+      setId(i)
+    },
   }
 }
 

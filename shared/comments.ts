@@ -36,11 +36,12 @@ function quoted(c: DraftComment): string {
 export const GUIDE_AFTER_COMMENTS = 'Then update the guide for what changed (review_guide_group, then review_guide_done).'
 
 /** The message comments go to Claude in: what to do with them, each under what it's on, then what else was typed. */
-export function commentsMessage(comments: DraftComment[], note: string, opts: { guided?: boolean } = {}): string {
+export function commentsMessage(comments: DraftComment[], note: string, opts: { guided?: boolean; lead?: string } = {}): string {
   if (!comments.length) return note
   const n = comments.length
   const lead = [
-    n === 1 ? 'I left a comment. Answer or act on it, and say if you disagree.' : `I left ${n} comments. Answer or act on each, and say if you disagree with any.`,
+    opts.lead ??
+      (n === 1 ? 'I left a comment. Answer or act on it, and say if you disagree.' : `I left ${n} comments. Answer or act on each, and say if you disagree with any.`),
     opts.guided && comments.some((c) => c.on.kind === 'diff') ? GUIDE_AFTER_COMMENTS : '',
   ]
     .filter(Boolean)

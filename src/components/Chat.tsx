@@ -8,6 +8,7 @@ import { diffView, openFile, openTerminal, openView, planView, setFileMode, view
 import { OpenFile, expandHome, useOpenFile } from '../fileLinks.ts'
 import { FileView, openingMode } from './FileView.tsx'
 import { QuoteSelection } from './QuoteSelection.tsx'
+import { anchorOf } from './ReplyComments.tsx'
 import { sideChatsOf, startSideChat } from '../btw.ts'
 import { CommentsContext, createComments, inOrder, planAnchor } from '../comments.ts'
 import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
@@ -529,7 +530,17 @@ export function Chat(props: {
             composer to hang out by their own padding, so the text in them lines up with Claude's. */}
         <div class="mx-auto flex min-h-full max-w-[50rem] flex-col px-6 md:px-9">
           <div ref={content} class="relative flex-1 py-8">
-            <QuoteSelection within={() => content} onQuote={(text) => composer?.quote(text)} />
+            <QuoteSelection
+              within={() => content}
+              onQuote={(text) => composer?.quote(text)}
+              onComment={
+                comments &&
+                ((quote, on, range) => {
+                  const anchor = anchorOf(on, range)
+                  if (anchor) comments.setDraft({ on: anchor, quote })
+                })
+              }
+            />
             <Show when={state.loaded} fallback={<Loading class="pt-[22vh]" />}>
               <Show
                 when={state.messages.length}

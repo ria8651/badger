@@ -2,9 +2,12 @@ import { Show, createSignal, onCleanup, untrack } from 'solid-js'
 import { PanelRight } from '../icons'
 import type { PendingPermission, PermissionMode } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
+import { commentsMessage } from '../../shared/comments.ts'
+import { useComments } from '../comments.ts'
 import { chatCommands } from '../useChat.ts'
 import { Markdown } from './Markdown.tsx'
 import { MarkdownEditor } from './MarkdownEditor.tsx'
+import { CommentablePlan } from './ReplyComments.tsx'
 import { resultText } from './ToolCard.tsx'
 import type { Index } from '../transcript/model.ts'
 import { Button, noteClass } from './ui.tsx'
@@ -87,14 +90,25 @@ export function PlanActions(props: { sessionId: string; permission: PendingPermi
     setFeedback((f) => without(f, id()))
   }
   const updated = () => (edited(p()) ? { ...p().input, plan: planText(p()) } : undefined)
+  /** Comments on the plan, which go with the answer, ahead of the note. */
+  const kept = useComments()
+  const onPlan = () => (kept?.all() ?? []).filter((c) => c.on.kind === 'plan' && c.on.request === id())
+  const told = (lead: string) => {
+    const comments = onPlan()
+    for (const c of comments) kept!.remove(c.id)
+    return commentsMessage(comments, note(), { lead: lead.replace('%n', comments.length === 1 ? 'a comment' : `${comments.length} comments`) }).trim()
+  }
   // Approving can't carry a message, so the server sends the note on as the next one.
   const approve = (mode: PermissionMode) => {
-    respond('allow', { message: note().trim() || undefined, updatedInput: updated() })
+    respond('allow', { message: told('I left %n on the plan. Take them into account as you carry it out.') || undefined, updatedInput: updated() })
     chatCommands(props.sessionId).setMode(mode)
   }
   // The server saves edits to the plan's file, which the next plan is read from; they go in the message too, for Claude to start from.
   const keepPlanning = () => {
-    const parts = [note().trim(), edited(p()) ? `I edited the plan and saved my version to the plan file. Carry on from it:\n\n${planText(p())}` : '']
+    const parts = [
+      told('I left %n on the plan. Change it for them, and say if you disagree with any.'),
+      edited(p()) ? `I edited the plan and saved my version to the plan file. Carry on from it:\n\n${planText(p())}` : '',
+    ]
     respond('deny', { message: parts.filter(Boolean).join('\n\n') || undefined, updatedInput: updated() })
   }
   const revert = () => {
@@ -111,6 +125,9 @@ export function PlanActions(props: { sessionId: string; permission: PendingPermi
             Undo all edits
           </button>
         </p>
+      </Show>
+      <Show when={onPlan().length}>
+        {(n) => <p class="text-xs text-fg-3">{n() === 1 ? 'Your comment on the plan goes' : `Your ${n()} comments on the plan go`} with your answer.</p>}
       </Show>
       <textarea
         value={note()}
@@ -204,7 +221,9 @@ export function PlanPane(props: {
                   <span class="size-1.5 shrink-0 rounded-full bg-accent" />
                   Waiting for you. Edit it here, then approve or send it back.
                 </p>
-                <PlanEditor sessionId={props.sessionId} permission={p} class="min-h-[6.6em]" />
+                <CommentablePlan requestId={p.requestId}>
+                  <PlanEditor sessionId={props.sessionId} permission={p} class="min-h-[6.6em]" />
+                </CommentablePlan>
               </>
             )}
           </Show>

@@ -20,8 +20,11 @@ export type ContentBlock = Block & { tool_use_id?: string; content?: unknown; is
 export type Item =
   /** `to`: the subagent it went to, for one the user sent a subagent through the chat. */
   | { kind: 'user'; text: string; pastes?: string[]; images?: ShownImage[]; to?: string; command?: boolean }
-  /** `streamed`: the API message it's in, for what was shown of it while it streamed to be found by. */
-  | { kind: 'text'; text: string; streamed?: string }
+  /**
+   * `id`: its message's uuid and which of its blocks, for comments on it to find it by. `streamed`: the API message it's
+   * in, for what was shown of it while it streamed to be found by.
+   */
+  | { kind: 'text'; text: string; id?: string; streamed?: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; id: string; name: string; input: Record<string, unknown> }
   | { kind: 'result'; ok: boolean; seconds: number; tokens?: { input: number; output: number }; endedAt?: number; error?: string }
@@ -92,11 +95,12 @@ export function messageItems(m: WireMessage): Item[] {
     if ((m.message as { model?: string })?.model === '<synthetic>') return said ? [{ kind: 'output', text: said }] : []
     const items: Item[] = []
     const streamed = (m.message as { id?: string })?.id
-    for (const b of content) {
-      if (b.type === 'text' && b.text?.trim()) items.push({ kind: 'text', text: b.text, streamed })
+    for (const [i, b] of content.entries()) {
+      const id = typeof m.uuid === 'string' ? `${m.uuid}:${i}` : undefined
+      if (b.type === 'text' && b.text?.trim()) items.push({ kind: 'text', text: b.text, id, streamed })
       else if (b.type === 'thinking' && b.thinking?.trim()) items.push({ kind: 'thinking', text: b.thinking })
       // How a subagent hands its report back: that's its reply, not a step.
-      else if (b.type === 'tool_use' && b.name === 'SubagentHandback') items.push({ kind: 'text', text: String(b.input?.message ?? '') })
+      else if (b.type === 'tool_use' && b.name === 'SubagentHandback') items.push({ kind: 'text', text: String(b.input?.message ?? ''), id })
       else if (b.type === 'tool_use' && b.id) items.push({ kind: 'tool', id: b.id, name: b.name ?? '?', input: b.input ?? {} })
     }
     return items
