@@ -1,5 +1,7 @@
 import { For, Show, createSignal, type Component, type JSX } from 'solid-js'
-import { Columns3, FileText, GitFork, PanelRight, X } from '../icons'
+import { Columns3, FileText, GitFork, MessageSquare, PanelRight, X } from '../icons'
+import type { DraftComment } from '../../shared/protocol.ts'
+import { commentLabel } from '../comments.ts'
 import type { CardContext } from '../../shared/cardContext.ts'
 import type { Move, Place } from '../../shared/forkNote.ts'
 import { basename } from '../folders.ts'
@@ -23,6 +25,10 @@ export function Attachments(props: {
   move?: Move
   /** Other context that went in with it, e.g. a skill's instructions or the CLAUDE.md files loaded. */
   context?: ContextChip[]
+  /** Comments on what Claude wrote that go with it; clicking one shows what it's on. */
+  comments?: DraftComment[]
+  onShowComment?: (c: DraftComment) => void
+  onRemoveComment?: (id: string) => void
   onRemovePaste?: (index: number) => void
   onRemoveImage?: (index: number) => void
   /** Given, an open paste or context can be opened in a panel beside the chat: `paste:<n>` or `context:<n>`. */
@@ -127,6 +133,26 @@ export function Attachments(props: {
                   onClick={() => props.onRemoveImage!(i())}
                   class="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-button-round border border-edge bg-bg text-fg-3 hover:text-fg"
                 >
+                  <X class="size-3" />
+                </button>
+              </Show>
+            </div>
+          )}
+        </For>
+        <For each={props.comments}>
+          {(c) => (
+            <div class={`${chip} max-w-72 border-edge text-fg-3 hover:text-fg-2`}>
+              <button
+                type="button"
+                class="flex h-full min-w-0 items-center gap-1.5 pl-2 pr-2.5"
+                title={`${c.text}\n\nOn ${commentLabel(c)}. Goes with your next message.`}
+                onClick={() => props.onShowComment?.(c)}
+              >
+                <MessageSquare class="size-3.5 shrink-0" />
+                <span class="min-w-0 truncate">{commentLabel(c)}</span>
+              </button>
+              <Show when={props.onRemoveComment}>
+                <button type="button" class="-ml-1 flex h-full items-center pr-2 hover:text-fg" title="Delete the comment" onClick={() => props.onRemoveComment!(c.id)}>
                   <X class="size-3" />
                 </button>
               </Show>

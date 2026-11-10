@@ -7,6 +7,7 @@ import { isScratch } from '../folders.ts'
 import { readImage } from '../images.ts'
 import type { ModelChoice } from '../models.ts'
 import { detail, toggleDetail } from '../prefs.ts'
+import { useComments } from '../comments.ts'
 import type { Chat } from '../useChat.ts'
 import { Attachments } from './Attachments.tsx'
 import { FileBrowser } from './FileBrowser.tsx'
@@ -69,7 +70,10 @@ export function Composer(props: {
   const attach = (change: (a: DraftAttachments) => DraftAttachments) => props.chat.editDraft({ attachments: change(attached()) })
   const pastes = () => attached().pastes
   const images = () => attached().images
-  const hasInput = () => !!text().trim() || pastes().length > 0 || images().length > 0
+  /** Comments on what Claude wrote, which go with the message. */
+  const comments = () => attached().comments ?? []
+  const commenting = useComments()
+  const hasInput = () => !!text().trim() || pastes().length > 0 || images().length > 0 || comments().length > 0
   let root!: HTMLDivElement
   let prompt: PromptInputControls | undefined
   let picker!: HTMLInputElement
@@ -126,12 +130,15 @@ export function Composer(props: {
 
   const submit = () => {
     if (!hasInput()) return
-    props.onSubmit(text().trim(), attached())
+    const message = text().trim()
+    const attachments = attached()
     clearTimeout(saveTimer)
     unsaved = false
     setText('')
     prompt?.setText('')
+    // Cleared before it's sent, so what sending keeps back for later, e.g. comments on a plan still waiting, stays.
     props.chat.clearDraft()
+    props.onSubmit(message, attachments)
   }
 
   /** Adds the images among these files, and says whether there were any. */
@@ -195,10 +202,13 @@ export function Composer(props: {
           onClose={() => setMore(false)}
         />
       </Show>
-      <Show when={pastes().length || images().length || props.pendingCard}>
+      <Show when={pastes().length || images().length || comments().length || props.pendingCard}>
         <Attachments
           pastes={pastes()}
           images={images()}
+          comments={comments()}
+          onShowComment={commenting?.show}
+          onRemoveComment={(id) => attach((a) => ({ ...a, comments: a.comments?.filter((c) => c.id !== id) }))}
           card={props.pendingCard}
           onRemovePaste={(i) => attach((a) => ({ ...a, pastes: a.pastes.filter((_, j) => j !== i) }))}
           onRemoveImage={(i) => attach((a) => ({ ...a, images: a.images.filter((_, j) => j !== i) }))}
@@ -213,7 +223,7 @@ export function Composer(props: {
         noFiles={!props.cwd || isScratch(props.cwd)}
         above={props.above}
         disabled={props.disabled}
-        placeholder={state.running ? 'Queue a message' : 'Message Claude'}
+        placeholder={comments().length ? 'Anything to add to your comments? Optional' : state.running ? 'Queue a message' : 'Message Claude'}
         onInput={edit}
         onSubmit={submit}
         onPaste={(e) => {

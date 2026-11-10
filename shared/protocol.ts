@@ -426,11 +426,25 @@ export const IMAGE_EXTENSIONS: Record<(typeof IMAGE_TYPES)[number], string[]> = 
 /** A pasted or dropped image, base64 encoded, sent to Claude as an image block. */
 export type ImageAttachment = { mediaType: (typeof IMAGE_TYPES)[number]; data: string }
 
-/** Big pastes and images waiting in the composer to be sent. */
-export type DraftAttachments = { pastes: string[]; images: ImageAttachment[] }
+/**
+ * What a comment's on. `reply`: one of Claude's replies, by its message's uuid and which of its blocks, and what of its
+ * text as shown, characters start..end. `plan`: a plan waiting for an answer, by its request. `diff`: lines of the
+ * changes, by their rows' anchors (n<line> on the new side, o<line> for a removed line). `file`: lines of a file.
+ */
+export type CommentAnchor =
+  | { kind: 'reply'; reply: string; start?: number; end?: number }
+  | { kind: 'plan'; request: string }
+  | { kind: 'diff'; path: string; from: string; to: string; where: string }
+  | { kind: 'file'; path: string; from: number; to: number }
+
+/** A comment kept to send with others, and what it's on, as it was when it was written. */
+export type DraftComment = { id: string; on: CommentAnchor; quote: string; text: string }
+
+/** Big pastes, images and comments waiting in the composer to be sent. */
+export type DraftAttachments = { pastes: string[]; images: ImageAttachment[]; comments?: DraftComment[] }
 
 export const NO_ATTACHMENTS: DraftAttachments = { pastes: [], images: [] }
-export const hasAttachments = (a: DraftAttachments) => a.pastes.length > 0 || a.images.length > 0
+export const hasAttachments = (a: DraftAttachments) => a.pastes.length > 0 || a.images.length > 0 || !!a.comments?.length
 
 /** Where a chat that hasn't started will run: its runner, the folder there, and whether in a new worktree of it. */
 export type StartAt = { machine: string; cwd?: string; worktree?: boolean }
@@ -531,6 +545,8 @@ export type ClientEvent =
       /** Big pastes, sent after the text as attachments. */
       pastes?: string[]
       images?: ImageAttachment[]
+      /** Comments on what Claude wrote, in the order they're on: the message is them, then the text (shared/comments.ts). */
+      comments?: DraftComment[]
       cwd?: string
       /** Where a new chat runs; an existing one stays on its own machine. Defaults to the hub's. */
       machine?: string

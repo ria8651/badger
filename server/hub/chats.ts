@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { WebSocket } from 'ws'
+import { commentsMessage } from '../../shared/comments.ts'
 import { SIDE_NOTE, renderMoveNote } from '../../shared/forkNote.ts'
 import {
   LOCAL_MACHINE,
@@ -395,7 +396,7 @@ export class Chats {
         const saved = meta.draft(event.sessionId)
         return this.editDraft(event.sessionId, {
           text: [message.text, saved.text].filter(Boolean).join('\n\n'),
-          attachments: { pastes: [...message.pastes, ...saved.attachments.pastes], images: [...message.images, ...saved.attachments.images] },
+          attachments: { ...saved.attachments, pastes: [...message.pastes, ...saved.attachments.pastes], images: [...message.images, ...saved.attachments.images] },
         })
       }
       case 'interrupt':
@@ -468,7 +469,9 @@ export class Chats {
 
   private async send(ws: WebSocket, event: Extract<ChatEvent, { type: 'send' }>): Promise<void> {
     const { meta, machines, placement, attention } = this.d
-    const { sessionId, text, pastes = [], images = [] } = event
+    const { sessionId, text: note, pastes = [], images = [], comments = [] } = event
+    // Comments go ahead of what was typed, each under what it's on.
+    const text = commentsMessage(comments, note, { guided: meta.isReview(sessionId) })
     // A chat stays where it started; a new one goes where it was asked to.
     const placed = placement.machineOf(sessionId)
     const machine = placed ?? (event.machine || LOCAL_MACHINE)
@@ -493,9 +496,13 @@ export class Chats {
       // Turned away, so it never started: it can go elsewhere. Anything else, e.g. the connection dropping, it may have.
       if (!placed && err instanceof BadRequest) placement.unassign(sessionId, machine)
       // The message goes back in the composer, unless something's been typed since; for a chat that's still to start,
-      // with where it was to.
+      // with where it was to. Its comments go back as comments, with any made since.
       const start = placement.machineOf(sessionId) ? undefined : { machine, cwd: event.cwd, worktree: event.worktree !== undefined }
-      if (!meta.draft(sessionId).text) this.editDraft(sessionId, { text, attachments: { pastes, images }, start })
+      const saved = meta.draft(sessionId)
+      if (!saved.text) {
+        const since = (saved.attachments.comments ?? []).filter((c) => !comments.some((s) => s.id === c.id))
+        this.editDraft(sessionId, { text: note, attachments: { pastes, images, comments: [...comments, ...since] }, start })
+      }
       throw err
     }
   }

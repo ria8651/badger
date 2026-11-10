@@ -1,8 +1,9 @@
 import { For, Show, createContext, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack, useContext, type JSX } from 'solid-js'
 import { createStore } from 'solid-js/store'
 import { Check, ChevronDown, ChevronRight, FileText, MessageSquarePlus, RotateCw, Trash2 } from '../icons'
-import type { ReviewAttention, ReviewDiff, ReviewFile, ReviewGroup, ReviewGuide, ReviewHunk, WireMessage } from '../../shared/protocol.ts'
+import type { DraftComment, ReviewAttention, ReviewDiff, ReviewFile, ReviewGroup, ReviewGuide, ReviewHunk, WireMessage } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
+import { useComments } from '../comments.ts'
 import { SIGN, anchorOf, digitsOf, rowsFor, startOf, type Line, type Row } from '../diffRows.ts'
 import { plural } from '../format.ts'
 import { highlight, languageOf } from '../highlight.ts'
@@ -54,7 +55,8 @@ interface Question extends Note {
 }
 
 interface Saved {
-  comments: Note[]
+  /** Comments from before they were kept with the chat's draft, moved there when it's next opened. */
+  comments?: Note[]
   /** A note on the whole thing, sent with the comments. */
   general: string
   /** Hunk ids. A hunk that changes gets a new id, so it's unread again. */
@@ -62,7 +64,7 @@ interface Saved {
   questions: Question[]
 }
 
-const EMPTY: Saved = { comments: [], general: '', viewed: [], questions: [] }
+const EMPTY: Saved = { general: '', viewed: [], questions: [] }
 const stores = new Map<string, ReturnType<typeof createSignal<Saved>>>()
 /** By chat, and whether it's a guided review or a chat's diff, so a chat's diff and its review don't share. */
 const storeKey = (session: string, guided: boolean) => `badger.${guided ? 'review2' : 'diff'}.${session}`
@@ -351,15 +353,10 @@ function outlineRows(hunks: Placed[]): OutlineRow[] {
 
 const quote = (n: Note) => `${n.path}, ${n.where}:\n\`\`\`diff\n${n.code}\n\`\`\``
 
-function commentsMessage(comments: Note[], general: string): string {
-  return [
-    `I left ${plural(comments.length, 'comment')} on the changes. Make the changes they ask for, and say if you disagree with any. Then update the guide for what changed (${GROUP_TOOL}, then ${DONE_TOOL}).`,
-    general.trim(),
-    ...comments.map((c) => `${quote(c)}\n${c.text.trim()}`),
-  ]
-    .filter(Boolean)
-    .join('\n\n')
-}
+/** A note as one of the chat's comments, which say what they quote the same way (shared/comments.ts), and back. */
+const asComment = (n: Note): DraftComment => ({ id: n.id, on: { kind: 'diff', path: n.path, from: n.from, to: n.to, where: n.where }, quote: n.code, text: n.text })
+const asNote = (c: DraftComment): Note | undefined =>
+  c.on.kind === 'diff' ? { id: c.id, path: c.on.path, from: c.on.from, to: c.on.to, where: c.on.where, code: c.quote, text: c.text } : undefined
 
 const questionMessage = (n: Note) => `A question about ${quote(n)}\n${n.text.trim()}\n\n(Just answer; don't change anything for this.)`
 
@@ -411,8 +408,8 @@ export function ReviewPage(props: {
   index: () => Index
   /** Read again when a turn ends, since that's when files change. */
   running: boolean
-  /** Sends a message to the chat; absent when it can't take one. */
-  onSend?: (text: string) => void
+  /** Sends a message to the chat, with all its comments if asked; absent when it can't take one. */
+  onSend?: (text: string, comments?: boolean) => void
   /** A chat's diff: starts a guided review of the changes, or opens the one there is. */
   onGuide?: () => void
   /** In a panel: how to focus it. */
@@ -437,6 +434,13 @@ export function ReviewPage(props: {
     untrack(() => props.sessionId),
     untrack(() => props.guided),
   )
+  // Comments are the chat's, kept with its draft and sent with its next message, wherever they were made.
+  const kept = useComments()
+  const legacy = untrack(saved).comments
+  if (kept && legacy?.length) {
+    for (const n of legacy) kept.save(asComment(n))
+    update(({ comments: _, ...s }) => s)
+  }
   const openFile = useOpenFile()
   const [diff, setDiff] = createSignal<ReviewDiff>()
   /** Opens a file of the changes whole, at a line if given; not one that's been deleted, which has nothing to show. */
@@ -485,7 +489,19 @@ export function ReviewPage(props: {
   )
   const guide = () => told().guide
   // Each part of what's kept on its own, so typing an overall comment or ticking a hunk doesn't redo the rest.
-  const comments = createMemo(() => saved().comments)
+  // The chat's comments on lines of the changes, as notes; one that's the same as before stays the same object.
+  let notes = new Map<string, Note>()
+  const comments = createMemo(() => {
+    const was = notes
+    notes = new Map()
+    for (const c of kept?.all() ?? []) {
+      const n = asNote(c)
+      if (!n) continue
+      const before = was.get(n.id)
+      notes.set(n.id, before && JSON.stringify(before) === JSON.stringify(n) ? before : n)
+    }
+    return [...notes.values()]
+  })
   const questions = createMemo(() => saved().questions)
   const commentsIn = createMemo(() => byPath(comments()))
   const questionsIn = createMemo(() => byPath(questions()))
@@ -585,8 +601,8 @@ export function ReviewPage(props: {
   }
   const saveComment = (rows: Row[], path: string) => {
     const note = noteOf(rows, path)
-    const editing = draft()?.id
-    if (note) update((s) => ({ ...s, comments: editing ? s.comments.map((c) => (c.id === editing ? { ...c, text: note.text } : c)) : [...s.comments, note] }))
+    const editing = draft()?.id && comments().find((c) => c.id === draft()!.id)
+    if (note) kept?.save(asComment(editing ? { ...editing, text: note.text } : note))
     closeDraft()
   }
   const ask = (rows: Row[], path: string) => {
@@ -597,20 +613,22 @@ export function ReviewPage(props: {
     update((s) => ({ ...s, questions: [...s.questions, { ...note, message }] }))
     closeDraft()
   }
-  const removeComment = (id: string) => update((s) => ({ ...s, comments: s.comments.filter((c) => c.id !== id) }))
+  const removeComment = (id: string) => kept?.remove(id)
   const removeQuestion = (id: string) => update((s) => ({ ...s, questions: s.questions.filter((q) => q.id !== id) }))
 
+  /** All the chat's comments go, those made on its replies too, with the note on the whole. */
+  const sending = () => kept?.all().length ?? 0
   const send = () => {
     const s = saved()
-    if (!props.onSend || (!s.comments.length && !s.general.trim())) return
-    props.onSend(commentsMessage(s.comments, s.general))
-    update((x) => ({ ...x, comments: [], general: '' }))
+    if (!props.onSend || (!sending() && !s.general.trim())) return
+    props.onSend(s.general.trim(), true)
+    update((x) => ({ ...x, general: '' }))
     setWriting(false)
   }
 
   /** A comment on the whole being started, before anything's typed. */
   const [writing, setWriting] = createSignal(false)
-  const commenting = () => writing() || comments().length > 0 || !!saved().general.trim()
+  const commenting = () => writing() || sending() > 0 || !!saved().general.trim()
   let generalBox: HTMLTextAreaElement | undefined
   const startComment = () => {
     setWriting(true)
@@ -1090,19 +1108,19 @@ export function ReviewPage(props: {
               // Left empty, with nothing else to send, it goes away again.
               onBlur={() => setWriting(false)}
               onKeyDown={(e) => e.key === 'Escape' && !saved().general.trim() && e.currentTarget.blur()}
-              placeholder={comments().length ? `Anything to add to the ${plural(comments().length, 'comment')} on lines? Optional` : 'A comment on the changes as a whole'}
+              placeholder={sending() ? `Anything to add to your ${plural(sending(), 'comment')}? Optional` : 'A comment on the changes as a whole'}
               rows={1}
               // Grows with what's typed, as the composer does.
               class={`${noteClass} min-w-0 flex-1`}
             />
             <Button
               primary
-              disabled={!props.onSend || (!saved().comments.length && !saved().general.trim())}
+              disabled={!props.onSend || (!sending() && !saved().general.trim())}
               onClick={send}
-              title={props.guided ? 'Claude acts on them, then updates the guide' : 'To this chat, for Claude to act on'}
+              title={`${props.guided ? 'Claude acts on them, then updates the guide' : 'To this chat, for Claude to act on'}. Your comments on its replies go too.`}
               class="shrink-0"
             >
-              {saved().comments.length ? `Send ${plural(saved().comments.length, 'comment')}` : props.guided ? 'Send to Claude' : 'Send'}
+              {sending() ? `Send ${plural(sending(), 'comment')}` : props.guided ? 'Send to Claude' : 'Send'}
             </Button>
           </div>
           </Show>
