@@ -54,7 +54,33 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
   const view = createMemo(() => buildView(props.messages, !!props.nested))
   const folded = createMemo(() => foldWork(view().items))
   const full = () => detail() === 'full' && !props.folded
-  const rows = (): Row[] => (full() ? view().items : folded().rows)
+  /**
+   * What Claude's saying as it streams, a row of its own that the reply it becomes then takes the place of, so it isn't
+   * drawn again when it's done: by the API message it's in, and which of the message's replies it is.
+   */
+  const streams = new Map<string, Streamed>()
+  const streamed = (key: string) => {
+    let s = streams.get(key)
+    if (!s) streams.set(key, (s = streamedRow()))
+    return s
+  }
+  const rows = createMemo((): Row[] => {
+    const seen = new Map<string, number>()
+    const out = (full() ? view().items : folded().rows).map((r) => {
+      if (r.kind !== 'text' || !r.streamed) return r
+      const n = seen.get(r.streamed) ?? 0
+      seen.set(r.streamed, n + 1)
+      const s = streams.get(`${r.streamed}#${n}`)
+      if (!s) return r
+      s.set(r.text)
+      return s.item
+    })
+    const p = props.partial
+    if (p?.type !== 'text' || !p.text) return out
+    const s = streamed(`${p.messageId}#${seen.get(p.messageId) ?? 0}`)
+    s.set(p.text)
+    return [...out, s.item]
+  })
 
   const toolName = () => props.partial?.toolName ?? ''
   const liveInput = streamedInput(() => (props.partial?.type === 'tool_use' ? props.partial.text : undefined))
@@ -273,16 +299,27 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
       >
         {partialWork()}
       </Show>
-      <Show when={props.partial?.type === 'text' && props.partial.text}>
-        <div class="my-4">
-          <Markdown text={props.partial?.text ?? ''} />
-        </div>
-      </Show>
       <Show when={props.compacting} fallback={<Show when={full() && props.working && !props.partial}><WorkingLine /></Show>}>
         {(since) => <CompactingLine since={since()} tokens={lastContext(props.messages)} />}
       </Show>
     </div>
   )
+}
+
+type Streamed = { item: Extract<Item, { kind: 'text' }>; set: (text: string) => void }
+
+/** A reply's row whose text changes: as it streams, then as the message it became. */
+function streamedRow(): Streamed {
+  const [text, setText] = createSignal('')
+  return {
+    item: {
+      kind: 'text',
+      get text() {
+        return text()
+      },
+    },
+    set: setText,
+  }
 }
 
 /**
