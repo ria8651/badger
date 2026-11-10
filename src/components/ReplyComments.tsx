@@ -20,13 +20,22 @@ const NOT_TEXT = `.code-head, .diagram, .${HOST}`
 /** Blocks a comment goes under: the innermost one the end of what it's on is in. */
 const BLOCK = 'p, li, .code-block, table, blockquote, h1, h2, h3, h4, h5, h6'
 
-/** A reply's text, node by node. */
-function textNodes(root: HTMLElement): Text[] {
+/**
+ * A reply's text, node by node, and how much of each counts. A code block's own text ends in a line break until it's
+ * highlighted, which then drops it, so that's never counted: where things are mustn't move as it is.
+ */
+function textNodes(root: HTMLElement): { t: Text; length: number }[] {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode: (n) => (n.parentElement?.closest(NOT_TEXT) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
   })
-  const out: Text[] = []
-  while (walker.nextNode()) out.push(walker.currentNode as Text)
+  const out: { t: Text; length: number }[] = []
+  while (walker.nextNode()) out.push({ t: walker.currentNode as Text, length: (walker.currentNode as Text).length })
+  for (let i = 0; i < out.length; i++) {
+    const { t } = out[i]
+    const code = t.parentElement?.closest('pre code')
+    const last = out[i + 1]?.t.parentElement?.closest('pre code') !== code
+    if (code && last && t.data.endsWith('\n')) out[i].length--
+  }
   return out
 }
 
@@ -35,10 +44,10 @@ function offsetOf(root: HTMLElement, node: Node, offset: number): number {
   const point = document.createRange()
   point.setStart(node, offset)
   let n = 0
-  for (const t of textNodes(root)) {
-    if (t === node) return n + offset
+  for (const { t, length } of textNodes(root)) {
+    if (t === node) return n + Math.min(offset, length)
     if (point.comparePoint(t, t.length) !== -1) return n
-    n += t.length
+    n += length
   }
   return n
 }
@@ -48,16 +57,16 @@ function rangeOf(root: HTMLElement, from: number, to: number): { range: Range; l
   const range = document.createRange()
   let n = 0
   let started = false
-  for (const t of textNodes(root)) {
-    if (!started && from < n + t.length) {
+  for (const { t, length } of textNodes(root)) {
+    if (!started && from < n + length) {
       range.setStart(t, from - n)
       started = true
     }
-    if (started && to <= n + t.length) {
+    if (started && to <= n + length) {
       range.setEnd(t, to - n)
       return { range, last: t }
     }
-    n += t.length
+    n += length
   }
 }
 
@@ -80,7 +89,7 @@ const onReply = (c: { on: CommentAnchor }, id: string | undefined): c is { on: E
  * One of Claude's replies. Once it's done, which gives it an id, it can be commented on: each comment is shown under
  * the block it's on, with what it's on drawn behind the text.
  */
-export function ReplyBody(props: { id?: string; text: string }) {
+export function ReplyBody(props: { id?: string; text: string; /** Its shell blocks can be run once it's done. */ done: boolean }) {
   const api = useComments()
   let el!: HTMLDivElement
   let marks!: SVGSVGElement
@@ -89,11 +98,12 @@ export function ReplyBody(props: { id?: string; text: string }) {
   const [drawn, setDrawn] = createSignal(0)
   onMount(() => {
     const bump = () => setDrawn((n) => n + 1)
+    // Its blocks drawn again, or code in it highlighted; not the hosts this puts in it, nor the comments in those.
+    const ours = (n: Node) => (n instanceof Element ? n : n.parentElement)?.closest(`.${HOST}`)
     const changed = new MutationObserver((records) => {
-      // Not for the hosts this puts in it.
-      if (records.some((r) => [...r.addedNodes, ...r.removedNodes].some((n) => !(n instanceof HTMLElement && n.classList.contains(HOST))))) bump()
+      if (records.some((r) => !ours(r.target) && [...r.addedNodes, ...r.removedNodes].some((n) => !ours(n)))) bump()
     })
-    changed.observe(root(), { childList: true })
+    changed.observe(root(), { childList: true, subtree: true })
     bump()
     onCleanup(() => changed.disconnect())
   })
@@ -155,7 +165,7 @@ export function ReplyBody(props: { id?: string; text: string }) {
       const got = from !== undefined && to !== undefined && to > from ? rangeOf(r, from, to) : undefined
       if (!got) return []
       const out: Box[] = []
-      for (const t of textNodes(r)) {
+      for (const { t } of textNodes(r)) {
         if (!got.range.intersectsNode(t)) continue
         const part = document.createRange()
         part.selectNodeContents(t)
@@ -216,7 +226,7 @@ export function ReplyBody(props: { id?: string; text: string }) {
   return (
     <div ref={el} data-comments-on={props.id} class="relative isolate">
       <svg ref={marks} class="pointer-events-none absolute inset-0 -z-10 size-full overflow-visible" aria-hidden="true" />
-      <Markdown text={props.text} runnable />
+      <Markdown text={props.text} runnable={props.done} />
       <For each={[...placed().keys()]}>
         {(host) => (
           <Portal mount={host}>

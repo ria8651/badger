@@ -51,11 +51,13 @@ function where(c: Pick<DraftComment, 'on'>): string {
   }
 }
 
-const attr = (s: string) => s.replace(/["\n]/g, ' ')
+const attr = (s: string) => s.replace(/"/g, "'").replace(/\n/g, ' ')
+/** Text that can't end the tags it's in early, should it hold one of their own ends. */
+const inside = (s: string) => s.replace(/<\/(comment|quote)>/g, '</$1​>')
 /** A comment, tagged: what it's on, its quote of that, and what was said, which a question has none of here. */
 const tagged = (c: Pick<DraftComment, 'on' | 'quote' | 'text'>) => {
   const quote = c.on.kind === 'reply' || c.on.kind === 'plan' ? clip(c.quote.trim(), QUOTE_MAX) : c.quote
-  return `<comment kind="${c.on.kind}" on="${attr(where(c))}" label="${attr(commentLabel(c))}">\n<quote>\n${quote}\n</quote>\n${c.text.trim()}\n</comment>`
+  return `<comment kind="${c.on.kind}" on="${attr(where(c))}" label="${attr(commentLabel(c))}">\n<quote>\n${inside(quote)}\n</quote>\n${inside(c.text.trim())}\n</comment>`
 }
 /** What Claude's asked to do with the comments, which isn't shown. */
 const ask = (lead: string) => `<comments>${lead}</comments>`

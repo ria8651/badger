@@ -182,7 +182,7 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
         // The chat's own replies can be commented on, once they're done; not a subagent's shown in it.
         return (
           <div class="my-4">
-            <ReplyBody id={props.nested ? undefined : item.id} text={item.text} />
+            <ReplyBody id={props.nested ? undefined : item.id} text={item.text} done={!!item.id} />
           </div>
         )
       case 'thinking':

@@ -13,6 +13,7 @@ import {
   type ClientEvent,
   type Draft,
   type DraftChange,
+  type DraftComment,
   type ImageAttachment,
   type PermissionMode,
   type ServerEvent,
@@ -100,6 +101,11 @@ export class Chats {
   private goneAnswers = new WeakMap<Connection, Map<string, { gone: boolean; at: number }>>()
   /** Per live chat, how many of its turns had ended when the hub last heard. */
   private turnsSeen = new Map<string, number>()
+  /**
+   * What was typed and the comments that went with a message, by its chat and text as sent, so that a queued one taken
+   * back to edit gives them back as they were, not as the message they were made into. The last few only.
+   */
+  private composed = new Map<string, { note: string; comments: DraftComment[] }>()
   /**
    * By machine, the git root of each folder it was asked about: what it said, kept while it's offline so
    * its chats' panels still have a home; or the question, while it's out, so a folder is asked once.
@@ -392,11 +398,22 @@ export class Chats {
       case 'unqueue': {
         const message = await command(event.sessionId, { type: 'unqueue', id: event.id })
         if (!message || !event.edit) return
-        // Back into the composer, ahead of anything typed since, in every tab.
+        // Back into the composer, ahead of anything typed since, in every tab; its comments as comments, if the hub
+        // still knows them, else only what was typed.
         const saved = meta.draft(event.sessionId)
+        const key = `${event.sessionId}\0${message.text}`
+        const made = this.composed.get(key)
+        this.composed.delete(key)
+        const typed = made?.note ?? splitComments(message.text).text
+        const comments = [...(made?.comments ?? []), ...(saved.attachments.comments ?? []).filter((c) => !made?.comments.some((m) => m.id === c.id))]
         return this.editDraft(event.sessionId, {
-          text: [message.text, saved.text].filter(Boolean).join('\n\n'),
-          attachments: { ...saved.attachments, pastes: [...message.pastes, ...saved.attachments.pastes], images: [...message.images, ...saved.attachments.images] },
+          text: [typed, saved.text].filter(Boolean).join('\n\n'),
+          attachments: {
+            ...saved.attachments,
+            pastes: [...message.pastes, ...saved.attachments.pastes],
+            images: [...message.images, ...saved.attachments.images],
+            comments: comments.length ? comments : undefined,
+          },
         })
       }
       case 'interrupt':
@@ -472,6 +489,10 @@ export class Chats {
     const { sessionId, text: note, pastes = [], images = [], comments = [] } = event
     // Comments go ahead of what was typed, each under what it's on.
     const text = commentsMessage(comments, note, { guided: meta.isReview(sessionId) })
+    if (comments.length) {
+      this.composed.set(`${sessionId}\0${text}`, { note, comments })
+      if (this.composed.size > 100) this.composed.delete(this.composed.keys().next().value!)
+    }
     // A chat stays where it started; a new one goes where it was asked to.
     const placed = placement.machineOf(sessionId)
     const machine = placed ?? (event.machine || LOCAL_MACHINE)
@@ -499,10 +520,9 @@ export class Chats {
       // with where it was to. Its comments go back as comments, with any made since.
       const start = placement.machineOf(sessionId) ? undefined : { machine, cwd: event.cwd, worktree: event.worktree !== undefined }
       const saved = meta.draft(sessionId)
-      if (!saved.text) {
-        const since = (saved.attachments.comments ?? []).filter((c) => !comments.some((s) => s.id === c.id))
-        this.editDraft(sessionId, { text: note, attachments: { pastes, images, comments: [...comments, ...since] }, start })
-      }
+      const since = (saved.attachments.comments ?? []).filter((c) => !comments.some((s) => s.id === c.id))
+      if (!saved.text) this.editDraft(sessionId, { text: note, attachments: { pastes, images, comments: [...comments, ...since] }, start })
+      else if (comments.length) this.editDraft(sessionId, { attachments: { ...saved.attachments, comments: [...comments, ...since] } })
       throw err
     }
   }
@@ -861,7 +881,11 @@ function askedIn(messages: WireMessage[]): string[] {
     const content = (m.message as { content?: unknown } | undefined)?.content
     const blocks = typeof content === 'string' ? [content] : Array.isArray(content) ? content.flatMap((b) => (b?.type === 'text' ? [String(b.text ?? '')] : [])) : []
     // Harness-added text (reminders, command output) is wrapped in tags.
-    const text = blocks.filter((b) => !b.trimStart().startsWith('<')).join('\n').trim()
+    const text = blocks
+      .filter((b) => !b.trimStart().startsWith('<') || b.trimStart().startsWith('<comments>'))
+      .map((b) => splitComments(b).text)
+      .join('\n')
+      .trim()
     return text ? [text.length > ASKED_EACH ? `${text.slice(0, ASKED_EACH)}…` : text] : []
   })
   while (asked.length > 2 && asked.reduce((n, a) => n + a.length, 0) > ASKED_ALL) asked.splice(1, 1)

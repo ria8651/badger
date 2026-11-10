@@ -319,11 +319,15 @@ export function ReviewPage(props: {
   )
   // Comments are the chat's, kept with its draft and sent with its next message, wherever they were made.
   const kept = useComments()
-  const legacy = untrack(saved).comments
-  if (kept && legacy?.length) {
-    for (const n of legacy) kept.save(asComment(n))
-    update(({ comments: _, ...s }) => s)
-  }
+  // Ones kept here from before move there, once its draft has come, so as not to write over what's in it.
+  createEffect(() => {
+    const legacy = saved().comments
+    if (!kept?.loaded() || !legacy?.length) return
+    untrack(() => {
+      for (const n of legacy) kept.save(asComment(n))
+      update(({ comments: _, ...s }) => s)
+    })
+  })
   const openFile = useOpenFile()
   const [diff, setDiff] = createSignal<ReviewDiff>()
   /** Opens a file of the changes whole, at a line if given; not one that's been deleted, which has nothing to show. */

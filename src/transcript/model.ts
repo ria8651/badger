@@ -475,7 +475,7 @@ export function retryOf(messages: WireMessage[], prompt?: string): { at: string;
   const i = prompt ? messages.findIndex((m) => m.uuid === prompt) : -1
   if (i < 0) return undefined
   const at = messages.slice(0, i).findLast((m) => m.type === 'assistant' && !m.parent_tool_use_id && m.uuid)?.uuid
-  return at ? { at, text: userText(messages[i]).text } : undefined
+  return at ? { at, text: splitComments(userText(messages[i]).text).text } : undefined
 }
 
 /** Why a turn stopped, from its result's subtype. */

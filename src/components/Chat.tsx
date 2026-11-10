@@ -212,6 +212,7 @@ export function Chat(props: {
     ? undefined
     : createComments({
         session: props.sessionId,
+        loaded: () => state.loaded,
         // A question goes to a side chat, forked from this one, so it knows what it's about; not from a side chat.
         canAsk: () => !props.embedded && !!ws() && state.messages.length > 0,
         ask: (question) =>
@@ -371,8 +372,11 @@ export function Chat(props: {
     // after them, which would make it text, so with one they all wait for the next message.
     const { comments: all = [], ...attached } = attachments
     const command = /^\/\S/.test(text)
-    const waiting = planPrompt()?.requestId
-    const kept = all.filter((c) => command || (c.on.kind === 'plan' && c.on.request === waiting))
+    // Its own plans waiting, and those of chats it started, which are answered from here.
+    const waiting = new Set(
+      [...state.permissions, ...children.prompts().map((c) => c.permission)].filter((p) => p.toolName === 'ExitPlanMode').map((p) => p.requestId),
+    )
+    const kept = all.filter((c) => command || (c.on.kind === 'plan' && waiting.has(c.on.request)))
     const going = inOrder(
       all.filter((c) => !kept.includes(c)),
       state.messages,
@@ -385,6 +389,8 @@ export function Chat(props: {
     }
     // A side chat's own /btw is just a message: side chats don't have side chats.
     if (!props.embedded && /^\/btw(\s|$)/.test(text)) return (askAside(text.slice(4).trim(), attached), keep())
+    // Nothing to send once the comments waiting for a plan's answer are kept back.
+    if (!text.trim() && !going.length && !attached.pastes.length && !attached.images.length) return keep()
     chat.send({
       text,
       ...attached,

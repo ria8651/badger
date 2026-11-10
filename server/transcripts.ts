@@ -437,7 +437,8 @@ function isPrompt(m: WireMessage): boolean {
   if (m.type !== 'user' || m.parent_tool_use_id || m.isMeta || m.isCompactSummary || !m.timestamp) return false
   const content = (m.message as { content?: unknown } | undefined)?.content
   // A slash command the user typed is a prompt too; other tagged text was added by Claude Code.
-  const typed = (text: string) => !text.trimStart().startsWith('<') || /^\s*<command-(message|name)>/.test(text)
+  // Comments the user sent are tagged too (shared/comments.ts).
+  const typed = (text: string) => !text.trimStart().startsWith('<') || /^\s*<(command-(message|name)|comments)>/.test(text)
   if (typeof content === 'string') return typed(content)
   return Array.isArray(content) && content.some((b) => b?.type === 'text' && typed(String(b.text)))
 }
@@ -447,8 +448,9 @@ function isPrompt(m: WireMessage): boolean {
  * that went with it (shared/comments.ts), which are tagged, and maybe cut off.
  */
 export const titleOf = (info: Pick<SDKSessionInfo, 'customTitle' | 'summary' | 'firstPrompt'> | undefined): string | undefined => {
-  const title = info?.customTitle || info?.summary || info?.firstPrompt
-  return title && (title.split('<comment')[0].trim() || 'Comments')
+  if (info?.customTitle || info?.summary) return info.customTitle || info.summary
+  const first = info?.firstPrompt
+  return first && (first.split(/<comments>|<comment kind="/)[0].trim() || 'Comments')
 }
 
 /** The model a transcript's main agent last answered with: a model id, e.g. `claude-opus-5-5`. */

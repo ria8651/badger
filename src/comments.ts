@@ -30,6 +30,8 @@ export interface Comments {
   /** Shows what a comment's on, e.g. scrolls to it or opens its file. */
   show: (c: DraftComment) => void
   /** Questions asked about what's in the chat, each in a side chat; kept in this browser, since they've gone. */
+  /** Whether the draft they're kept with has come yet. */
+  loaded: () => boolean
   asked: () => Asked[]
   /** Whether a question can be asked now: there's somewhere beside the chat to show its side chat. */
   canAsk: () => boolean
@@ -50,6 +52,8 @@ export const useComments = () => useContext(CommentsContext)
  */
 export function createComments(store: {
   session: string
+  /** Whether the chat's draft has come, before which changing it would lose what's in it. */
+  loaded: () => boolean
   list: () => DraftComment[]
   change: (f: (all: DraftComment[]) => DraftComment[]) => void
   show: (c: DraftComment) => void
@@ -86,6 +90,7 @@ export function createComments(store: {
     },
     show: store.show,
     asked,
+    loaded: store.loaded,
     canAsk: store.canAsk,
     ask: (d, text) => {
       const question = text.trim()

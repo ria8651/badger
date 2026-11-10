@@ -123,8 +123,8 @@ function keepInPlace(el: HTMLElement, change: () => void) {
  * wrap toggle, a shell fence a button to run it too, given `run`, and a mermaid
  * one is drawn as its diagram (src/diagram.ts sanitizes that itself).
  */
-function decorate(root: ParentNode, open: boolean, fence: string, run?: (command: string) => void): () => void {
-  const blocks = [...root.querySelectorAll<HTMLElement>('pre > code')]
+function decorate(nodes: Node[], open: boolean, fence: string, run?: (command: string) => void): () => void {
+  const blocks = nodes.flatMap((n) => (n instanceof Element ? [...n.querySelectorAll<HTMLElement>('pre > code')] : []))
   const stops = blocks.map((code, i) => {
     const pre = code.parentElement!
     const lang = /\blanguage-(\S+)/.exec(code.className)?.[1]?.toLowerCase()
@@ -233,7 +233,9 @@ export function Markdown(props: {
     const next: Shown[] = []
     all.forEach((group, i) => {
       const source = group.map((t) => t.raw).join('')
-      const key = palette && hasDiagram(source) ? `${source}\0${palette}` : source
+      // A shell block is drawn again once it can be run, i.e. when the reply it's in is done, to get its Run button.
+      const runs = !!run && group.some((t) => t.type === 'code' && SHELLS.has(String(t.lang).toLowerCase()))
+      const key = `${palette && hasDiagram(source) ? `${source}\0${palette}` : source}${runs ? '\0run' : ''}`
       const old = shown[i]
       if (old?.key === key) return void next.push(old)
       const { html, fence } = render(group, tokens.links)
@@ -250,11 +252,12 @@ export function Markdown(props: {
         old.nodes.forEach((n, j) => morph(n, nodes[j]))
         return void next.push({ ...old, key, nodes: old.nodes.map((n, j) => (n.isConnected ? n : nodes[j])) })
       }
-      const stop = decorate(html, open && i === all.length - 1, fence, run)
-      const placed = [...html.childNodes]
       el.insertBefore(html, old?.nodes[0] ?? shown.slice(i + 1).find((s) => s.nodes.length)?.nodes[0] ?? null)
       if (old) drop(old)
-      next.push({ key, nodes: placed, code, stop })
+      // Decorated once it's on the page, where a diagram can read the colours it's drawn in. A code block is wrapped
+      // with its header, so what's kept is what's now in the text's place.
+      const stop = decorate(nodes, open && i === all.length - 1, fence, run)
+      next.push({ key, nodes: nodes.map((n) => (n.parentNode === el ? n : (n.parentNode as Element))), code, stop })
     })
     shown.slice(all.length).forEach(drop)
     shown = next
