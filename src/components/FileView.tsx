@@ -1,12 +1,14 @@
 import { For, Index, Show, createEffect, createMemo, createResource, createSelector, createSignal, on, onMount, type JSX } from 'solid-js'
 import { RotateCw, TextWrap } from '../icons'
-import type { ReviewDiff } from '../../shared/protocol.ts'
+import type { CommentAnchor, DraftComment, ReviewDiff } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { changedLines } from '../diffRows.ts'
 import { plural } from '../format.ts'
 import { toggleWrap, wrap } from '../prefs.ts'
 import { highlight, languageOf } from '../highlight.ts'
 import { CodeRow } from './CodeRow.tsx'
+import { CommentBox, DraftBox } from './Comments.tsx'
+import { useComments, type CommentDraft } from '../comments.ts'
 import { QuoteSelection } from './QuoteSelection.tsx'
 import { Breadcrumbs } from './Breadcrumbs.tsx'
 import { Markdown } from './Markdown.tsx'
@@ -190,11 +192,39 @@ export function FileView(props: {
 
   let scroller: HTMLDivElement | undefined
   let linesEl: HTMLDivElement | undefined
-  /**
-   * Lines picked out of the file, whole, as a fenced block under where they're from, e.g. `src/a.ts:12-15`: what Claude
-   * needs to find them, whatever part of the first and last line was selected.
-   */
-  const quoted = (range: Range) => {
+  // Comments on its lines, kept with the chat's others, each under the last line it's on.
+  const kept = useComments()
+  type OnFile = DraftComment & { on: Extract<CommentAnchor, { kind: 'file' }> }
+  const isMine = (c: { on: CommentAnchor }): c is OnFile => c.on.kind === 'file' && c.on.path === props.path
+  const mine = createMemo(() => (kept?.all() ?? []).filter(isMine))
+  const writing = () => {
+    const d = kept?.draft()
+    return d && isMine(d) ? d : undefined
+  }
+  const commentsAt = createMemo(() => {
+    const at = new Map<number, OnFile[]>()
+    for (const c of mine()) at.set(c.on.to, [...(at.get(c.on.to) ?? []), c])
+    return at
+  })
+  /** The lines comments are on, the one being written's too, tinted. */
+  const commented = createMemo(() => {
+    const out = new Set<number>()
+    const w = writing()
+    for (const { on } of [...mine(), ...(w ? [w] : [])]) if (on.kind === 'file') for (let n = on.from; n <= on.to; n++) out.add(n)
+    return out
+  })
+  const draftBox = (d: CommentDraft) => (
+    <DraftBox
+      text={kept!.draftText()}
+      editing={!!d.id}
+      placeholder={d.on.kind === 'file' && d.on.to > d.on.from ? `On these ${d.on.to - d.on.from + 1} lines…` : 'On this line…'}
+      onText={kept!.setDraftText}
+      onComment={kept!.commit}
+      onCancel={() => kept!.setDraft(undefined)}
+    />
+  )
+  /** The lines picked out of the file, whole, whatever part of the first and last line was selected. */
+  const picked = (range: Range) => {
     const lineOf = (n: Node) => Number((n instanceof Element ? n : n.parentElement)?.closest<HTMLElement>('[data-line]')?.dataset.line)
     /** Whether any of line n's code is selected, rather than only where it starts or ends. */
     const takes = (n: number) => {
@@ -211,7 +241,11 @@ export function FileView(props: {
     // A drag can start after one line's end or stop at the next one's start without taking any of either.
     if (from < to && !takes(from)) from++
     if (to > from && !takes(to)) to--
-    const code = lines().slice(from - 1, to).join('\n')
+    return { from, to, code: lines().slice(from - 1, to).join('\n') }
+  }
+  /** Lines picked out of the file as a fenced block under where they're from, e.g. `src/a.ts:12-15`: what Claude needs to find them. */
+  const quoted = (range: Range) => {
+    const { from, to, code } = picked(range)
     const fence = code.includes('```') ? '````' : '```'
     return `\`${relative() ?? props.path}:${from}${to > from ? `-${to}` : ''}\`\n${fence}${languageOf(props.path) ?? ''}\n${code}\n${fence}`
   }
@@ -315,13 +349,25 @@ export function FileView(props: {
                   </OpenFile.Provider>
                 </Show>
                 <Show when={!rendered()}>
-                  <div ref={linesEl} class={`relative py-1 font-mono text-xs leading-5 ${wrap() ? '' : 'min-w-max'}`}>
+                  <div ref={linesEl} data-comments-on={kept && `file:${props.path}`} class={`relative py-1 font-mono text-xs leading-5 ${wrap() ? '' : 'min-w-max'}`}>
                     {/* The number's room and the line's padding (see CodeRow) beside the longest line, as a guess at its
                         width; lines drawn wider than their characters, as CJK and emoji are, widen it past that. */}
                     <Show when={!wrap()}>
                       <div style={{ width: `calc(${widest() + Math.max(4, String(shown().length).length)}ch + 2.25rem)` }} />
                     </Show>
-                    <Show when={props.onQuote}>{(q) => <QuoteSelection within={() => linesEl} onQuote={(_, range) => q()(quoted(range))} />}</Show>
+                    <Show when={props.onQuote || kept}>
+                      <QuoteSelection
+                        within={() => linesEl}
+                        onQuote={props.onQuote && ((_, range) => props.onQuote?.(quoted(range)))}
+                        onComment={
+                          kept &&
+                          ((_, __, range) => {
+                            const { from, to, code } = picked(range)
+                            kept.setDraft({ on: { kind: 'file', path: props.path, from, to }, quote: code })
+                          })
+                        }
+                      />
+                    </Show>
                     <For each={blocks()}>
                       {(start) => (
                         // Its height guessed until it's drawn, but no width: one length alone would be taken for both, and
@@ -334,11 +380,13 @@ export function FileView(props: {
                               const added = () => changed().added.has(n)
                               const removed = () => changed().removed.get(n)
                               return (
+                                <>
                                 <CodeRow
                                   data-line={n}
                                   number={n}
                                   digits={String(shown().length).length}
                                   lit={isLit(n)}
+                                  class={commented().has(n) ? 'bg-accent/10' : ''}
                                   // Changes only marked in the margin, so the file reads as the file: a green edge by a
                                   // line added, a small red notch where lines were taken out. Its Diff shows them.
                                   gutter={{
@@ -352,6 +400,20 @@ export function FileView(props: {
                                     {(h) => <span class={codeClass()} style={codeStyle(text())} innerHTML={h()} />}
                                   </Show>
                                 </CodeRow>
+                                {/* Comments on lines ending here, and the one being written, under them. */}
+                                <Show when={commentsAt().has(n) || writing()?.on.to === n}>
+                                  <div class="comment-host px-3 font-sans whitespace-normal">
+                                    <For each={commentsAt().get(n)}>
+                                      {(c) => (
+                                        <Show when={writing()?.id === c.id ? writing() : undefined} fallback={<CommentBox text={c.text} onEdit={() => kept!.setDraft({ ...c })} onRemove={() => kept!.remove(c.id)} />}>
+                                          {(d) => draftBox(d())}
+                                        </Show>
+                                      )}
+                                    </For>
+                                    <Show when={writing()?.on.to === n && !writing()!.id ? writing() : undefined}>{(d) => draftBox(d())}</Show>
+                                  </div>
+                                </Show>
+                                </>
                               )
                             }}
                           </Index>
