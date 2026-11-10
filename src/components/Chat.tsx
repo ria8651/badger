@@ -9,7 +9,7 @@ import { OpenFile, expandHome, useOpenFile } from '../fileLinks.ts'
 import { FileView, openingMode } from './FileView.tsx'
 import { QuoteSelection } from './QuoteSelection.tsx'
 import { anchorOf } from './ReplyComments.tsx'
-import { sideChatsOf, startSideChat } from '../btw.ts'
+import { openSideChat, sideChatsOf, startSideChat } from '../btw.ts'
 import { CommentsContext, createComments, inOrder, planAnchor } from '../comments.ts'
 import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
 import { lastModel, modelChoices, modelName, modelValue, models, setLastModel, type ModelChoice } from '../models.ts'
@@ -210,6 +210,18 @@ export function Chat(props: {
   const comments = props.host
     ? undefined
     : createComments({
+        session: props.sessionId,
+        // A question goes to a side chat, forked from this one, so it knows what it's about; not from a side chat.
+        canAsk: () => !props.embedded && !!ws() && state.messages.length > 0,
+        ask: (question) =>
+          startSideChat(ws()!, props.sessionId, { text: question, mode: mode(), model: model() }).catch((err: Error) => {
+            showError("Couldn't start a side chat", err.message)
+            throw err
+          }),
+        open: (id) => {
+          const w = ws()
+          if (w) openSideChat(w, props.sessionId, id)
+        },
         list: () => state.draft.attachments.comments ?? [],
         change: (f) => chat.editDraft({ attachments: { ...state.draft.attachments, comments: f(state.draft.attachments.comments ?? []) } }),
         show: (c) => {
@@ -428,9 +440,6 @@ export function Chat(props: {
           machine={machine()}
           index={index}
           running={state.running}
-          partial={state.partial}
-          bashOutput={state.bashOutput}
-          children={state.children}
           onSend={state.gone || stranded() ? undefined : (text, comments) => send(text, comments ? { ...NO_ATTACHMENTS, comments: state.draft.attachments.comments } : NO_ATTACHMENTS)}
           onGuide={guided ? undefined : startReview}
           onReady={opts.onReady}

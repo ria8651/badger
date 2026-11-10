@@ -1,8 +1,9 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from 'solid-js'
 import { Portal } from 'solid-js/web'
 import type { CommentAnchor, DraftComment } from '../../shared/protocol.ts'
-import { planAnchor, useComments, type CommentDraft } from '../comments.ts'
-import { CommentBox, DraftBox, blobs, type Box } from './Comments.tsx'
+import { planAnchor, useComments, type Asked, type CommentDraft } from '../comments.ts'
+import { sessionById } from '../stores/sessions.ts'
+import { AskedBox, CommentBox, DraftBox, blobs, type Box } from './Comments.tsx'
 import { Markdown } from './Markdown.tsx'
 import { QuoteSelection } from './QuoteSelection.tsx'
 
@@ -97,7 +98,8 @@ export function ReplyBody(props: { id?: string; text: string }) {
     onCleanup(() => changed.disconnect())
   })
 
-  const comments = createMemo(() => (api?.all() ?? []).filter((c) => onReply(c, props.id)))
+  /** Its comments, and questions asked about it, which show the same way. */
+  const comments = createMemo(() => ([...(api?.all() ?? []), ...(api?.asked() ?? [])] as DraftComment[]).filter((c) => onReply(c, props.id)))
   const draft = () => {
     const d = api?.draft()
     return d && onReply(d, props.id) ? d : undefined
@@ -207,6 +209,8 @@ export function ReplyBody(props: { id?: string; text: string }) {
       onText={api!.setDraftText}
       onComment={api!.commit}
       onCancel={() => api!.setDraft(undefined)}
+      onAsk={d.id ? undefined : () => api!.ask(d, api!.draftText())}
+      canAsk={api!.canAsk()}
     />
   )
   return (
@@ -217,17 +221,36 @@ export function ReplyBody(props: { id?: string; text: string }) {
         {(host) => (
           <Portal mount={host}>
             <For each={placed().get(host)?.comments}>
-              {(c) => (
-                <Show when={draft()?.id === c.id ? draft() : undefined} fallback={<CommentBox text={c.text} onEdit={() => api!.setDraft({ ...c })} onRemove={() => api!.remove(c.id)} />}>
-                  {(d) => draftBox(d())}
-                </Show>
-              )}
+              {(c) =>
+                'chat' in c ? (
+                  <AskedItem asked={c as Asked} />
+                ) : (
+                  <Show when={draft()?.id === c.id ? draft() : undefined} fallback={<CommentBox text={c.text} onEdit={() => api!.setDraft({ ...c })} onRemove={() => api!.remove(c.id)} />}>
+                    {(d) => draftBox(d())}
+                  </Show>
+                )
+              }
             </For>
             <Show when={placed().get(host)?.draft && draft()}>{(d) => draftBox(d())}</Show>
           </Portal>
         )}
       </For>
     </div>
+  )
+}
+
+/** A question asked about something, where it was asked, with its side chat to open beside the chat. */
+export function AskedItem(props: { asked: Asked; label?: string; class?: string }) {
+  const api = useComments()!
+  return (
+    <AskedBox
+      label={props.label}
+      text={props.asked.text}
+      running={!!sessionById(props.asked.chat)?.running}
+      onOpen={() => api.open(props.asked)}
+      onRemove={() => api.forget(props.asked.id)}
+      class={props.class}
+    />
   )
 }
 
@@ -257,6 +280,8 @@ export function CommentablePlan(props: { requestId: string; class?: string; chil
         onText={api!.setDraftText}
         onComment={api!.commit}
         onCancel={() => api!.setDraft(undefined)}
+        onAsk={d.id ? undefined : () => api!.ask(d, api!.draftText())}
+        canAsk={api!.canAsk()}
       />
     </>
   )
@@ -277,6 +302,7 @@ export function CommentablePlan(props: { requestId: string; class?: string; chil
             </Show>
           )}
         </For>
+        <For each={api!.asked().filter(mine)}>{(a) => <AskedItem asked={a} label={`You asked about “${label(a.quote).slice(4, -1)}”`} />}</For>
         <Show when={writing() && !writing()!.id ? writing() : undefined}>{(d) => draftBox(d())}</Show>
       </Show>
     </>

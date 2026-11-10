@@ -1,6 +1,6 @@
 import { Show, onMount } from 'solid-js'
-import { Trash2 } from '../icons'
-import { Button } from './ui.tsx'
+import { PanelRight, Trash2, X } from '../icons'
+import { Button, LiveDot } from './ui.tsx'
 
 /*
  * How comments look, wherever they're made: on lines of the changes (Review.tsx), on Claude's replies and plans
@@ -137,6 +137,29 @@ export function DraftBox(props: {
         </Button>
         <span class="text-xs text-fg-3">⌘/Ctrl+Enter to add</span>
       </div>
+    </div>
+  )
+}
+
+/** A question asked about what it's under, in a side chat that can be opened beside the chat. */
+export function AskedBox(props: { label?: string; text: string; running: boolean; onOpen: () => void; onRemove: () => void; class?: string }) {
+  return (
+    <div class={`${boxClass} group/c border-accent/30 bg-accent/5 ${props.class ?? ''}`}>
+      <div class="mb-0.5 flex items-center gap-2 text-xs text-fg-3">
+        <span class="min-w-0 truncate">{props.label ?? 'You asked, in a side chat'}</span>
+        <Show when={props.running}>
+          <LiveDot />
+        </Show>
+        <div class="flex-1" />
+        <button type="button" onClick={props.onRemove} title="Take it off here (the side chat stays)" class="opacity-0 group-hover/c:opacity-100 hover:text-fg-2 pointer-coarse:opacity-100">
+          <X class="size-3" />
+        </button>
+      </div>
+      <p class="whitespace-pre-wrap text-fg">{props.text}</p>
+      <button type="button" onClick={props.onOpen} class="mt-1 flex items-center gap-1.5 text-xs text-fg-3 hover:text-fg-2">
+        <PanelRight class="size-3.5" />
+        Open beside
+      </button>
     </div>
   )
 }

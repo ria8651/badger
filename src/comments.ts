@@ -1,4 +1,5 @@
 import { createContext, createSignal, useContext } from 'solid-js'
+import { questionMessage } from '../shared/comments.ts'
 import type { CommentAnchor, DraftComment, WireMessage } from '../shared/protocol.ts'
 
 /*
@@ -8,6 +9,9 @@ import type { CommentAnchor, DraftComment, WireMessage } from '../shared/protoco
 
 /** A comment being written: what it's on, and with an id, the comment it's editing. */
 export type CommentDraft = { on: CommentAnchor; quote: string; id?: string }
+
+/** A question asked about something instead, in a side chat of its own, `chat`, shown where it was asked. */
+export type Asked = DraftComment & { chat: string }
 
 export interface Comments {
   all: () => DraftComment[]
@@ -24,20 +28,42 @@ export interface Comments {
   commit: () => void
   /** Shows what a comment's on, e.g. scrolls to it or opens its file. */
   show: (c: DraftComment) => void
+  /** Questions asked about what's in the chat, each in a side chat; kept in this browser, since they've gone. */
+  asked: () => Asked[]
+  /** Whether a question can be asked now: there's somewhere beside the chat to show its side chat. */
+  canAsk: () => boolean
+  /** Asks about what `d` is on, `text`, in a new side chat, and stops writing. */
+  ask: (d: CommentDraft, text: string) => void
+  forget: (id: string) => void
+  /** Shows a question's side chat beside the chat. */
+  open: (a: Asked) => void
 }
 
 /** Given, what Claude wrote can be commented on. */
 export const CommentsContext = createContext<Comments>()
 export const useComments = () => useContext(CommentsContext)
 
-/** A chat's comments, kept through `list` and `change`, its draft's. */
+/**
+ * A chat's comments, kept through `list` and `change`, its draft's; and the questions asked in it, through `ask`, which
+ * starts a side chat with the question and gives its id, and `open`, which shows one.
+ */
 export function createComments(store: {
+  session: string
   list: () => DraftComment[]
   change: (f: (all: DraftComment[]) => DraftComment[]) => void
   show: (c: DraftComment) => void
+  ask: (question: string) => Promise<string>
+  canAsk: () => boolean
+  open: (chat: string) => void
 }): Comments {
   const [draft, setCurrent] = createSignal<CommentDraft>()
   const [draftText, setDraftText] = createSignal('')
+  const key = `badger.asked.${store.session}`
+  const [asked, setAsked] = createSignal<Asked[]>(read(key))
+  const keep = (f: (all: Asked[]) => Asked[]) => {
+    setAsked(f)
+    localStorage.setItem(key, JSON.stringify(asked()))
+  }
   const save = (c: DraftComment) => store.change((all) => (all.some((x) => x.id === c.id) ? all.map((x) => (x.id === c.id ? c : x)) : [...all, c]))
   const setDraft = (d: CommentDraft | undefined) => {
     setCurrent(d)
@@ -58,6 +84,28 @@ export function createComments(store: {
       setDraft(undefined)
     },
     show: store.show,
+    asked,
+    canAsk: store.canAsk,
+    ask: (d, text) => {
+      const question = text.trim()
+      if (!question || !store.canAsk()) return
+      setDraft(undefined)
+      void store.ask(questionMessage({ on: d.on, quote: d.quote, text: question })).then(
+        (chat) => keep((all) => [...all, { id: crypto.randomUUID(), on: d.on, quote: d.quote, text: question, chat }]),
+        () => {},
+      )
+    },
+    forget: (id) => keep((all) => all.filter((a) => a.id !== id)),
+    open: (a) => store.open(a.chat),
+  }
+}
+
+function read(key: string): Asked[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(key) ?? '[]')
+    return Array.isArray(v) ? v : []
+  } catch {
+    return []
   }
 }
 

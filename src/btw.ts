@@ -28,18 +28,25 @@ export const forkingSideChat = (parent: string) => (forking()[parent] ?? 0) > 0
 
 const count = (parent: string, by: number) => setForking((f) => ({ ...f, [parent]: (f[parent] ?? 0) + by }))
 
-/** Forks a side chat, sending it `first.text` if there is any, and shows it in the chat's panel. */
+/** Forks a side chat, sending it `first.text` if there is any, and shows it in the chat's panel. Gives its id. */
 export async function startSideChat(
   ws: Ws,
   parent: string,
   first: Partial<DraftAttachments> & { text?: string; mode?: PermissionMode; model?: string } = {},
-): Promise<void> {
+): Promise<string> {
   openView(ws, btwView(parent))
   count(parent, 1)
   try {
     const { sessionId } = await api.btw(parent, first)
     pickSideChat(parent, sessionId)
+    return sessionId
   } finally {
     count(parent, -1)
   }
+}
+
+/** Shows one of a chat's side chats in its panel. */
+export function openSideChat(ws: Ws, parent: string, id: string): void {
+  pickSideChat(parent, id)
+  openView(ws, btwView(parent))
 }

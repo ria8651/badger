@@ -32,6 +32,11 @@ function quoted(c: DraftComment): string {
   }
 }
 
+/** A question about what a comment would be on, asked in a side chat rather than kept to send. */
+export const questionMessage = (c: Omit<DraftComment, 'id'>) =>
+  // The question first, which the side chat's named for.
+  `${c.text.trim()}\n\nAsking about this:\n\n${quoted({ ...c, id: '' })}\n\n(Just answer; don't change anything for this.)`
+
 /** Said after the comments' lead in a guided review, which is kept up to date with what changes. */
 export const GUIDE_AFTER_COMMENTS = 'Then update the guide for what changed (review_guide_group, then review_guide_done).'
 

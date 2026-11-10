@@ -8,7 +8,8 @@ import { toggleWrap, wrap } from '../prefs.ts'
 import { highlight, languageOf } from '../highlight.ts'
 import { CodeRow } from './CodeRow.tsx'
 import { CommentBox, DraftBox } from './Comments.tsx'
-import { useComments, type CommentDraft } from '../comments.ts'
+import { useComments, type Asked, type CommentDraft } from '../comments.ts'
+import { AskedItem } from './ReplyComments.tsx'
 import { QuoteSelection } from './QuoteSelection.tsx'
 import { Breadcrumbs } from './Breadcrumbs.tsx'
 import { Markdown } from './Markdown.tsx'
@@ -196,7 +197,8 @@ export function FileView(props: {
   const kept = useComments()
   type OnFile = DraftComment & { on: Extract<CommentAnchor, { kind: 'file' }> }
   const isMine = (c: { on: CommentAnchor }): c is OnFile => c.on.kind === 'file' && c.on.path === props.path
-  const mine = createMemo(() => (kept?.all() ?? []).filter(isMine))
+  // Questions asked about its lines show with them too.
+  const mine = createMemo(() => ([...(kept?.all() ?? []), ...(kept?.asked() ?? [])] as DraftComment[]).filter(isMine))
   const writing = () => {
     const d = kept?.draft()
     return d && isMine(d) ? d : undefined
@@ -221,6 +223,8 @@ export function FileView(props: {
       onText={kept!.setDraftText}
       onComment={kept!.commit}
       onCancel={() => kept!.setDraft(undefined)}
+      onAsk={d.id ? undefined : () => kept!.ask(d, kept!.draftText())}
+      canAsk={kept!.canAsk()}
     />
   )
   /** The lines picked out of the file, whole, whatever part of the first and last line was selected. */
@@ -404,11 +408,15 @@ export function FileView(props: {
                                 <Show when={commentsAt().has(n) || writing()?.on.to === n}>
                                   <div class="comment-host px-3 font-sans whitespace-normal">
                                     <For each={commentsAt().get(n)}>
-                                      {(c) => (
-                                        <Show when={writing()?.id === c.id ? writing() : undefined} fallback={<CommentBox text={c.text} onEdit={() => kept!.setDraft({ ...c })} onRemove={() => kept!.remove(c.id)} />}>
-                                          {(d) => draftBox(d())}
-                                        </Show>
-                                      )}
+                                      {(c) =>
+                                        'chat' in c ? (
+                                          <AskedItem asked={c as Asked} />
+                                        ) : (
+                                          <Show when={writing()?.id === c.id ? writing() : undefined} fallback={<CommentBox text={c.text} onEdit={() => kept!.setDraft({ ...c })} onRemove={() => kept!.remove(c.id)} />}>
+                                            {(d) => draftBox(d())}
+                                          </Show>
+                                        )
+                                      }
                                     </For>
                                     <Show when={writing()?.on.to === n && !writing()!.id ? writing() : undefined}>{(d) => draftBox(d())}</Show>
                                   </div>
