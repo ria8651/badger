@@ -6,7 +6,7 @@ import { chatCommands, useChecking, type Partial } from '../useChat.ts'
 import { AgentRun, ChildRun } from '../transcript/agents.tsx'
 import { NONE, TranscriptIndex, createIndex, useIndex } from '../transcript/context.ts'
 import { ApiError, CardContextBadge, CompactDivider, CompactingLine, Idle, Notice, Thinking, UserMessage, WorkingLine, contextChip } from '../transcript/items.tsx'
-import { buildView, duration, foldWork, lastContext, modelName, retryOf, stopReason, within, type Index, type Item, type Row, type Work } from '../transcript/model.ts'
+import { buildView, duration, foldWork, lastContext, modelName, retryOf, stopReason, streamingUpdate, within, type Index, type Item, type Row, type Work } from '../transcript/model.ts'
 import { Attachments } from './Attachments.tsx'
 import { Markdown } from './Markdown.tsx'
 import { Disclosure, Pre, ToolCard, ToolInput, toolLabel, toolSummary } from './ToolCard.tsx'
@@ -55,16 +55,21 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
   const folded = createMemo(() => foldWork(view().items))
   const full = () => detail() === 'full' && !props.folded
   const rows = (): Row[] => (full() ? view().items : folded().rows)
+  // A thinking block straight after another is an update, said rather than thought, so it streams as text.
+  const partial = createMemo((): Partial | null => {
+    const p = props.partial
+    return p?.type === 'thinking' && streamingUpdate(props.messages, p.messageId) ? { ...p, type: 'text' } : p
+  })
 
-  const toolName = () => props.partial?.toolName ?? ''
-  const liveInput = streamedInput(() => (props.partial?.type === 'tool_use' ? props.partial.text : undefined))
+  const toolName = () => partial()?.toolName ?? ''
+  const liveInput = streamedInput(() => (partial()?.type === 'tool_use' ? partial()?.text : undefined))
 
   const partialWork = () => (
     <>
-      <Show when={props.partial?.type === 'thinking'}>
-        <Thinking text={props.partial?.text ?? ''} live />
+      <Show when={partial()?.type === 'thinking'}>
+        <Thinking text={partial()?.text ?? ''} live />
       </Show>
-      <Show when={props.partial?.type === 'tool_use'}>
+      <Show when={partial()?.type === 'tool_use'}>
         <Disclosure
           label={toolName() ? toolLabel(toolName()) : 'Tool'}
           detail={toolName() ? toolSummary(toolName(), liveInput(), props.cwd) : undefined}
@@ -79,7 +84,7 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
 
   /** What the live work row says Claude is doing right now. */
   const activity = (items: Item[]) => {
-    const p = props.partial
+    const p = partial()
     if (p?.type === 'tool_use') return p.toolName ? `${toolLabel(p.toolName)} ${toolSummary(p.toolName, liveInput(), props.cwd)}`.trim() : ''
     if (p?.type === 'thinking') return 'Thinking'
     const last = items.findLast((i) => i.kind === 'tool' || i.kind === 'thinking')
@@ -97,7 +102,7 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
   const WorkRow = (p: { work?: Work }) => {
     const items = () => (p.work && folded().groups.get(p.work)) || []
     const live = () => props.running && (!p.work || folded().tail === p.work)
-    const checking = () => live() && !props.partial && items().some((i) => i.kind === 'tool' && isChecking(i.id))
+    const checking = () => live() && !partial() && items().some((i) => i.kind === 'tool' && isChecking(i.id))
     const steps = () => items().filter((i) => i.kind === 'tool').length
     createEffect(() => p.work && live() && following() && !watched().has(p.work) && setWatched(new Set(watched()).add(p.work)))
     return (
@@ -264,8 +269,8 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
         when={full()}
         fallback={
           // No work row at the end: the turn has just started, or Claude has just said something.
-          <Show when={props.running && !props.compacting && !folded().tail && props.partial?.type !== 'text'}>
-            <Show when={props.partial} fallback={<WorkingLine />}>
+          <Show when={props.running && !props.compacting && !folded().tail && partial()?.type !== 'text'}>
+            <Show when={partial()} fallback={<WorkingLine />}>
               <WorkRow />
             </Show>
           </Show>
@@ -273,12 +278,12 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
       >
         {partialWork()}
       </Show>
-      <Show when={props.partial?.type === 'text' && props.partial.text}>
+      <Show when={partial()?.type === 'text' && partial()?.text}>
         <div class="my-4">
-          <Markdown text={props.partial?.text ?? ''} />
+          <Markdown text={partial()?.text ?? ''} />
         </div>
       </Show>
-      <Show when={props.compacting} fallback={<Show when={full() && props.working && !props.partial}><WorkingLine /></Show>}>
+      <Show when={props.compacting} fallback={<Show when={full() && props.working && !partial()}><WorkingLine /></Show>}>
         {(since) => <CompactingLine since={since()} tokens={lastContext(props.messages)} />}
       </Show>
     </div>

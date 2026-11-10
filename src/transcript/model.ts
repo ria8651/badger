@@ -295,30 +295,39 @@ export function buildView(messages: WireMessage[], nested: boolean) {
 }
 
 /**
- * Claude 5.1 and later sometimes write an update to the user as thinking: a second thinking block in a row, just
- * before a tool call. Those are what Claude said, not what it thought. Claude Code saves each block as its own
- * message, with the API message's id, so the run is followed across messages.
+ * Claude 5.1 and later sometimes write an update to the user as thinking: a thinking block straight after another.
+ * Those are what Claude said, not what it thought. Claude Code saves each block as its own message, with the API
+ * message's id, so the run is followed across messages. Nothing after the block is needed, so it shows as an update
+ * while the reply is still streaming.
  */
 function updatesAsThinking(messages: WireMessage[]): Set<Item> {
   const updates = new Set<Item>()
-  let last: { id: string; item: Item; followsThinking: boolean } | undefined
+  let last: string | undefined
   for (const m of messages) {
-    if (m.type !== 'assistant') continue
+    // Anything between ends the run, as it does while streaming.
+    if (m.type !== 'assistant') {
+      last = undefined
+      continue
+    }
     const message = m.message as { id?: string; model?: string; content?: Block[] }
-    const id = message?.id ?? ''
+    const id = message?.id
     const thoughts = itemsFor(m).filter((i) => i.kind === 'thinking')
     for (const b of message?.content ?? []) {
-      if (b.type !== 'thinking') {
-        if (b.type === 'tool_use' && last?.id === id && last.followsThinking && writesUpdatesAsThinking(message.model)) updates.add(last.item)
-        last = undefined
-        continue
-      }
       // An empty block (redacted, or not summarized) has no item and ends the run.
-      const item = b.thinking?.trim() ? thoughts.shift() : undefined
-      last = item && { id, item, followsThinking: last?.id === id }
+      const item = b.type === 'thinking' && b.thinking?.trim() ? thoughts.shift() : undefined
+      if (item && id && last === id && writesUpdatesAsThinking(message.model)) updates.add(item)
+      last = item && id
     }
   }
   return updates
+}
+
+/** Whether a thinking block streaming in the API message `id` is an update, as updatesAsThinking would find once it's in. */
+export function streamingUpdate(messages: WireMessage[], id: string): boolean {
+  const m = messages.at(-1)
+  const message = m?.type === 'assistant' ? (m.message as { id?: string; model?: string; content?: Block[] }) : undefined
+  const b = message?.id === id ? message.content?.at(-1) : undefined
+  return b?.type === 'thinking' && !!b.thinking?.trim() && writesUpdatesAsThinking(message?.model)
 }
 
 function writesUpdatesAsThinking(model?: string): boolean {
