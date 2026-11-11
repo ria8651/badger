@@ -689,5 +689,5 @@ export type ServerEvent =
    * on a machine other than the hub's opens at plain localhost, so only a
    * browser on that machine shows it.
    */
-  | { type: 'open_preview'; root: string; machine?: string; port: number; name?: string; path?: string }
+  | { type: 'open_preview'; root: string; machine?: string; port: number; name?: string; path?: string; session?: string }
   | { type: 'error'; sessionId?: string; error: string }

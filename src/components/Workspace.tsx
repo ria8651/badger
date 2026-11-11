@@ -588,7 +588,7 @@ export function Workspace(props: {
           <Show when={terminalOf(active())}>
             {(t) => (
               <>
-                <PortButtons terminal={t()} onOpen={(port) => props.ws && openPreview(props.ws, port, { name: terminalLabel(t()) })} />
+                <PortButtons terminal={t()} onOpen={(port) => props.ws && openPreview(props.ws, port, { name: terminalLabel(t()), session: props.sessionId })} />
                 <RestartButton terminal={t()} />
                 <button onClick={() => props.onOpenPage(t().id)} title="Open on its own page" class={ghostClass()}>
                   <SquareArrowOutUpRight class="size-3.5" />

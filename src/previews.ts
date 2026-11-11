@@ -45,5 +45,5 @@ export function previewUrl(port: number | string, path = '/', machine: string = 
 }
 
 socket.on((e) => {
-  if (e.type === 'open_preview') openPreview({ machine: e.machine || LOCAL, root: e.root }, e.port, { name: e.name, path: e.path })
+  if (e.type === 'open_preview') openPreview({ machine: e.machine || LOCAL, root: e.root }, e.port, { name: e.name, path: e.path, session: e.session })
 })

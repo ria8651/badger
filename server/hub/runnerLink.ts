@@ -153,7 +153,7 @@ export class RunnerLink implements MachineEvents {
       },
       openPreview: (chat, { root, port, name, path }) => {
         own(chat)
-        viewers.toAll({ type: 'open_preview', root, machine, port, name, path })
+        viewers.toAll({ type: 'open_preview', root, machine, port, name, path, session: chat })
         this.d.analytics.event('preview.open', { actor: { source: 'claude', sessionId: chat }, sessionId: chat, data: { port, path, tabs: viewers.count } })
         // The hub proxies its own machine's ports; another machine's only open where they are.
         const template = machine === LOCAL_MACHINE ? viewers.previewUrl() : 'http://localhost:{port}'

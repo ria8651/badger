@@ -415,14 +415,22 @@ export function moveShown(tree: Node, session: string, key: string, drop: Drop):
 }
 
 /**
- * Where a view goes when it isn't anywhere yet: with others of its kind, any chat's, in `into` if they're
- * there, else where its chat sees them; else `into`, if it's there; else a new group beside the chat.
+ * Where a view goes when it isn't anywhere yet: with others of its kind in `into`, else where its chat sees
+ * them; else `into` if its chat sees it, else any panel it sees. Only with none showing does it go to one its
+ * chat doesn't see: with others of its kind, else `into`. Failing all of those, a new group beside the chat.
  */
 function place(tree: Node, session: string, view: View, into: string | undefined, edge: Edge): { tree: Node; group: string } {
   const groups = groupsOf(tree)
   const shown = new Set(groupsOf(shownTree(tree, session)).map((g) => g.id))
   const kin = groups.filter((g) => g.views.some((v) => v.kind === view.kind))
-  const to = (kin.find((g) => g.id === into) ?? kin.find((g) => shown.has(g.id)) ?? kin[0] ?? groups.find((g) => g.id === into))?.id
+  const target = groups.find((g) => g.id === into)
+  const to = (
+    kin.find((g) => g.id === into) ??
+    kin.find((g) => shown.has(g.id)) ??
+    (target && shown.has(target.id) ? target : groups.find((g) => shown.has(g.id))) ??
+    kin[0] ??
+    target
+  )?.id
   if (to) return { tree: addToGroup(tree, to, view), group: to }
   return splitWith(tree, 'chat', edge, [view])
 }
@@ -619,11 +627,12 @@ export function openedIn(ws: Ws, session: string): void {
 
 /**
  * Shows a port's preview: the tab it already has, navigated and reloaded, or
- * a new one with the other previews, else in a new panel right of the chat,
- * where a page gets the width it needs. Shows hidden panels: asking for a
- * preview is asking to see it.
+ * a new one with the other previews, else in the panel last worked in, else
+ * in a new panel right of the chat. `session` is the chat it's opened from,
+ * whose panels it goes in. Shows hidden panels: asking for a preview is
+ * asking to see it.
  */
-export function openPreview(ws: Ws, port: number, opts: { name?: string; path?: string } = {}): void {
+export function openPreview(ws: Ws, port: number, opts: { name?: string; path?: string; session?: string } = {}): void {
   updateLayout(ws, (l) => {
     const id = String(port)
     const found = viewsOf(l.tree).find((v): v is PreviewView => v.kind === 'preview' && v.id === id)
@@ -632,9 +641,9 @@ export function openPreview(ws: Ws, port: number, opts: { name?: string; path?: 
       return { ...l, tree: setActive(replaceView(l.tree, view), viewKey(view)), hidden: false }
     }
     const view: View = { kind: 'preview', id, name: opts.name, path: opts.path }
-    // Into the panel kept with every one closed, if that's all there is. Focus stays where it was.
-    const into = groupsOf(l.tree).find((g) => !g.views.length)
-    return { ...l, tree: place(l.tree, '', view, into?.id, 'right').tree, hidden: false }
+    // Focus stays where it was.
+    const session = opts.session ?? ''
+    return { ...l, tree: place(l.tree, session, view, focused(l, l.tree, session), 'right').tree, hidden: false }
   })
 }
 
