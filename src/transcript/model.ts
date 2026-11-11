@@ -1,6 +1,7 @@
 import { parseCardContext, type CardContext } from '../../shared/cardContext.ts'
 import { splitMoveNote, splitSideNote, type Move } from '../../shared/forkNote.ts'
 import { splitGitNote } from '../../shared/gitNote.ts'
+import { splitComments, type SentComment } from '../../shared/comments.ts'
 import { unwrapPaste } from '../../shared/pastes.ts'
 import { sentToSubagentBy } from '../../shared/toSubagent.ts'
 import type { ImageAttachment, WireMessage } from '../../shared/protocol.ts'
@@ -19,9 +20,15 @@ export type ContentBlock = Block & { tool_use_id?: string; content?: unknown; is
 
 export type Item =
   /** `to`: the subagent it went to, for one the user sent a subagent through the chat. */
-  | { kind: 'user'; text: string; pastes?: string[]; images?: ShownImage[]; to?: string; command?: boolean }
-  | { kind: 'text'; text: string }
-  | { kind: 'thinking'; text: string }
+  /** `comments`: the comments on what Claude wrote that went with it (shared/comments.ts). */
+  | { kind: 'user'; text: string; pastes?: string[]; images?: ShownImage[]; comments?: SentComment[]; to?: string; command?: boolean }
+  /**
+   * `id`: its message's uuid and which of its blocks, for comments on it to find it by. `streamed`: the API message it's
+   * in, for what was shown of it while it streamed to be found by.
+   */
+  | { kind: 'text'; text: string; id?: string; streamed?: string }
+  /** `id`, `streamed`: as for text, for one that's an update (updatesAsThinking). */
+  | { kind: 'thinking'; text: string; id?: string; streamed?: string }
   | { kind: 'tool'; id: string; name: string; input: Record<string, unknown> }
   | { kind: 'result'; ok: boolean; seconds: number; tokens?: { input: number; output: number }; endedAt?: number; error?: string }
   | { kind: 'compact'; trigger?: string; preTokens?: number; postTokens?: number; seconds?: number }
@@ -80,8 +87,9 @@ export function messageItems(m: WireMessage): Item[] {
     if (relayed) return [{ kind: 'user', text: relayed.text, to: relayed.description }]
     const output = commandOutput(raw)
     if (output !== undefined) return output ? [{ kind: 'output', text: output }] : []
-    const { text, pastes, images, command } = userText(m)
-    return text || pastes.length || images.length ? [{ kind: 'user', text, pastes, images, command }] : []
+    const { text: typed, pastes, images, command } = userText(m)
+    const { text, comments } = splitComments(typed)
+    return text || pastes.length || images.length || comments.length ? [{ kind: 'user', text, pastes, images, comments: comments.length ? comments : undefined, command }] : []
   }
   if (m.type === 'assistant') {
     const content = ((m.message as { content?: Block[] })?.content ?? []) as Block[]
@@ -90,11 +98,13 @@ export function messageItems(m: WireMessage): Item[] {
     // Not Claude: a built-in command's output, live. (After a reload it's a local_command message.)
     if ((m.message as { model?: string })?.model === '<synthetic>') return said ? [{ kind: 'output', text: said }] : []
     const items: Item[] = []
-    for (const b of content) {
-      if (b.type === 'text' && b.text?.trim()) items.push({ kind: 'text', text: b.text })
-      else if (b.type === 'thinking' && b.thinking?.trim()) items.push({ kind: 'thinking', text: b.thinking })
+    const streamed = (m.message as { id?: string })?.id
+    for (const [i, b] of content.entries()) {
+      const id = typeof m.uuid === 'string' ? `${m.uuid}:${i}` : undefined
+      if (b.type === 'text' && b.text?.trim()) items.push({ kind: 'text', text: b.text, id, streamed })
+      else if (b.type === 'thinking' && b.thinking?.trim()) items.push({ kind: 'thinking', text: b.thinking, id, streamed })
       // How a subagent hands its report back: that's its reply, not a step.
-      else if (b.type === 'tool_use' && b.name === 'SubagentHandback') items.push({ kind: 'text', text: String(b.input?.message ?? '') })
+      else if (b.type === 'tool_use' && b.name === 'SubagentHandback') items.push({ kind: 'text', text: String(b.input?.message ?? ''), id })
       else if (b.type === 'tool_use' && b.id) items.push({ kind: 'tool', id: b.id, name: b.name ?? '?', input: b.input ?? {} })
     }
     return items
@@ -341,7 +351,7 @@ function writesUpdatesAsThinking(model?: string): boolean {
 const textOf = new WeakMap<Item, Item>()
 function asText(item: Item): Item {
   let text = textOf.get(item)
-  if (!text && item.kind === 'thinking') textOf.set(item, (text = { kind: 'text', text: item.text }))
+  if (!text && item.kind === 'thinking') textOf.set(item, (text = { kind: 'text', text: item.text, id: item.id, streamed: item.streamed }))
   return text ?? item
 }
 
@@ -454,7 +464,8 @@ export function userText(m: WireMessage): { text: string; pastes: string[]; imag
     return { text: args ? `${command[1]} ${args}` : command[1], pastes, images, command: true }
   }
   // Harness-injected content (system reminders, command output) is wrapped in tags.
-  if (raw.trimStart().startsWith('<')) return { text: '', pastes, images }
+  // Comments are tagged too, but they're the user's (shared/comments.ts).
+  if (raw.trimStart().startsWith('<') && !raw.trimStart().startsWith('<comments>')) return { text: '', pastes, images }
   return { text: raw, pastes, images }
 }
 
@@ -474,7 +485,7 @@ export function retryOf(messages: WireMessage[], prompt?: string): { at: string;
   const i = prompt ? messages.findIndex((m) => m.uuid === prompt) : -1
   if (i < 0) return undefined
   const at = messages.slice(0, i).findLast((m) => m.type === 'assistant' && !m.parent_tool_use_id && m.uuid)?.uuid
-  return at ? { at, text: userText(messages[i]).text } : undefined
+  return at ? { at, text: splitComments(userText(messages[i]).text).text } : undefined
 }
 
 /** Why a turn stopped, from its result's subtype. */

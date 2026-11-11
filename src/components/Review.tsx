@@ -1,19 +1,20 @@
-import { For, Show, createContext, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack, useContext, type JSX } from 'solid-js'
+import { For, Show, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
 import { createStore } from 'solid-js/store'
-import { Check, ChevronDown, ChevronRight, FileText, MessageSquarePlus, RotateCw, Trash2 } from '../icons'
-import type { ReviewAttention, ReviewDiff, ReviewFile, ReviewGroup, ReviewGuide, ReviewHunk, WireMessage } from '../../shared/protocol.ts'
+import { Check, ChevronDown, ChevronRight, FileText, MessageSquarePlus, RotateCw } from '../icons'
+import type { DraftComment, ReviewAttention, ReviewDiff, ReviewFile, ReviewGroup, ReviewGuide, ReviewHunk } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
+import { useComments, type Asked } from '../comments.ts'
 import { SIGN, anchorOf, digitsOf, rowsFor, startOf, type Line, type Row } from '../diffRows.ts'
 import { plural } from '../format.ts'
 import { highlight, languageOf } from '../highlight.ts'
 import { recall, remember, settle } from '../scrollMemory.ts'
 import { TranscriptIndex } from '../transcript/context.ts'
-import { itemsFor, type Block, type Index } from '../transcript/model.ts'
-import type { Partial as Streaming } from '../useChat.ts'
-import { Messages } from './Transcript.tsx'
+import type { Block, Index } from '../transcript/model.ts'
 import { BasePicker, baseChanged, howText } from './BasePicker.tsx'
 import { useOpenFile } from '../fileLinks.ts'
 import { CodeRow } from './CodeRow.tsx'
+import { CommentBox, DraftBox, blobs, type Box } from './Comments.tsx'
+import { AskedItem } from './ReplyComments.tsx'
 import { Markdown } from './Markdown.tsx'
 import { Button, DiffCount, GhostButton, LiveDot, PaneBar, PathLabel, noteClass } from './ui.tsx'
 
@@ -21,8 +22,8 @@ import { Button, DiffCount, GhostButton, LiveDot, PaneBar, PathLabel, noteClass 
  * SPIKE: a checkout's changes, every hunk. Two ways: a chat's diff, in a panel beside it, file by file; or a guided
  * review, a chat of its own whose page this is, in the groups and order of the guide Claude writes for them
  * (review_guide_group, then review_guide_done), each group with what a reader needs to follow it. Either way you
- * tick hunks off as you read, ask about lines (Claude answers beside them), and send comments for Claude to act on;
- * in a guided review, it then updates the guide. What's kept (viewed hunks, comments, questions) is in
+ * tick hunks off as you read, ask about lines (in a side chat), and send comments for Claude to act on;
+ * in a guided review, it then updates the guide. What's kept (viewed hunks, the note on the whole) is in
  * localStorage, per chat and way.
  */
 
@@ -48,21 +49,16 @@ interface Note {
   text: string
 }
 
-/** A question sent to Claude, found again in the transcript by its message to show the answer. */
-interface Question extends Note {
-  message: string
-}
-
 interface Saved {
-  comments: Note[]
+  /** Comments from before they were kept with the chat's draft, moved there when it's next opened. */
+  comments?: Note[]
   /** A note on the whole thing, sent with the comments. */
   general: string
   /** Hunk ids. A hunk that changes gets a new id, so it's unread again. */
   viewed: string[]
-  questions: Question[]
 }
 
-const EMPTY: Saved = { comments: [], general: '', viewed: [], questions: [] }
+const EMPTY: Saved = { general: '', viewed: [] }
 const stores = new Map<string, ReturnType<typeof createSignal<Saved>>>()
 /** By chat, and whether it's a guided review or a chat's diff, so a chat's diff and its review don't share. */
 const storeKey = (session: string, guided: boolean) => `badger.${guided ? 'review2' : 'diff'}.${session}`
@@ -88,8 +84,11 @@ function useReview(session: string, guided: boolean) {
   return { saved, update }
 }
 
+/** What a comment's on, over it. */
+const noteLabel = (n: Note) => `Your comment · ${n.path.split('/').pop()}, ${n.where}`
+
 const NO_NOTES: Note[] = []
-const NO_QUESTIONS: Question[] = []
+const NO_ASKED: Asked[] = []
 const byPath = <T extends Note>(notes: T[]) => {
   const out = new Map<string, T[]>()
   for (const n of notes) out.set(n.path, [...(out.get(n.path) ?? []), n])
@@ -104,7 +103,6 @@ function without([from, to]: [number, number], [cutFrom, cutTo]: [number, number
   return ([[from, Math.min(to, cutFrom)], [Math.max(from, cutTo), to]] as [number, number][]).filter(([f, t]) => t > f)
 }
 
-type Box = { l: number; r: number; t: number; b: number }
 
 /** Where characters from..to of an element's text are on screen: a box per piece, per line it wraps onto. */
 function textBoxes(el: HTMLElement, [from, to]: [number, number]): DOMRect[] {
@@ -127,82 +125,6 @@ function textBoxes(el: HTMLElement, [from, to]: [number, number]): DOMRect[] {
   return []
 }
 
-/**
- * Boxes as rounded shapes, the way an editor draws a selection: boxes on the same line that touch become one, a box that
- * overlaps one on the line straight above joins it, and each shape is traced around its outline with every corner rounded,
- * outward where it sticks out and inward where it steps in, as one SVG path.
- */
-function blobs(boxes: Box[], radius: number): string {
-  boxes.sort((p, q) => p.t - q.t || p.l - q.l)
-  const lines: Box[] = []
-  for (const b of boxes) {
-    const last = lines.at(-1)
-    if (last && Math.abs(last.t - b.t) < 1 && b.l <= last.r + 1) last.r = Math.max(last.r, b.r)
-    else lines.push({ ...b })
-  }
-  // A chain of boxes, one per line, each overlapping the one above; a box that would join two starts a chain of its own.
-  const chains: Box[][] = []
-  for (const b of lines) {
-    const chain = chains.find((c) => {
-      const above = c.at(-1)!
-      return Math.abs(above.b - b.t) < 1 && b.l < above.r && b.r > above.l
-    })
-    if (chain) chain.push(b)
-    else chains.push([b])
-  }
-  return chains
-    .map((c) => {
-      // Edges only a little apart on lines next to each other line up, as the wider: a step too short to round would wiggle.
-      for (let pass = 0; pass < 2; pass++) {
-        for (let i = 0; i + 1 < c.length; i++) {
-          if (Math.abs(c[i].r - c[i + 1].r) < radius * 2) c[i].r = c[i + 1].r = Math.max(c[i].r, c[i + 1].r)
-          if (Math.abs(c[i].l - c[i + 1].l) < radius * 2) c[i].l = c[i + 1].l = Math.min(c[i].l, c[i + 1].l)
-        }
-      }
-      // Down the right side, then back up the left.
-      const pts: [number, number][] = [[c[0].l, c[0].t]]
-      c.forEach((b) => pts.push([b.r, b.t], [b.r, b.b]))
-      for (let i = c.length - 1; i >= 0; i--) pts.push([c[i].l, c[i].b], [c[i].l, c[i].t])
-      return roundedPath(outline(pts), radius)
-    })
-    .join(' ')
-}
-
-/** A polygon without repeated points or points in the middle of a straight edge. */
-function outline(pts: [number, number][]): [number, number][] {
-  const same = (p: [number, number], q: [number, number]) => Math.abs(p[0] - q[0]) < 0.5 && Math.abs(p[1] - q[1]) < 0.5
-  let out = pts.filter((p, i) => !same(p, pts[(i + 1) % pts.length]))
-  const straight = (p: [number, number], v: [number, number], q: [number, number]) =>
-    (Math.abs(p[0] - v[0]) < 0.5 && Math.abs(v[0] - q[0]) < 0.5) || (Math.abs(p[1] - v[1]) < 0.5 && Math.abs(v[1] - q[1]) < 0.5)
-  for (let changed = true; changed && out.length > 3; ) {
-    changed = false
-    out = out.filter((v, i) => {
-      const keep = !straight(out[(i - 1 + out.length) % out.length], v, out[(i + 1) % out.length])
-      if (!keep) changed = true
-      return keep
-    })
-  }
-  return out
-}
-
-/** A polygon traced with each corner rounded: cut back along both edges by up to `radius`, and joined by a curve through it. */
-function roundedPath(pts: [number, number][], radius: number): string {
-  const n = pts.length
-  if (n < 3) return ''
-  let d = ''
-  for (let i = 0; i < n; i++) {
-    const p = pts[(i - 1 + n) % n]
-    const v = pts[i]
-    const q = pts[(i + 1) % n]
-    const d1 = Math.hypot(p[0] - v[0], p[1] - v[1])
-    const d2 = Math.hypot(q[0] - v[0], q[1] - v[1])
-    const r = Math.min(radius, d1 / 2, d2 / 2)
-    const a = [v[0] + ((p[0] - v[0]) / d1) * r, v[1] + ((p[1] - v[1]) / d1) * r]
-    const b = [v[0] + ((q[0] - v[0]) / d2) * r, v[1] + ((q[1] - v[1]) / d2) * r]
-    d += `${i ? 'L' : 'M'}${a[0].toFixed(1)},${a[1].toFixed(1)}Q${v[0].toFixed(1)},${v[1].toFixed(1)} ${b[0].toFixed(1)},${b[1].toFixed(1)}`
-  }
-  return d + 'Z'
-}
 
 // ── What Claude said: the guide, and answers ──
 
@@ -279,27 +201,6 @@ function guideOf(index: Index): { guide?: ReviewGuide; writing: boolean } {
   return { guide, writing: pending || (!!guide && !done) }
 }
 
-/**
- * Claude's answer to each question, by its id: the conversation from the question until the next message the user sent,
- * without how the turn ended. `latest`: nothing's been sent since, so what's streaming now is the rest of it.
- */
-type Answer = { messages: WireMessage[]; latest: boolean }
-function answersOf(index: Index, questions: Question[]): Map<string, Answer> {
-  const ids = new Map(questions.map((q) => [q.message.trim(), q.id]))
-  const out = new Map<string, Answer>()
-  let current: Answer | undefined
-  for (const m of index.groups.get('') ?? []) {
-    const prompt = itemsFor(m).find((i) => i.kind === 'user')
-    if (prompt?.kind === 'user') {
-      if (current) current.latest = false
-      const id = ids.get(prompt.text.trim())
-      current = id ? { messages: [], latest: true } : undefined
-      if (id && current) out.set(id, current)
-    } else if (current && m.type !== 'result') current.messages.push(m)
-  }
-  return out
-}
-
 // ── The outline ──
 
 /** A row of a group's outline: a folder, or a file with the group's hunks in it. */
@@ -351,17 +252,10 @@ function outlineRows(hunks: Placed[]): OutlineRow[] {
 
 const quote = (n: Note) => `${n.path}, ${n.where}:\n\`\`\`diff\n${n.code}\n\`\`\``
 
-function commentsMessage(comments: Note[], general: string): string {
-  return [
-    `I left ${plural(comments.length, 'comment')} on the changes. Make the changes they ask for, and say if you disagree with any. Then update the guide for what changed (${GROUP_TOOL}, then ${DONE_TOOL}).`,
-    general.trim(),
-    ...comments.map((c) => `${quote(c)}\n${c.text.trim()}`),
-  ]
-    .filter(Boolean)
-    .join('\n\n')
-}
-
-const questionMessage = (n: Note) => `A question about ${quote(n)}\n${n.text.trim()}\n\n(Just answer; don't change anything for this.)`
+/** A note as one of the chat's comments, which say what they quote the same way (shared/comments.ts), and back. */
+const asComment = (n: Note): DraftComment => ({ id: n.id, on: { kind: 'diff', path: n.path, from: n.from, to: n.to, where: n.where }, quote: n.code, text: n.text })
+const asNote = (c: DraftComment): Note | undefined =>
+  c.on.kind === 'diff' ? { id: c.id, path: c.on.path, from: c.on.from, to: c.on.to, where: c.on.where, code: c.quote, text: c.text } : undefined
 
 const UPDATE_GUIDE = `The changes have moved on since your last guide. Call review_diff for what's new, put it in groups with ${GROUP_TOOL} (new ones, or ones that changed), then call ${DONE_TOOL}.`
 
@@ -377,16 +271,6 @@ interface Section {
   hunks: Placed[]
 }
 type Placed = { file: ReviewFile; hunk: ReviewHunk }
-
-/** What an answer streaming in needs from its chat, for the transcript's own rendering of it. */
-interface LiveChat {
-  partial: () => Streaming | null
-  bashOutput: () => Record<string, string>
-  children: () => Record<string, string> | undefined
-  running: () => boolean
-  cwd: () => string | undefined
-}
-const LiveChatContext = createContext<LiveChat>()
 
 /** Where a new comment or question is going: rows from..to of one hunk. */
 interface Draft {
@@ -411,8 +295,8 @@ export function ReviewPage(props: {
   index: () => Index
   /** Read again when a turn ends, since that's when files change. */
   running: boolean
-  /** Sends a message to the chat; absent when it can't take one. */
-  onSend?: (text: string) => void
+  /** Sends a message to the chat, with all its comments if asked; absent when it can't take one. */
+  onSend?: (text: string, comments?: boolean) => void
   /** A chat's diff: starts a guided review of the changes, or opens the one there is. */
   onGuide?: () => void
   /** In a panel: how to focus it. */
@@ -428,15 +312,22 @@ export function ReviewPage(props: {
    * since that's done hunk by hunk in the chat's diff, and the file's toolbar is above it, so no header of its own.
    */
   whole?: boolean
-  /** What's streaming in, for answers to show as the conversation does. */
-  partial: Streaming | null
-  bashOutput: Record<string, string>
-  children?: Record<string, string>
 }) {
   const { saved, update } = useReview(
     untrack(() => props.sessionId),
     untrack(() => props.guided),
   )
+  // Comments are the chat's, kept with its draft and sent with its next message, wherever they were made.
+  const kept = useComments()
+  // Ones kept here from before move there, once its draft has come, so as not to write over what's in it.
+  createEffect(() => {
+    const legacy = saved().comments
+    if (!kept?.loaded() || !legacy?.length) return
+    untrack(() => {
+      for (const n of legacy) kept.save(asComment(n))
+      update(({ comments: _, ...s }) => s)
+    })
+  })
   const openFile = useOpenFile()
   const [diff, setDiff] = createSignal<ReviewDiff>()
   /** Opens a file of the changes whole, at a line if given; not one that's been deleted, which has nothing to show. */
@@ -485,11 +376,26 @@ export function ReviewPage(props: {
   )
   const guide = () => told().guide
   // Each part of what's kept on its own, so typing an overall comment or ticking a hunk doesn't redo the rest.
-  const comments = createMemo(() => saved().comments)
-  const questions = createMemo(() => saved().questions)
+  // The chat's comments on lines of the changes, as notes; one that's the same as before stays the same object.
+  let notes = new Map<string, Note>()
+  const comments = createMemo(() => {
+    const was = notes
+    notes = new Map()
+    for (const c of kept?.all() ?? []) {
+      const n = asNote(c)
+      if (!n) continue
+      const before = was.get(n.id)
+      notes.set(n.id, before && JSON.stringify(before) === JSON.stringify(n) ? before : n)
+    }
+    return [...notes.values()]
+  })
   const commentsIn = createMemo(() => byPath(comments()))
-  const questionsIn = createMemo(() => byPath(questions()))
-  const answers = createMemo(() => answersOf(props.index(), questions()))
+  /** Questions asked about lines of the changes, each in a side chat, by file. */
+  const askedIn = createMemo(() => {
+    const out = new Map<string, Asked[]>()
+    for (const a of kept?.asked() ?? []) if (a.on.kind === 'diff') out.set(a.on.path, [...(out.get(a.on.path) ?? []), a])
+    return out
+  })
 
   // Kept the same where a hunk is, so reading the diff again (each time a turn ends) doesn't redraw what hasn't changed.
   /** What's shown of the changes: all of them, or one file's. */
@@ -585,32 +491,34 @@ export function ReviewPage(props: {
   }
   const saveComment = (rows: Row[], path: string) => {
     const note = noteOf(rows, path)
-    const editing = draft()?.id
-    if (note) update((s) => ({ ...s, comments: editing ? s.comments.map((c) => (c.id === editing ? { ...c, text: note.text } : c)) : [...s.comments, note] }))
+    const editing = draft()?.id && comments().find((c) => c.id === draft()!.id)
+    if (note) kept?.save(asComment(editing ? { ...editing, text: note.text } : note))
     closeDraft()
   }
+  /** Asks about the lines in a side chat instead, which shows beside the chat; the question stays under them, to open it by. */
   const ask = (rows: Row[], path: string) => {
     const note = noteOf(rows, path)
-    if (!note || !props.onSend) return
-    const message = questionMessage(note)
-    props.onSend(message)
-    update((s) => ({ ...s, questions: [...s.questions, { ...note, message }] }))
+    if (note && kept) {
+      const { on, quote } = asComment(note)
+      kept.ask({ on, quote }, note.text)
+    }
     closeDraft()
   }
-  const removeComment = (id: string) => update((s) => ({ ...s, comments: s.comments.filter((c) => c.id !== id) }))
-  const removeQuestion = (id: string) => update((s) => ({ ...s, questions: s.questions.filter((q) => q.id !== id) }))
+  const removeComment = (id: string) => kept?.remove(id)
 
+  /** All the chat's comments go, those made on its replies too, with the note on the whole. */
+  const sending = () => kept?.all().length ?? 0
   const send = () => {
     const s = saved()
-    if (!props.onSend || (!s.comments.length && !s.general.trim())) return
-    props.onSend(commentsMessage(s.comments, s.general))
-    update((x) => ({ ...x, comments: [], general: '' }))
+    if (!props.onSend || (!sending() && !s.general.trim())) return
+    props.onSend(s.general.trim(), true)
+    update((x) => ({ ...x, general: '' }))
     setWriting(false)
   }
 
   /** A comment on the whole being started, before anything's typed. */
   const [writing, setWriting] = createSignal(false)
-  const commenting = () => writing() || comments().length > 0 || !!saved().general.trim()
+  const commenting = () => writing() || sending() > 0 || !!saved().general.trim()
   let generalBox: HTMLTextAreaElement | undefined
   const startComment = () => {
     setWriting(true)
@@ -748,13 +656,6 @@ export function ReviewPage(props: {
     })
   }
 
-  const live: LiveChat = {
-    partial: () => props.partial,
-    bashOutput: () => props.bashOutput,
-    children: () => props.children,
-    running: () => props.running,
-    cwd: () => props.cwd,
-  }
 
   /** What the changes are against, how much of them, and what to do with them. Narrow, the words go and the icons stay. */
   const tools = () => (
@@ -825,7 +726,6 @@ export function ReviewPage(props: {
 
   return (
     <TranscriptIndex.Provider value={props.index}>
-    <LiveChatContext.Provider value={live}>
     <div class="@container flex min-h-0 flex-1 flex-col text-ui">
       {/* After whatever leads it, like the review's tabs. */}
       <PaneBar underHeader={props.underHeader}>
@@ -938,7 +838,7 @@ export function ReviewPage(props: {
               <Show when={loose().length}>
                 <div class="mt-4 rounded-lg border border-line px-3 py-2">
                   <p class="mb-1 text-xs text-fg-3">Comments on lines that aren’t in the diff any more</p>
-                  <For each={loose()}>{(c) => <CommentBox note={c} onRemove={() => removeComment(c.id)} />}</For>
+                  <For each={loose()}>{(c) => <CommentBox label={noteLabel(c)} text={c.text} onRemove={() => removeComment(c.id)} class="mx-3" />}</For>
                 </div>
               </Show>
               <Show when={diff() && !total() && !loading()}>
@@ -968,12 +868,11 @@ export function ReviewPage(props: {
                         open={props.whole || isOpen(id)}
                         viewed={isViewed(id)}
                         comments={commentsIn().get(p.file.path) ?? NO_NOTES}
-                        questions={questionsIn().get(p.file.path) ?? NO_QUESTIONS}
-                        answers={answers()}
+                        asked={askedIn().get(p.file.path) ?? NO_ASKED}
                         running={props.running}
                         draft={draft()?.hunk === id ? draft() : undefined}
                         draftText={draftText()}
-                        canAsk={!!props.onSend}
+                        canAsk={!!kept?.canAsk()}
                         onToggle={() => setOpen(id, !isOpen(id))}
                         onOpen={openerFor(p.file)}
                         onViewed={(on) => setViewed([id], on)}
@@ -989,7 +888,6 @@ export function ReviewPage(props: {
                           setDraftText(c.text)
                         }}
                         onRemove={removeComment}
-                        onRemoveQuestion={removeQuestion}
                       />
                     )
                   }
@@ -1090,26 +988,25 @@ export function ReviewPage(props: {
               // Left empty, with nothing else to send, it goes away again.
               onBlur={() => setWriting(false)}
               onKeyDown={(e) => e.key === 'Escape' && !saved().general.trim() && e.currentTarget.blur()}
-              placeholder={comments().length ? `Anything to add to the ${plural(comments().length, 'comment')} on lines? Optional` : 'A comment on the changes as a whole'}
+              placeholder={sending() ? `Anything to add to your ${plural(sending(), 'comment')}? Optional` : 'A comment on the changes as a whole'}
               rows={1}
               // Grows with what's typed, as the composer does.
               class={`${noteClass} min-w-0 flex-1`}
             />
             <Button
               primary
-              disabled={!props.onSend || (!saved().comments.length && !saved().general.trim())}
+              disabled={!props.onSend || (!sending() && !saved().general.trim())}
               onClick={send}
-              title={props.guided ? 'Claude acts on them, then updates the guide' : 'To this chat, for Claude to act on'}
+              title={`${props.guided ? 'Claude acts on them, then updates the guide' : 'To this chat, for Claude to act on'}. Your comments on its replies go too.`}
               class="shrink-0"
             >
-              {saved().comments.length ? `Send ${plural(saved().comments.length, 'comment')}` : props.guided ? 'Send to Claude' : 'Send'}
+              {sending() ? `Send ${plural(sending(), 'comment')}` : props.guided ? 'Send to Claude' : 'Send'}
             </Button>
           </div>
           </Show>
         </div>
       </div>
     </div>
-    </LiveChatContext.Provider>
     </TranscriptIndex.Provider>
   )
 }
@@ -1182,8 +1079,8 @@ function HunkView(props: {
   viewed: boolean
   /** The file's; each shows under its last line, if that's in this hunk. */
   comments: Note[]
-  questions: Question[]
-  answers: Map<string, Answer>
+  /** Questions asked about its lines, each in a side chat. */
+  asked: Asked[]
   running: boolean
   draft?: Draft
   draftText: string
@@ -1200,7 +1097,6 @@ function HunkView(props: {
   onCancel: () => void
   onEdit: (c: Note) => void
   onRemove: (id: string) => void
-  onRemoveQuestion: (id: string) => void
 }) {
   const f = () => props.file
   const context = () => (props.rows[0]?.kind === 'hunk' ? props.rows[0].text : '')
@@ -1525,7 +1421,7 @@ function HunkView(props: {
                   if (r.kind === 'hunk') return null
                   const anchor = anchorOf(r)
                   const comments = () => props.comments.filter((c) => c.to === anchor)
-                  const questions = () => props.questions.filter((q) => q.to === anchor)
+                  const asked = () => props.asked.filter((a) => a.on.kind === 'diff' && a.on.to === anchor)
                   const editing = () => props.draft && props.draft.to === i()
                   return (
                     <>
@@ -1550,7 +1446,8 @@ function HunkView(props: {
                         <DraftBox
                           text={props.draftText}
                           editing={!!props.draft?.id}
-                          lines={props.draft!.to - props.draft!.from + 1}
+                          placeholder={props.draft!.to > props.draft!.from ? `On these ${props.draft!.to - props.draft!.from + 1} lines…` : 'On this line…'}
+                          class="mx-3"
                           canAsk={props.canAsk}
                           onText={props.onDraftText}
                           onComment={props.onComment}
@@ -1558,13 +1455,13 @@ function HunkView(props: {
                           onCancel={props.onCancel}
                         />
                       </Show>
-                      <For each={questions()}>
-                        {(q) => <QuestionBox question={q} answer={props.answers.get(q.id)} onRemove={() => props.onRemoveQuestion(q.id)} />}
+                      <For each={asked()}>
+                        {(a) => <AskedItem asked={a} class="mx-3" />}
                       </For>
                       <For each={comments()}>
                         {(c) => (
                           <Show when={props.draft?.id !== c.id}>
-                            <CommentBox note={c} onEdit={() => props.onEdit(c)} onRemove={() => props.onRemove(c.id)} />
+                            <CommentBox label={noteLabel(c)} text={c.text} onEdit={() => props.onEdit(c)} onRemove={() => props.onRemove(c.id)} class="mx-3" />
                           </Show>
                         )}
                       </For>
@@ -1619,119 +1516,5 @@ function Code(props: { line: Line; html?: string; ref: (el: HTMLElement) => void
         props.ref(e)
       }}
     />
-  )
-}
-
-const boxClass = 'mx-3 my-1.5 rounded-lg border px-3 py-2 font-sans text-ui'
-
-function DraftBox(props: {
-  text: string
-  editing: boolean
-  lines: number
-  canAsk: boolean
-  onText: (t: string) => void
-  onComment: () => void
-  onAsk: () => void
-  onCancel: () => void
-}) {
-  let el!: HTMLTextAreaElement
-  onMount(() => el.focus())
-  return (
-    <div class={`${boxClass} border-accent/40 bg-bg`}>
-      <textarea
-        ref={el}
-        value={props.text}
-        onInput={(e) => props.onText(e.currentTarget.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) props.onComment()
-          if (e.key === 'Escape') props.onCancel()
-        }}
-        placeholder={props.lines > 1 ? `On these ${props.lines} lines…` : 'On this line…'}
-        // Grows with what's typed, as the composer does.
-        class="block max-h-[12lh] min-h-[3lh] w-full resize-none bg-transparent text-ui outline-none [field-sizing:content] placeholder:text-fg-3"
-      />
-      <div class="mt-1 flex flex-wrap items-center gap-2">
-        <Button primary onClick={props.onComment} class="h-7 text-xs" title="Kept with your other comments, to send together for Claude to act on">
-          {props.editing ? 'Save' : 'Add comment'}
-        </Button>
-        <Show when={!props.editing}>
-          <Button onClick={props.onAsk} disabled={!props.canAsk} class="flex h-7 items-center gap-1 text-xs" title="Sent now; Claude's answer shows here">
-            Ask Claude
-          </Button>
-        </Show>
-        <Button onClick={props.onCancel} class="h-7 text-xs">
-          Cancel
-        </Button>
-        <span class="text-xs text-fg-3">⌘/Ctrl+Enter to add</span>
-      </div>
-    </div>
-  )
-}
-
-function CommentBox(props: { note: Note; onEdit?: () => void; onRemove: () => void }) {
-  return (
-    <div class={`${boxClass} group/c border-line bg-surface`}>
-      <div class="mb-0.5 flex items-center gap-2 text-xs text-fg-3">
-        <span>
-          Your comment · {props.note.path.split('/').pop()}, {props.note.where}
-        </span>
-        <div class="flex-1" />
-        <Show when={props.onEdit}>
-          <button onClick={props.onEdit} class="opacity-0 hover:text-fg-2 group-hover/c:opacity-100">
-            Edit
-          </button>
-        </Show>
-        <button onClick={props.onRemove} title="Delete" class="opacity-0 hover:text-danger group-hover/c:opacity-100">
-          <Trash2 class="size-3" />
-        </button>
-      </div>
-      <p class="whitespace-pre-wrap text-fg">{props.note.text}</p>
-    </div>
-  )
-}
-
-/** A question and Claude's answer, shown as the conversation shows a turn: its work folded once done, its reply as it streams. */
-function QuestionBox(props: { question: Question; answer?: Answer; onRemove: () => void }) {
-  const live = useContext(LiveChatContext)!
-  const answering = () => !!props.answer?.latest && live.running()
-  return (
-    // Never what the page keeps still as it scrolls: an answer changes height as it streams and folds, and the lines around
-    // it shouldn't move for that.
-    <div class={`${boxClass} group/q border-accent/30 bg-accent/5 [overflow-anchor:none]`}>
-      <div class="mb-0.5 flex items-center gap-2 text-xs text-fg-3">
-        <span>You asked</span>
-        <div class="flex-1" />
-        <button onClick={props.onRemove} title="Remove from the diff (it stays in the conversation)" class="opacity-0 hover:text-fg-2 group-hover/q:opacity-100">
-          <Trash2 class="size-3" />
-        </button>
-      </div>
-      <p class="whitespace-pre-wrap text-fg">{props.question.text}</p>
-      <div class="mt-2 border-t border-accent/20 pt-1 text-fg-2">
-        <Show
-          when={props.answer}
-          fallback={
-            <span class="flex items-center gap-2 py-1 text-xs text-fg-3">
-              <LiveDot /> Waiting to go in
-            </span>
-          }
-        >
-          {(a) => (
-            <Show when={a().messages.length || answering()} fallback={<span class="text-xs text-fg-3">No answer.</span>}>
-              <Messages
-                messages={a().messages}
-                partial={a().latest ? live.partial() : null}
-                bashOutput={live.bashOutput()}
-                running={answering()}
-                working={answering()}
-                cwd={live.cwd()}
-                children={live.children()}
-                nested
-                folded
-              />
-            </Show>
-          )}
-        </Show>
-      </div>
-    </div>
   )
 }

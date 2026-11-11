@@ -1,5 +1,6 @@
 import { For, Show, createSignal, onCleanup, type JSX } from 'solid-js'
-import { BookOpen, Bot, ChevronRight, CircleAlert, Columns3, FileText, GitBranch, KeyRound, Scissors, Webhook } from '../icons'
+import { BookOpen, Bot, ChevronRight, CircleAlert, Columns3, FileText, GitBranch, KeyRound, MessageSquare, Scissors, Webhook } from '../icons'
+import { blockquote, type SentComment } from '../../shared/comments.ts'
 import type { CardContext } from '../../shared/cardContext.ts'
 import type { Move } from '../../shared/forkNote.ts'
 import type { CardStatus } from '../../shared/protocol.ts'
@@ -131,6 +132,25 @@ export function ApiError(props: { item: Extract<Item, { kind: 'api_error' }>; on
 }
 
 /** A prompt's context as a chip. */
+/** A comment that went with a message, as a chip that opens to what it quoted and what was said. */
+export function commentChip(c: SentComment): ContextChip {
+  const code = c.kind === 'diff' || c.kind === 'file'
+  return {
+    icon: MessageSquare,
+    label: c.label,
+    body: () => (
+      <>
+        <Show when={code} fallback={<Markdown text={blockquote(c.quote)} />}>
+          <pre class="font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-fg-3">{c.quote}</pre>
+        </Show>
+        <Show when={c.text}>
+          <p class="mt-2 whitespace-pre-wrap text-fg">{c.text}</p>
+        </Show>
+      </>
+    ),
+  }
+}
+
 export function contextChip(chip: Chip): ContextChip {
   switch (chip.type) {
     case 'skill': {

@@ -8,7 +8,9 @@ import { diffView, openFile, openTerminal, openView, planView, setFileMode, view
 import { OpenFile, expandHome, useOpenFile } from '../fileLinks.ts'
 import { FileView, openingMode } from './FileView.tsx'
 import { QuoteSelection } from './QuoteSelection.tsx'
-import { sideChatsOf, startSideChat } from '../btw.ts'
+import { anchorOf } from './ReplyComments.tsx'
+import { openSideChat, sideChatsOf, startSideChat } from '../btw.ts'
+import { CommentsContext, createComments, inOrder, planAnchor } from '../comments.ts'
 import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
 import { lastModel, modelChoices, modelName, modelValue, models, setLastModel, type ModelChoice } from '../models.ts'
 import { navigate } from '../router.tsx'
@@ -35,7 +37,8 @@ import { BtwPane } from './Btw.tsx'
 import { TranscriptIndex, createIndex } from '../transcript/context.ts'
 import { within, type Index } from '../transcript/model.ts'
 import { NestedPane } from './NestedPane.tsx'
-import { UserMessage } from '../transcript/items.tsx'
+import { UserMessage, commentChip } from '../transcript/items.tsx'
+import { splitComments } from '../../shared/comments.ts'
 import { Workspace, type ChatPanes } from './Workspace.tsx'
 import { Loading, Notice, PaneBar, Segmented, touch } from './ui.tsx'
 
@@ -201,6 +204,40 @@ export function Chat(props: {
         },
       }
 
+  /**
+   * Comments on what Claude wrote, kept with the draft until the next message. A subagent's chat, shown from its
+   * parent's, has no draft of its own to keep them.
+   */
+  const comments = props.host
+    ? undefined
+    : createComments({
+        session: props.sessionId,
+        loaded: () => state.loaded,
+        // A question goes to a side chat, forked from this one, so it knows what it's about; not from a side chat.
+        canAsk: () => !props.embedded && !!ws() && state.messages.length > 0,
+        ask: (question) =>
+          startSideChat(ws()!, props.sessionId, { text: question, mode: mode(), model: model() }).catch((err: Error) => {
+            showError("Couldn't start a side chat", err.message)
+            throw err
+          }),
+        open: (id) => {
+          const w = ws()
+          if (w) openSideChat(w, props.sessionId, id)
+        },
+        list: () => state.draft.attachments.comments ?? [],
+        change: (f) => chat.editDraft({ attachments: { ...state.draft.attachments, comments: f(state.draft.attachments.comments ?? []) } }),
+        show: (c) => {
+          const on = c.on
+          const w = beside()
+          if (on.kind === 'file') return files?.open(on.path, on.from)
+          if (on.kind === 'diff') return w && openView(w, diffView(props.sessionId))
+          const anchor = on.kind === 'reply' ? on.reply : planAnchor(on.request)
+          const el = document.querySelector(`[data-comments-on="${CSS.escape(anchor)}"]`)
+          if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+          else if (on.kind === 'plan' && w) openView(w, planView(props.sessionId))
+        },
+      })
+
   /** Scroll to a tool call, opening it and whatever it's folded into. */
   const jump = (toolUseId: string) => {
     reveal(toolUseId)
@@ -331,17 +368,40 @@ export function Chat(props: {
 
   const send = (text: string, attachments: DraftAttachments = NO_ATTACHMENTS) => {
     if (state.gone || stranded()) return
+    // Comments go with it, but for those on a plan still waiting, which go with its answer. A command can't come
+    // after them, which would make it text, so with one they all wait for the next message.
+    const { comments: all = [], ...attached } = attachments
+    const command = /^\/\S/.test(text)
+    // Its own plans waiting, and those of chats it started, which are answered from here.
+    const waiting = new Set(
+      [...state.permissions, ...children.prompts().map((c) => c.permission)].filter((p) => p.toolName === 'ExitPlanMode').map((p) => p.requestId),
+    )
+    const kept = all.filter((c) => command || (c.on.kind === 'plan' && waiting.has(c.on.request)))
+    const going = inOrder(
+      all.filter((c) => !kept.includes(c)),
+      state.messages,
+    )
+    // After it's sent, which empties the draft on the server: what's kept back, and any made since, stay in it.
+    const keep = () => {
+      const now = state.draft.attachments.comments ?? []
+      const left = [...kept, ...now.filter((c) => !all.some((a) => a.id === c.id))]
+      if (left.length !== now.length || left.some((c, i) => c !== now[i])) chat.editDraft({ attachments: { ...state.draft.attachments, comments: left } })
+    }
     // A side chat's own /btw is just a message: side chats don't have side chats.
-    if (!props.embedded && /^\/btw(\s|$)/.test(text)) return askAside(text.slice(4).trim(), attachments)
+    if (!props.embedded && /^\/btw(\s|$)/.test(text)) return (askAside(text.slice(4).trim(), attached), keep())
+    // Nothing to send once the comments waiting for a plan's answer are kept back.
+    if (!text.trim() && !going.length && !attached.pastes.length && !attached.images.length) return keep()
     chat.send({
       text,
-      ...attachments,
+      ...attached,
+      comments: going.length ? going : undefined,
       cwd: cwd(),
       machine: machine(),
       mode: mode(),
       model: model(),
       worktree: inWorktree() && canWorktree() ? (worktreeName() ?? '') : undefined,
     })
+    keep()
     if (!started()) {
       setStarted(true)
       props.onStart?.()
@@ -387,10 +447,7 @@ export function Chat(props: {
           machine={machine()}
           index={index}
           running={state.running}
-          partial={state.partial}
-          bashOutput={state.bashOutput}
-          children={state.children}
-          onSend={state.gone || stranded() ? undefined : (text) => send(text)}
+          onSend={state.gone || stranded() ? undefined : (text, comments) => send(text, comments ? { ...NO_ATTACHMENTS, comments: state.draft.attachments.comments } : NO_ATTACHMENTS)}
           onGuide={guided ? undefined : startReview}
           onReady={opts.onReady}
           lead={opts.lead}
@@ -431,6 +488,7 @@ export function Chat(props: {
   const body = (
     // Links to files in what it shows open them beside it.
     <OpenFile.Provider value={files}>
+    <CommentsContext.Provider value={comments}>
     <div class="flex h-full min-w-0 flex-1 flex-col">
       {/* One header on narrow screens: the page's bar above the chat's own row, divided only below. */}
       <Show when={!props.embedded}>
@@ -488,7 +546,17 @@ export function Chat(props: {
             composer to hang out by their own padding, so the text in them lines up with Claude's. */}
         <div class="mx-auto flex min-h-full max-w-[50rem] flex-col px-6 md:px-9">
           <div ref={content} class="relative flex-1 py-8">
-            <QuoteSelection within={() => content} onQuote={(text) => composer?.quote(text)} />
+            <QuoteSelection
+              within={() => content}
+              onQuote={(text) => composer?.quote(text)}
+              onComment={
+                comments &&
+                ((quote, on, range) => {
+                  const anchor = anchorOf(on, range)
+                  if (anchor) comments.setDraft({ on: anchor, quote })
+                })
+              }
+            />
             <Show when={state.loaded} fallback={<Loading class="pt-[22vh]" />}>
               <Show
                 when={state.messages.length}
@@ -687,12 +755,15 @@ export function Chat(props: {
         </div>
       </div>
     </div>
+    </CommentsContext.Provider>
     </OpenFile.Provider>
   )
   if (props.embedded) return body
   return (
-    // The panels beside it are drawn by the workspace, outside the body: links in them open files beside it too.
+    // The panels beside it are drawn by the workspace, outside the body: links in them open files beside it too, and
+    // what's in them can be commented on.
     <OpenFile.Provider value={files}>
+    <CommentsContext.Provider value={comments}>
       <Workspace
         ws={ws()}
         cwd={cwd()}
@@ -703,16 +774,26 @@ export function Chat(props: {
       >
         {body}
       </Workspace>
+    </CommentsContext.Provider>
     </OpenFile.Provider>
   )
 }
 
 /** A message waiting for Claude's next break: your message as it'll appear, with ways to take it back. */
 function Queued(props: { message: QueuedMessage; onEdit: () => void; onRemove: () => void }) {
+  /** The comments that went with it as chips, as the transcript shows them. */
+  const shown = createMemo(() => splitComments(props.message.text))
   const button = 'grid size-7 shrink-0 place-items-center rounded-md text-fg-3 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:size-9'
   return (
     // Clamped shorter than in the transcript so a long one doesn't push the chat out of view above the composer.
-    <UserMessage text={props.message.text} pastes={props.message.pastes} images={props.message.images} class="mb-2" maxHeight="6lh">
+    <UserMessage
+      text={shown().text}
+      pastes={props.message.pastes}
+      images={props.message.images}
+      context={shown().comments.map(commentChip)}
+      class="mb-2"
+      maxHeight="6lh"
+    >
       <button type="button" onClick={props.onEdit} title="Edit" class={button}>
         <Pencil class="size-3.5" />
       </button>

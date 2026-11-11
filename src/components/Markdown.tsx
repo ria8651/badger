@@ -1,4 +1,4 @@
-import { Marked, Renderer } from 'marked'
+import { Marked, Renderer, type Token, type TokensList } from 'marked'
 import DOMPurify from 'dompurify'
 import { createEffect, onCleanup, untrack } from 'solid-js'
 import { diagramWhenSeen } from '../diagram.ts'
@@ -31,14 +31,55 @@ const md = new Marked({
   },
 })
 
-/** The text as HTML, and what its own fences are tagged with. */
-function render(text: string): { html: string; fence: string } {
+/** Some of the text's blocks as HTML, ready to go on the page, and what its own fences are tagged with. */
+function render(tokens: Token[], links: TokensList['links']): { html: DocumentFragment; fence: string } {
   fence = Math.random().toString(36).slice(2)
-  return { html: DOMPurify.sanitize(md.parse(text, { async: false })), fence }
+  const html = md.parser(Object.assign([...tokens], { links }))
+  return { html: DOMPurify.sanitize(html, { RETURN_DOM_FRAGMENT: true }), fence }
+}
+
+/**
+ * The text's top-level blocks, each drawn on its own. HTML written in the text can open in one block and close in a
+ * later one, e.g. `<details>`, so text with any is one block.
+ */
+function groups(tokens: Token[]): Token[][] {
+  return tokens.some((t) => t.type === 'html') ? [tokens] : tokens.map((t) => [t])
 }
 
 /** Whether the text ends inside a code fence still being written. */
 const openFence = (text: string) => (text.match(/^ {0,3}(```|~~~)/gm)?.length ?? 0) % 2 === 1
+
+/** One of the text's blocks as it's on the page, kept while its source is the same. */
+interface Shown {
+  /** Its source, and if it has a diagram, the colours that's drawn in. */
+  key: string
+  nodes: ChildNode[]
+  /** Whether it has code in it, which is decorated, so it's drawn again whole rather than changed to fit. */
+  code: boolean
+  stop: () => void
+}
+
+/**
+ * Changes `live` to match `next`, keeping what's the same: a text node that grows is added to, not replaced, so what's
+ * selected in it stays selected. What's new is moved over from `next`.
+ */
+function morph(live: Node, next: Node) {
+  if (live.nodeName !== next.nodeName) return void live.parentNode?.replaceChild(next, live)
+  if (live instanceof CharacterData) {
+    const to = (next as CharacterData).data
+    if (live.data === to) return
+    let same = 0
+    while (same < live.length && same < to.length && live.data[same] === to[same]) same++
+    return live.replaceData(same, live.length - same, to.slice(same))
+  }
+  if (!(live instanceof Element) || !(next instanceof Element)) return
+  for (const a of [...live.attributes]) if (!next.hasAttribute(a.name)) live.removeAttribute(a.name)
+  for (const a of next.attributes) if (live.getAttribute(a.name) !== a.value) live.setAttribute(a.name, a.value)
+  const olds = [...live.childNodes]
+  const news = [...next.childNodes]
+  news.forEach((n, i) => (olds[i] ? morph(olds[i], n) : live.appendChild(n)))
+  for (const n of olds.slice(news.length)) n.remove()
+}
 
 /** Fences whose code is shell commands, which get a button to run them. */
 const SHELLS = new Set(['bash', 'sh', 'shell', 'zsh', 'console', 'shellscript'])
@@ -82,9 +123,8 @@ function keepInPlace(el: HTMLElement, change: () => void) {
  * wrap toggle, a shell fence a button to run it too, given `run`, and a mermaid
  * one is drawn as its diagram (src/diagram.ts sanitizes that itself).
  */
-function decorate(root: HTMLElement, text: string, fence: string, run?: (command: string) => void): () => void {
-  const blocks = [...root.querySelectorAll<HTMLElement>('pre > code')]
-  const open = openFence(text)
+function decorate(nodes: Node[], open: boolean, fence: string, run?: (command: string) => void): () => void {
+  const blocks = nodes.flatMap((n) => (n instanceof Element ? [...n.querySelectorAll<HTMLElement>('pre > code')] : []))
   const stops = blocks.map((code, i) => {
     const pre = code.parentElement!
     const lang = /\blanguage-(\S+)/.exec(code.className)?.[1]?.toLowerCase()
@@ -161,19 +201,66 @@ export function Markdown(props: {
     if (!(img instanceof HTMLImageElement) || img.closest('a')) return
     viewImageIn(e.currentTarget as Element, img)
   }
+  /**
+   * Drawn block by block, and only the blocks that changed, so that as Claude writes, what's there already stays as
+   * it is: highlighted, its diagrams drawn, and what's selected in it still selected. The block being written into is
+   * changed to fit rather than drawn again, unless it has code in it.
+   */
+  let shown: Shown[] = []
+  let shownLinks = ''
+  const drop = (s: Shown) => {
+    s.stop()
+    for (const n of s.nodes) n.remove()
+  }
+  const clear = () => {
+    shown.forEach(drop)
+    shown = []
+  }
+  onCleanup(clear)
   createEffect(() => {
+    const text = props.text
+    const tokens = md.lexer(text)
+    const links = JSON.stringify(tokens.links)
+    // A link defined at the end can change any block that uses it.
+    if (links !== shownLinks) clear()
+    shownLinks = links
     // A diagram is drawn again in the new colours when the theme changes.
-    if (hasDiagram(props.text)) appliedPalette()
-    const { html, fence } = render(props.text)
-    el.innerHTML = html
+    const palette = hasDiagram(text) ? JSON.stringify(appliedPalette()) : ''
+    const open = openFence(text)
     const image = props.image
-    if (image)
-      for (const img of el.querySelectorAll('img')) {
-        const src = img.getAttribute('src')
-        const url = src && image(src)
-        if (url) img.src = url
+    const run = props.runnable ? files?.run : undefined
+    const all = groups(tokens)
+    const next: Shown[] = []
+    all.forEach((group, i) => {
+      const source = group.map((t) => t.raw).join('')
+      // A shell block is drawn again once it can be run, i.e. when the reply it's in is done, to get its Run button.
+      const runs = !!run && group.some((t) => t.type === 'code' && SHELLS.has(String(t.lang).toLowerCase()))
+      const key = `${palette && hasDiagram(source) ? `${source}\0${palette}` : source}${runs ? '\0run' : ''}`
+      const old = shown[i]
+      if (old?.key === key) return void next.push(old)
+      const { html, fence } = render(group, tokens.links)
+      if (image)
+        for (const img of html.querySelectorAll('img')) {
+          const src = img.getAttribute('src')
+          const url = src && image(src)
+          if (url) img.src = url
+        }
+      const code = !!html.querySelector('pre')
+      const nodes = [...html.childNodes]
+      if (old && !old.code && !code && old.nodes.length === nodes.length && old.nodes.every((n, j) => n.nodeName === nodes[j].nodeName)) {
+        // Still the same kind of block, e.g. the paragraph or list being written: changed to fit.
+        old.nodes.forEach((n, j) => morph(n, nodes[j]))
+        return void next.push({ ...old, key, nodes: old.nodes.map((n, j) => (n.isConnected ? n : nodes[j])) })
       }
-    onCleanup(decorate(el, props.text, fence, props.runnable ? files?.run : undefined))
+      el.insertBefore(html, old?.nodes[0] ?? shown.slice(i + 1).find((s) => s.nodes.length)?.nodes[0] ?? null)
+      if (old) drop(old)
+      // Decorated once it's on the page, where a diagram can read the colours it's drawn in. A code block is wrapped
+      // with its header, so what's kept is what's now in the text's place.
+      const stop = decorate(nodes, open && i === all.length - 1, fence, run)
+      next.push({ key, nodes: nodes.map((n) => (n.parentNode === el ? n : (n.parentNode as Element))), code, stop })
+    })
+    shown.slice(all.length).forEach(drop)
+    shown = next
   })
   createEffect(() => {
     const on = wrap()

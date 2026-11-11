@@ -5,6 +5,7 @@ import type { AnswerDraft, PendingPermission } from '../../shared/protocol.ts'
 import { socket } from '../api.ts'
 import { Markdown } from './Markdown.tsx'
 import { PlanActions, PlanEditor, planText, planTitle } from './Plan.tsx'
+import { CommentablePlan } from './ReplyComments.tsx'
 import { ToolInput, relPath, toolLabel, toolSummary, type Question } from './ToolCard.tsx'
 import { Button, noteClass } from './ui.tsx'
 
@@ -89,9 +90,9 @@ export function PermissionPrompt(props: {
           actions={<PlanActions sessionId={props.sessionId} permission={p()} onOpen={props.planShown ? undefined : props.onOpenPlan} />}
         >
           <Show when={!props.planShown} fallback={<p class="text-xs text-fg-3">The plan is open beside the chat.</p>}>
-            <div class="border border-line px-4 py-3 rounded-lg">
+            <CommentablePlan requestId={p().requestId} class="border border-line px-4 py-3 rounded-lg">
               <PlanEditor sessionId={props.sessionId} permission={p()} />
-            </div>
+            </CommentablePlan>
           </Show>
         </Shell>
       </Match>

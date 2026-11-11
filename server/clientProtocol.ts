@@ -21,9 +21,17 @@ const clipped = (max: number) =>
     .optional()
     .catch(undefined)
 
+const commentAnchor = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('reply'), reply: z.string(), start: z.number().optional(), end: z.number().optional() }),
+  z.object({ kind: z.literal('plan'), request: z.string() }),
+  z.object({ kind: z.literal('diff'), path: z.string(), from: z.string(), to: z.string(), where: z.string() }),
+  z.object({ kind: z.literal('file'), path: z.string(), from: z.number(), to: z.number() }),
+])
+
 const attachments = z.object({
   pastes: z.array(z.string()).default([]),
   images: z.array(imageAttachment).default([]),
+  comments: z.array(z.object({ id: z.string(), on: commentAnchor, quote: z.string(), text: z.string() })).optional(),
 }) satisfies ZodType<DraftAttachments, unknown>
 
 const start = z.object({

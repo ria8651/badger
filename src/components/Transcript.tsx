@@ -5,10 +5,11 @@ import { detail } from '../prefs.ts'
 import { chatCommands, useChecking, type Partial } from '../useChat.ts'
 import { AgentRun, ChildRun } from '../transcript/agents.tsx'
 import { NONE, TranscriptIndex, createIndex, useIndex } from '../transcript/context.ts'
-import { ApiError, CardContextBadge, CompactDivider, CompactingLine, Idle, Notice, Thinking, UserMessage, WorkingLine, contextChip } from '../transcript/items.tsx'
+import { ApiError, CardContextBadge, CompactDivider, CompactingLine, Idle, Notice, Thinking, UserMessage, WorkingLine, commentChip, contextChip } from '../transcript/items.tsx'
 import { buildView, duration, foldWork, lastContext, modelName, retryOf, stopReason, streamingUpdate, within, type Index, type Item, type Row, type Work } from '../transcript/model.ts'
 import { Attachments } from './Attachments.tsx'
 import { Markdown } from './Markdown.tsx'
+import { ReplyBody } from './ReplyComments.tsx'
 import { Disclosure, Pre, ToolCard, ToolInput, toolLabel, toolSummary } from './ToolCard.tsx'
 import { parsePartialJson } from '../partialJson.ts'
 import { LiveDot, compact, plural } from './ui.tsx'
@@ -54,11 +55,37 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
   const view = createMemo(() => buildView(props.messages, !!props.nested))
   const folded = createMemo(() => foldWork(view().items))
   const full = () => detail() === 'full' && !props.folded
-  const rows = (): Row[] => (full() ? view().items : folded().rows)
   // A thinking block straight after another is an update, said rather than thought, so it streams as text.
   const partial = createMemo((): Partial | null => {
     const p = props.partial
     return p?.type === 'thinking' && streamingUpdate(props.messages, p.messageId) ? { ...p, type: 'text' } : p
+  })
+  /**
+   * What Claude's saying as it streams, a row of its own that the reply it becomes then takes the place of, so it isn't
+   * drawn again when it's done: by the API message it's in, and which of the message's replies it is.
+   */
+  const streams = new Map<string, Streamed>()
+  const streamed = (key: string) => {
+    let s = streams.get(key)
+    if (!s) streams.set(key, (s = streamedRow()))
+    return s
+  }
+  const rows = createMemo((): Row[] => {
+    const seen = new Map<string, number>()
+    const out = (full() ? view().items : folded().rows).map((r) => {
+      if (r.kind !== 'text' || !r.streamed) return r
+      const n = seen.get(r.streamed) ?? 0
+      seen.set(r.streamed, n + 1)
+      const s = streams.get(`${r.streamed}#${n}`)
+      if (!s) return r
+      s.set(r.text, r.id)
+      return s.item
+    })
+    const p = partial()
+    if (p?.type !== 'text' || !p.text) return out
+    const s = streamed(`${p.messageId}#${seen.get(p.messageId) ?? 0}`)
+    s.set(p.text)
+    return [...out, s.item]
   })
 
   const toolName = () => partial()?.toolName ?? ''
@@ -151,15 +178,16 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
             images={item.images}
             card={view().extras.get(item)?.card}
             move={view().extras.get(item)?.move}
-            context={view().extras.get(item)?.chips.map(contextChip)}
+            context={[...(view().extras.get(item)?.chips.map(contextChip) ?? []), ...(item.comments?.map(commentChip) ?? [])]}
             onOpenAttachment={open() && ((part) => open()?.(id!, part))}
           />
         )
       }
       case 'text':
+        // The chat's own replies can be commented on, once they're done; not a subagent's shown in it.
         return (
           <div class="my-4">
-            <Markdown text={item.text} runnable />
+            <ReplyBody id={props.nested ? undefined : item.id} text={item.text} done={!!item.id} />
           </div>
         )
       case 'thinking':
@@ -278,16 +306,34 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
       >
         {partialWork()}
       </Show>
-      <Show when={partial()?.type === 'text' && partial()?.text}>
-        <div class="my-4">
-          <Markdown text={partial()?.text ?? ''} />
-        </div>
-      </Show>
       <Show when={props.compacting} fallback={<Show when={full() && props.working && !partial()}><WorkingLine /></Show>}>
         {(since) => <CompactingLine since={since()} tokens={lastContext(props.messages)} />}
       </Show>
     </div>
   )
+}
+
+type Streamed = { item: Extract<Item, { kind: 'text' }>; set: (text: string, id?: string) => void }
+
+/** A reply's row whose text changes: as it streams, then as the message it became, which gives it its id. */
+function streamedRow(): Streamed {
+  const [text, setText] = createSignal('')
+  const [id, setId] = createSignal<string>()
+  return {
+    item: {
+      kind: 'text',
+      get text() {
+        return text()
+      },
+      get id() {
+        return id()
+      },
+    },
+    set: (t, i) => {
+      setText(t)
+      setId(i)
+    },
+  }
 }
 
 /**
