@@ -69,6 +69,11 @@ export async function mainCheckout(path: string): Promise<string> {
   return dirname(resolve(path, await git(path, 'rev-parse', '--git-common-dir')))
 }
 
+/** Whether a checkout has uncommitted changes, untracked files included. */
+export async function hasChanges(path: string): Promise<boolean> {
+  return changed(await git(path, 'status', '--porcelain')) > 0
+}
+
 export async function worktreeStatus(path: string): Promise<WorktreeStatus> {
   if (!WORKTREE_PATH.test(path)) throw new Error('Not a Claude Code worktree')
   const main = await mainCheckout(path)

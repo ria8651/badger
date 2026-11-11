@@ -8,6 +8,7 @@ import { FileBrowser, formatBytes } from './FileBrowser.tsx'
 import { GitSummaryButton } from './GitSummary.tsx'
 import { confirmBy, showError } from './Popover.tsx'
 import { ltr, plural } from './ui.tsx'
+import { removalNotes } from '../worktreeCleanup.ts'
 
 /** How many folders show before "Show more": the most recently used. */
 const FOLDERS_SHOWN = 4
@@ -93,11 +94,10 @@ export function FolderPicker(props: {
     api.hideFolder(folder.path, props.machine).then(refetch, (e: Error) => showError("Couldn't take it off the list", e.message, button))
   }
   const removeWorktree = async (folder: Folder, c: Checkout, button: Element) => {
-    const unmerged = c.git.base?.ahead ?? 0
     const notes = [
-      unmerged && `Its branch ${c.git.branch} has ${plural(unmerged, 'unmerged commit')}, so it will be kept.`,
-      c.unpushed && `${plural(c.unpushed, 'commit')} on it aren't on any remote.`,
-    ].filter((note) => typeof note === 'string')
+      ...removalNotes({ machine: props.machine, root: c.path }, c.git.branch ?? '', c.git.base?.ahead ?? 0),
+      ...(c.unpushed ? [`${plural(c.unpushed, 'commit')} on it aren't on any remote.`] : []),
+    ]
     if (!(await confirmBy(button, { message: `Delete worktree ${basename(c.path)}?`, notes, action: 'Delete' }))) return
     const machine = props.machine
     const key = `${machine} ${c.path}`

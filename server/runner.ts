@@ -37,7 +37,7 @@ import { TERMINAL_INSTRUCTIONS, TERMINAL_SERVER, terminalOps } from './terminalT
 import { Terminals } from './terminals.ts'
 import { ContextReader, readAccount } from './usage.ts'
 import { baseChoices, setBase } from './base.ts'
-import { branchChoices, excludeWorktrees, gitPull, gitPush, gitStatus, gitSwitch, inaccessible, removeWorktree, rootOf, worktreeStatus } from './workspace.ts'
+import { branchChoices, excludeWorktrees, gitPull, gitPush, gitStatus, gitSwitch, hasChanges, inaccessible, removeWorktree, rootOf, worktreeStatus } from './workspace.ts'
 
 // Merging only starts a chat in the main checkout, and that chat asks for anything risky itself.
 const MERGE_TOOL_NAME = `mcp__${BOARD_SERVER}__${MERGE_TOOL}`
@@ -344,7 +344,9 @@ export class Runner implements RunnerApi {
 
   async removeWorktree(dir: string): Promise<void> {
     if (this.manager.busyIn(dir)) throw new BadRequest('A chat is still working in this worktree')
-    if (this.terminals.terminals.some((t) => t.root === dir)) throw new BadRequest('Close its terminals first')
+    // Asked before its terminals go, so one kept for its changes keeps them too.
+    if (await hasChanges(dir).catch(badRequest)) throw new BadRequest('It has uncommitted changes. Commit or discard them first.')
+    for (const t of this.terminals.terminals.filter((t) => t.root === dir)) await this.terminals.remove(t.id)
     for (const s of this.manager.in(dir)) s.close()
     await removeWorktree(dir).catch(badRequest)
     forgetSize(dir)

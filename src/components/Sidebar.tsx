@@ -12,6 +12,7 @@ import { LOCAL, onMachine } from '../machines.ts'
 import { navigate, route } from '../router.tsx'
 import { cardOf, cards, cardsLoaded, projects } from '../stores/cards.ts'
 import { discardDraft, parentOf, sessions, sessionsLoaded, toggleArchived } from '../stores/sessions.ts'
+import { leftBehind, offerCleanup } from '../worktreeCleanup.ts'
 import { terminalLabel, terminalTooltip, terminalWs, terminals, wsKey } from '../terminals.ts'
 import { accountUsage } from '../usage.ts'
 import { ChatSummary, MachineName } from './ChatSummary.tsx'
@@ -347,6 +348,19 @@ function SessionRow(props: {
     props.onOpenChange(false)
     if (sure) discardDraft(s().id).catch((e: Error) => showError("Couldn't discard it", e.message))
   }
+  /** Archiving the last chat in a worktree offers to remove it, or close its terminals. */
+  const archive = async (button: Element) => {
+    const at = button.getBoundingClientRect()
+    const left = s().archived ? [] : leftBehind([s().id])
+    try {
+      await toggleArchived(s())
+    } catch (e) {
+      return showError("Couldn't change it", (e as Error).message)
+    }
+    props.onOpenChange(true)
+    await offerCleanup(at, left)
+    props.onOpenChange(false)
+  }
   return (
     <>
       <div class="group relative mb-px">
@@ -400,7 +414,7 @@ function SessionRow(props: {
               triggerClass={(open) => ghostClass('sm', open)}
               trigger={() => <Pencil class="size-3.5" />}
             />
-            <GhostButton size="sm" onClick={() => toggleArchived(s()).catch((e: Error) => showError("Couldn't change it", e.message))} title={s().archived ? 'Unarchive' : 'Archive'}>
+            <GhostButton size="sm" onClick={(e) => archive(e.currentTarget)} title={s().archived ? 'Unarchive' : 'Archive'}>
               <Show when={s().archived} fallback={<Archive class="size-3.5" />}>
                 <ArchiveRestore class="size-3.5" />
               </Show>

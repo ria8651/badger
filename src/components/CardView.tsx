@@ -15,6 +15,7 @@ import { LOCAL, onMachine } from '../machines.ts'
 import { attention } from '../attention.ts'
 import { cardOf, cards, deleteCard, linkSession, projectOf, unlinkSession, updateCard } from '../stores/cards.ts'
 import { sessions } from '../stores/sessions.ts'
+import { removalNotes, updateCardTidying } from '../worktreeCleanup.ts'
 
 const STATUS_OPTIONS = CARD_STATUSES.map((value) => ({ value, label: STATUS_LABELS[value] }))
 
@@ -126,6 +127,7 @@ export function CardView(props: {
     </>
   )
 
+  let statusBox: HTMLDivElement | undefined
   const details = (): JSX.Element => (
     <>
       {/* A textarea so long titles wrap rather than run off narrow screens; Enter still ends the edit. */}
@@ -140,8 +142,8 @@ export function CardView(props: {
         }}
         class="block w-full resize-none bg-transparent text-xl leading-snug font-medium outline-none [field-sizing:content]"
       />
-      <div class="mt-2 -ml-2">
-        <Select value={props.card.status} options={STATUS_OPTIONS} onChange={(status) => void updateCard(props.card.id, { status })} placement="bottom" title="Status" />
+      <div ref={statusBox} class="mt-2 -ml-2">
+        <Select value={props.card.status} options={STATUS_OPTIONS} onChange={(status) => void updateCardTidying(props.card.id, { status }, () => statusBox)} placement="bottom" title="Status" />
       </div>
 
       {/* Keyed so switching cards saves the last one's edits to it before loading the next. */}
@@ -319,7 +321,7 @@ function WorktreeRow(props: { path: string; machine: string }) {
   }
   const remove = async (e: MouseEvent) => {
     const s = status()
-    const notes = s?.unmerged ? [`Its branch ${s.branch} has unmerged commits, so it will be kept.`] : []
+    const notes = removalNotes({ machine: props.machine, root: props.path }, s?.branch ?? '', s?.unmerged ?? 0)
     if (!(await confirmBy(e.currentTarget as Element, { message: `Remove worktree ${folderLabel(props.path)}?`, notes, action: 'Remove' }))) return
     setError(undefined)
     setDeleting(true)

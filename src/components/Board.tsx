@@ -5,7 +5,8 @@ import { CARD_STATUSES, type CardStatus } from '../../shared/protocol.ts'
 import { folderLabel, worktreeOf } from '../folders.ts'
 import { ChatDot, inputClass } from './ui.tsx'
 import { attention } from '../attention.ts'
-import { STATUS_LABELS, cards, createCard, updateCard } from '../stores/cards.ts'
+import { STATUS_LABELS, cards, createCard } from '../stores/cards.ts'
+import { updateCardTidying } from '../worktreeCleanup.ts'
 import { sessions } from '../stores/sessions.ts'
 
 /** Where a dragged card would land: before the card at `index` in the column, ignoring the dragged card itself. */
@@ -50,14 +51,18 @@ export function Columns(props: BoardProps & { parentId: number | null; class?: s
     const prev = list[t.index - 1]?.position
     const next = list[t.index]?.position
     const position = prev === undefined ? (next === undefined ? 1 : next - 1) : next === undefined ? prev + 1 : (prev + next) / 2
-    void updateCard(id, { status: t.status, position })
+    void update(id, { status: t.status, position })
   }
 
   /** Without dragging, as on touch screens: to the bottom of another column. */
   const move = (id: number, status: CardStatus) => {
     const position = Math.max(0, ...column(status).map((c) => c.position)) + 1
-    void updateCard(id, { status, position })
+    void update(id, { status, position })
   }
+
+  // Asks about its worktrees by the card, wherever it's landed.
+  const update = (id: number, patch: { status: CardStatus; position: number }) =>
+    updateCardTidying(id, patch, () => document.querySelector(`[data-card="${id}"]`) ?? undefined)
 
   const create = (status: CardStatus, title: string) => {
     if (!title.trim()) return setAdding(null)
@@ -118,6 +123,7 @@ export function Columns(props: BoardProps & { parentId: number | null; class?: s
                         </Show>
                         <div class="relative">
                           <button
+                            data-card={card.id}
                             draggable="true"
                             onDragStart={(e) => {
                               e.dataTransfer!.effectAllowed = 'move'
