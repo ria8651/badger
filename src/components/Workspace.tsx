@@ -604,7 +604,14 @@ export function Workspace(props: {
                 </button>
                 <Show when={previewUrl(v().id, v().path, machine())}>
                   {(url) => (
-                    <a href={url()} target="_blank" rel="noopener" title="Open in a new browser tab" class={ghostClass()}>
+                    <a
+                      href={url()}
+                      target="_blank"
+                      rel="noopener"
+                      onClick={() => close(viewKey(v()))}
+                      title="Move to a new browser tab"
+                      class={ghostClass()}
+                    >
                       <SquareArrowOutUpRight class="size-3.5" />
                     </a>
                   )}
