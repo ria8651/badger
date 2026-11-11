@@ -415,21 +415,22 @@ export function moveShown(tree: Node, session: string, key: string, drop: Drop):
 }
 
 /**
- * Where a view goes when it isn't anywhere yet: with others of its kind in `into`, else where its chat sees
- * them; else `into` if its chat sees it, else any panel it sees. Only with none showing does it go to one its
+ * Where a view goes when it isn't anywhere yet: with others of its kind its chat sees, in `into` if they're
+ * there; else `into` if its chat sees it, else any panel it sees. Only with none showing does it go to one its
  * chat doesn't see: with others of its kind, else `into`. Failing all of those, a new group beside the chat.
  */
 function place(tree: Node, session: string, view: View, into: string | undefined, edge: Edge): { tree: Node; group: string } {
   const groups = groupsOf(tree)
-  const shown = new Set(groupsOf(shownTree(tree, session)).map((g) => g.id))
-  const kin = groups.filter((g) => g.views.some((v) => v.kind === view.kind))
-  const target = groups.find((g) => g.id === into)
+  const shown = groupsOf(shownTree(tree, session))
+  const ofKind = (g: Group) => g.views.some((v) => v.kind === view.kind)
+  const kin = shown.filter(ofKind)
   const to = (
     kin.find((g) => g.id === into) ??
-    kin.find((g) => shown.has(g.id)) ??
-    (target && shown.has(target.id) ? target : groups.find((g) => shown.has(g.id))) ??
     kin[0] ??
-    target
+    shown.find((g) => g.id === into) ??
+    shown[0] ??
+    groups.find(ofKind) ??
+    groups.find((g) => g.id === into)
   )?.id
   if (to) return { tree: addToGroup(tree, to, view), group: to }
   return splitWith(tree, 'chat', edge, [view])
@@ -548,8 +549,10 @@ export function placeTerminals(ws: Ws, ids: string[]): void {
     for (const v of viewsOf(tree)) if (v.kind === 'terminal' && !live.has(v.id) && !pending.has(v.id)) tree = removeView(tree, viewKey(v))
     const placed = new Set(viewsOf(tree).map(viewKey))
     const missing = ids.filter((id) => !placed.has(`terminal:${id}`)).map((id): View => ({ kind: 'terminal', id }))
+    // Where the chat last opened here sees it.
+    const session = l.recent?.[0] ?? ''
     for (const v of missing) {
-      const placed = place(tree, '', v, focused(l, tree, ''), 'bottom')
+      const placed = place(tree, session, v, focused(l, tree, session), 'bottom')
       // Not brought to the front of tabs already there, any chat's: it wasn't asked for here.
       const open = groupsOf(tree).some((g) => g.id === placed.group && g.views.length)
       tree = open ? addToGroup(tree, placed.group, v, false) : placed.tree

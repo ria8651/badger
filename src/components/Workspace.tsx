@@ -608,7 +608,9 @@ export function Workspace(props: {
                       href={url()}
                       target="_blank"
                       rel="noopener"
-                      onClick={() => close(viewKey(v()))}
+                      // After the browser's followed the link, which a middle click does too.
+                      onClick={() => setTimeout(close, 0, viewKey(v()))}
+                      onAuxClick={(e) => e.button === 1 && setTimeout(close, 0, viewKey(v()))}
                       title="Move to a new browser tab"
                       class={ghostClass()}
                     >
