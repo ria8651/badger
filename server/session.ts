@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { getSessionInfo, query, type McpServerConfig, type Query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
+import { query, type McpServerConfig, type Query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { BackgroundTask, ChatCommand, ChatCommandReply, ChatStatus, ImageAttachment, NestedChat, PermissionMode, QueuedMessage, ServerEvent, WireMessage } from '../shared/protocol.ts'
 import { wrapPaste } from '../shared/pastes.ts'
 import { BashStreams } from './bashStream.ts'
@@ -12,6 +12,7 @@ import { sdkOptions } from './session/options.ts'
 import { Outbox, publicQueued } from './session/outbox.ts'
 import { gitNote, markGit } from './session/gitNote.ts'
 import { Permissions } from './session/permissions.ts'
+import { sessionInfo } from './sessionInfo.ts'
 import { inaccessible } from './workspace.ts'
 
 /** Close an idle Claude Code process after this long; the next message resumes it. */
@@ -608,7 +609,7 @@ export class SessionManager {
     const existing = this.sessions.get(id)
     if (existing) return existing
 
-    const info = await getSessionInfo(id)
+    const info = await sessionInfo(id)
     const cwd = info?.cwd ?? opts.cwd
     if (!cwd) throw new Error('Unknown session and no working directory given')
     // Otherwise Claude Code fails to start with a misleading "binary failed to launch".

@@ -1,8 +1,9 @@
-import { getSessionInfo, type SDKControlGetContextUsageResponse, type SDKControlGetUsageResponse } from '@anthropic-ai/claude-agent-sdk'
+import { type SDKControlGetContextUsageResponse, type SDKControlGetUsageResponse } from '@anthropic-ai/claude-agent-sdk'
 import type { AccountUsage, ContextUsage } from '../shared/protocol.ts'
 import { oneOff, readContext, readLimits } from './claudeProbe.ts'
 import { message } from './errors.ts'
 import type { SessionManager } from './session.ts'
+import { sessionInfo } from './sessionInfo.ts'
 import { inaccessible } from './workspace.ts'
 
 /** Plan limits change slowly; read them again at most this often. */
@@ -23,7 +24,7 @@ export class ContextReader {
   async context(sessionId: string): Promise<ContextUsage | undefined> {
     const live = this.manager.get(sessionId)
     if (live) return contextUsage(await live.contextUsage())
-    const info = await getSessionInfo(sessionId)
+    const info = await sessionInfo(sessionId)
     if (!info?.cwd || inaccessible(info.cwd)) return undefined
     const cached = this.contexts.get(sessionId)
     if (cached?.modified === info.lastModified) return cached.usage

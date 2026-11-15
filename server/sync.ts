@@ -23,7 +23,7 @@ const MAX_MISMATCHES = 5
 const STATE_BATCH = 500
 
 /** Where Claude Code keeps transcripts, a folder per project. */
-const projectsDir = () => join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects')
+export const projectsDir = () => join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects')
 
 /**
  * Writes part of a chat's transcript where Claude Code keeps those of chats in
