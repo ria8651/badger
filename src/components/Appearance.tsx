@@ -1,5 +1,7 @@
 import { For, Show } from 'solid-js'
 import { FRAMES, PALETTES, setTheme, themeChoice, type Frame, type Mode, type Palette } from '../theme.ts'
+import { powerMode, setPowerMode } from '../powerMode.tsx'
+import { Segmented } from './ui.tsx'
 
 /**
  * Settings' theme picker: a section per frame with a tile per everyday palette
@@ -56,6 +58,17 @@ export function Appearance() {
           </div>
         )}
       </For>
+
+      <h3 class="mt-8 text-sm font-medium text-fg">Power mode</h3>
+      <p class="mt-1 mb-2 text-ui leading-relaxed text-fg-2">Sparks fly from the cursor and the screen shakes as you type. Keep it up for a combo.</p>
+      <Segmented
+        value={powerMode() ? 'on' : 'off'}
+        options={[
+          { value: 'off', label: 'Off' },
+          { value: 'on', label: 'On' },
+        ]}
+        onChange={(v) => setPowerMode(v === 'on')}
+      />
     </div>
   )
 }
