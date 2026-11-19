@@ -4,7 +4,7 @@ import { PathLink } from './PathLink.tsx'
 import { highlightWhenSeen, highlighted, languageOf } from '../highlight.ts'
 import { Check, ChevronRight, CircleAlert, Loader2, Shield, Webhook } from '../icons'
 import type { Task } from '../tasks.ts'
-import { terminalLabel, terminals } from '../terminals.ts'
+import { terminalLabel, toolTerminal } from '../terminals.ts'
 import { useChecking } from '../useChat.ts'
 import { viewImages } from './ImageViewer.tsx'
 import { Markdown } from './Markdown.tsx'
@@ -90,9 +90,11 @@ export function toolSummary(name: string, input: Input, cwd?: string): string {
     case 'mcp__terminals__stop_terminal':
     case 'mcp__terminals__send_input': {
       // By what it's called, as the terminals panel shows it; a closed one only has its id left.
-      const t = terminals().find((t) => t.id === input.id)
+      const t = toolTerminal(input.id)
       return [t ? terminalLabel(t) : str(input.id), input.text ? JSON.stringify(input.text) : ''].filter(Boolean).join(' ')
     }
+    case 'mcp__terminals__start_terminal':
+      return str(input.name) || str(input.command)
     case 'Bash':
       return str(input.description) || str(input.command)
     case 'Read':
@@ -360,6 +362,17 @@ type ToolProps = {
   context?: ToolContext
 }
 
+// Not every terminals tool: list_terminals' result starts lines with ids too, of terminals it didn't act on.
+const TERMINAL_TOOLS =['start_terminal', 'read_terminal', 'restart_terminal', 'stop_terminal', 'send_input'].map((t) => `mcp__terminals__${t}`)
+
+/** The terminal a terminal tool acted on: the one it names, or the one start_terminal says it started. */
+function calledTerminal(props: ToolProps) {
+  if (!TERMINAL_TOOLS.includes(props.name)) return
+  if (props.input.id) return toolTerminal(props.input.id)
+  const started = props.result && /^([0-9a-f]+) \[/m.exec(resultText(props.result.content))
+  return started ? toolTerminal(started[1]) : undefined
+}
+
 /** Output still coming: the call's, while the turn waits on it, or its task's, for as long as that runs. */
 const liveOf = (props: ToolProps) =>
   props.task?.status === 'running' || (!props.result && props.running) ? props.liveOutput : undefined
@@ -367,8 +380,11 @@ const liveOf = (props: ToolProps) =>
 export function ToolCard(props: ToolProps) {
   const live = () => liveOf(props)
   const files = useOpenFile()
-  /** The file a call read or wrote, to open beside the chat: where a Read started, if it said. */
+  /** What a call acted on, to show beside the chat: its terminal, or the file it read or wrote, where a Read started if it said. */
   const openTarget = () => {
+    const show = files?.terminal
+    const terminal = show && calledTerminal(props)
+    if (terminal) return () => show(terminal.id)
     if (!files || !['Read', 'Write', 'Edit', 'MultiEdit'].includes(props.name)) return
     // A path as it is, not a link: nothing in it is an escape, an anchor or a line number.
     const path = resolvePath(str(props.input.file_path), props.cwd ?? files.cwd())

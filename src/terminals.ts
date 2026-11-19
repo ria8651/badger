@@ -140,6 +140,12 @@ export function workspaceOf(machine: string, cwd: string): Accessor<string | und
   return get
 }
 
+/**
+ * The terminal a tool call names. Claude has its runner's own id, which is the part of the browser's
+ * `<machine>.<id>` after the dot; ids are random enough that the machine isn't needed to tell them apart.
+ */
+export const toolTerminal = (id: unknown) => (typeof id === 'string' && id ? list.find((t) => t.id === id || t.id.endsWith(`.${id}`)) : undefined)
+
 /** What a terminal is called: its name, else the command it runs, else (from older hosts) whatever the shell last titled it. */
 export const terminalLabel = (t: TerminalInfo) => t.name ?? t.command ?? t.title
 

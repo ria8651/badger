@@ -17,7 +17,7 @@ import { navigate } from '../router.tsx'
 import { createStickyScroll } from '../stickyScroll.ts'
 import { cardOf } from '../stores/cards.ts'
 import { sessionById } from '../stores/sessions.ts'
-import { knownRoot, workspaceOf, type Ws } from '../terminals.ts'
+import { inWs, knownRoot, terminals, workspaceOf, type Ws } from '../terminals.ts'
 import { defaultStart, rememberMachine } from '../drafts.ts'
 import { Checking, ChildChats, createChat, createChildChats, type Chat as ChatHandle } from '../useChat.ts'
 import { ChatHeader, createGitStatus } from './ChatHeader.tsx'
@@ -182,10 +182,18 @@ export function Chat(props: {
     const dir = cwd()
     if (w && dir) void openTerminal(w, props.sessionId, dir, undefined, command).catch((e: Error) => showError("Couldn't open a terminal", e.message))
   }
+  /** Shows a terminal: in its tab beside the chat if it's in this workspace, else on its own page. */
+  const terminal = (id: string) => {
+    const w = beside()
+    const t = terminals().find((t) => t.id === id)
+    if (w && t && inWs(t, w)) openView(w, { kind: 'terminal', id })
+    else navigate({ kind: 'terminal', id })
+  }
   const files = props.embedded
     ? outer && {
         cwd: outer.cwd,
         open: outer.open,
+        terminal: outer.terminal,
         get run() {
           return cwd() === outer.cwd() ? outer.run : undefined
         },
@@ -198,6 +206,7 @@ export function Chat(props: {
           // Opening it is asking for the file, so a tab showing its diff switches back.
           void expandHome(path, machine()).then((path) => openFile(w, { kind: 'file', session: props.sessionId, path, line, mode: openingMode(path, line) }))
         },
+        terminal,
         // Read where it's used, so a chat with nowhere to run one yet gets no Run buttons until it has.
         get run() {
           return beside() && cwd() ? run : undefined

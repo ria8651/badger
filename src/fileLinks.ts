@@ -3,9 +3,15 @@ import { api } from './api.ts'
 
 /**
  * Opens a file beside the chat, at a line if given; `cwd` is what relative links are from. Absent where there's nowhere
- * to open one. `run` runs a shell command in a terminal beside the chat, in its folder.
+ * to open one. `run` runs a shell command in a terminal beside the chat, in its folder. `terminal` shows a terminal,
+ * by the browser's id for it.
  */
-export const OpenFile = createContext<{ open: (path: string, line?: number) => void; cwd: () => string | undefined; run?: (command: string) => void }>()
+export const OpenFile = createContext<{
+  open: (path: string, line?: number) => void
+  cwd: () => string | undefined
+  run?: (command: string) => void
+  terminal?: (id: string) => void
+}>()
 export const useOpenFile = () => useContext(OpenFile)
 
 /**
