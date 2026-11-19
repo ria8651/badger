@@ -1,5 +1,5 @@
 import { For, Index, Match, Show, Switch, children, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
-import { FileDiff, FileText, Globe, Minimize2, MessagesSquare, NotebookPen, Plus, RotateCw, SquareArrowOutUpRight, X } from '../icons'
+import { FileDiff, FolderTree, Globe, Minimize2, MessagesSquare, NotebookPen, Plus, RotateCw, SquareArrowOutUpRight, X } from '../icons'
 import { setOnScreen } from '../activity.ts'
 import { api } from '../api.ts'
 import type { ContextChip } from './Attachments.tsx'
@@ -8,7 +8,7 @@ import {
   LEADER,
   activeOf,
   btwView,
-  diffView,
+  filesView,
   focusRequest,
   groupOf,
   groupsOf,
@@ -17,6 +17,7 @@ import {
   moveShown,
   openPreview,
   openTerminal,
+  openFiles,
   openView,
   openedIn,
   panelsShown,
@@ -44,6 +45,7 @@ import {
   type Len,
   type AttachmentView,
   type FileView,
+  type FilesView,
   type PreviewView,
   type View,
 } from '../layout.ts'
@@ -55,7 +57,7 @@ import { PreviewFrame } from './PreviewFrame.tsx'
 import { PortButtons, RenameTerminal, RestartButton, StatusDot } from './Terminals.tsx'
 import { TerminalView } from './TerminalView.tsx'
 import { showError } from './Popover.tsx'
-import { LiveDot, ghostClass } from './ui.tsx'
+import { FileTypeIcon, LiveDot, ghostClass } from './ui.tsx'
 import { leaderKeys } from '../leader.ts'
 
 /** Height of a group's tab bar, which its views sit under. */
@@ -105,6 +107,8 @@ export interface ChatPanes {
   /** The diff of its checkout, if it has one to show. */
   hasDiff: () => boolean
   renderDiff: (onReady: (focus: () => void) => void) => JSX.Element
+  /** The files of its checkout as a tree, all of them or only those changed, as its tab says now. */
+  renderFiles: (v: () => FilesView, onReady: (focus: () => void) => void) => JSX.Element
   /** A file on its machine, all of it or its diff, as its tab says now. */
   renderFile: (v: () => FileView, onReady: (focus: () => void) => void) => JSX.Element
 }
@@ -421,7 +425,8 @@ export function Workspace(props: {
           if (props.cwd) void togglePanels(ws, props.sessionId, props.cwd).catch(terminalFailed)
         },
       },
-      { keys: ['d'], hint: ['D', 'Changes'], run: () => props.panes.hasDiff() && togglePane(diffView(props.sessionId)) },
+      { keys: ['d'], hint: ['D', 'Changes'], run: () => props.panes.hasDiff() && toggleFiles('changes') },
+      { keys: ['e'], hint: ['E', 'Files'], run: () => toggleFiles('all') },
       { keys: ['l'], hint: ['L', 'Plan'], run: () => props.panes.hasPlan() && togglePane(planView(props.sessionId)) },
       { keys: ['b'], hint: ['B', 'Side chats'], run: () => togglePane(btwView(props.sessionId)) },
     ]
@@ -431,6 +436,13 @@ export function Workspace(props: {
     const key = viewKey(view)
     if (viewShown(props.ws!, props.sessionId, key)) close(key)
     else openView(props.ws!, view)
+  }
+  /** Shows the chat's files in `mode`, switching them to it if they're showing the other, or closes them. */
+  const toggleFiles = (mode: NonNullable<FilesView['mode']>) => {
+    const view = filesView(props.sessionId, mode)
+    const was = viewsOf(layoutOf(props.ws!).tree).find((v): v is FilesView => v.kind === 'files' && v.session === props.sessionId)
+    if (was && (was.mode ?? 'all') === mode && viewShown(props.ws!, props.sessionId, viewKey(view))) close(viewKey(view))
+    else openFiles(props.ws!, view)
   }
 
   // ── Rendering ──
@@ -442,6 +454,7 @@ export function Workspace(props: {
     if (v?.kind === 'plan') return 'Plan'
     if (v?.kind === 'btw') return 'Side chats'
     if (v?.kind === 'diff') return 'Diff'
+    if (v?.kind === 'files') return v.mode === 'changes' ? 'Changes' : 'Files'
     if (v?.kind === 'file') return v.path.split('/').pop() || v.path
     if (v?.kind === 'attachment') return props.panes.attachment(v)?.label ?? 'Attachment'
     if (v?.kind === 'preview') return v.name ?? `:${v.id}`
@@ -453,7 +466,7 @@ export function Workspace(props: {
       ? `${tabLabel(v)}\n${previewUrl(v.id, v.path, machine()) ?? `Port ${v.id}`}`
       : v?.kind === 'file'
         ? v.path
-        : v?.kind === 'task' || v?.kind === 'plan' || v?.kind === 'attachment' || v?.kind === 'btw' || v?.kind === 'diff'
+        : v?.kind === 'task' || v?.kind === 'plan' || v?.kind === 'attachment' || v?.kind === 'btw' || v?.kind === 'diff' || v?.kind === 'files'
         ? tabLabel(v)
         : [
             terminalOf(v) ? terminalTooltip(terminalOf(v)!) : tabLabel(v),
@@ -540,8 +553,11 @@ export function Workspace(props: {
                           <Show when={v()?.kind === 'diff'}>
                             <FileDiff class="size-3 shrink-0" />
                           </Show>
+                          <Show when={v()?.kind === 'files'}>
+                            <FolderTree class="size-3 shrink-0" />
+                          </Show>
                           <Show when={v()?.kind === 'file'}>
-                            <FileText class="size-3 shrink-0" />
+                            <FileTypeIcon name={(v() as FileView).path.split('/').pop()!} class="size-3" />
                           </Show>
                           <Show when={v()?.kind === 'btw'}>
                             <MessagesSquare class="size-3 shrink-0" />
@@ -675,6 +691,7 @@ export function Workspace(props: {
                     <Match when={attachmentViewOf(v())}>{(a) => props.panes.renderAttachment(a(), (focus) => ready(key, focus))}</Match>
                     <Match when={v().kind === 'btw'}>{props.panes.renderBtw((focus) => ready(key, focus))}</Match>
                     <Match when={v().kind === 'diff'}>{props.panes.renderDiff((focus) => ready(key, focus))}</Match>
+                    <Match when={v().kind === 'files' && (v() as FilesView)}>{(f) => props.panes.renderFiles(f, (focus) => ready(key, focus))}</Match>
                     <Match when={v().kind === 'file' && (v() as FileView)}>{(f) => props.panes.renderFile(f, (focus) => ready(key, focus))}</Match>
                   </Switch>
                 )}

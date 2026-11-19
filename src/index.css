@@ -68,6 +68,8 @@
   --color-ok: #3d7a4a;
   /* What's selected in code, drawn as a shape: unlike both the accent and the diff's red and green. */
   --color-selection: #3b74d9;
+  /* A file changed in place, beside the diff's red and green for taken out and put in: amber, as editors have it. */
+  --color-changed: #b5851f;
   --color-primary: #1b1a18;
   --color-on-primary: #fafaf8;
   --color-sidebar: #fafaf8;
@@ -159,6 +161,8 @@
   --color-danger: #c13a2e;
   --color-ok: #3d7a4a;
   --color-selection: #3b74d9;
+  /* A file changed in place, beside the diff's red and green for taken out and put in: amber, as editors have it. */
+  --color-changed: #b5851f;
   --pane-ring: rgb(0 0 0 / 0.07);
   /* Open mSupply's size: its 2xl, at its roundness. */
   --radius-composer: 1.25rem;

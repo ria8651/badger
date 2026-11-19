@@ -1,6 +1,6 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack, type JSX } from 'solid-js'
 import { createStore } from 'solid-js/store'
-import { Check, ChevronDown, ChevronRight, FileText, MessageSquarePlus, RotateCw } from '../icons'
+import { Check, ChevronDown, ChevronRight, FileText, MessageSquarePlus } from '../icons'
 import type { DraftComment, ReviewAttention, ReviewDiff, ReviewFile, ReviewGroup, ReviewGuide, ReviewHunk } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { useComments, type Asked } from '../comments.ts'
@@ -10,13 +10,15 @@ import { highlight, languageOf } from '../highlight.ts'
 import { recall, remember, settle } from '../scrollMemory.ts'
 import { TranscriptIndex } from '../transcript/context.ts'
 import type { Block, Index } from '../transcript/model.ts'
-import { BasePicker, baseChanged, howText } from './BasePicker.tsx'
+import { Against } from './BasePicker.tsx'
+import { useChanges } from '../changes.ts'
+import { STATUS_LETTER, STATUS_TONE } from '../fileIcons.ts'
 import { useOpenFile } from '../fileLinks.ts'
 import { CodeRow } from './CodeRow.tsx'
 import { CommentBox, DraftBox, blobs, type Box } from './Comments.tsx'
 import { AskedItem } from './ReplyComments.tsx'
 import { Markdown } from './Markdown.tsx'
-import { Button, DiffCount, GhostButton, LiveDot, PaneBar, PathLabel, noteClass } from './ui.tsx'
+import { Button, DiffCount, FileTypeIcon, GhostButton, LiveDot, PaneBar, PathLabel, ViewedBox, ViewedLine, noteClass } from './ui.tsx'
 
 /*
  * SPIKE: a checkout's changes, every hunk. Two ways: a chat's diff, in a panel beside it, file by file; or a guided
@@ -63,7 +65,8 @@ const stores = new Map<string, ReturnType<typeof createSignal<Saved>>>()
 /** By chat, and whether it's a guided review or a chat's diff, so a chat's diff and its review don't share. */
 const storeKey = (session: string, guided: boolean) => `badger.${guided ? 'review2' : 'diff'}.${session}`
 
-function useReview(session: string, guided: boolean) {
+/** What's kept of a chat's diff or review, shared by everything showing it, e.g. the files' tree ticking files off. */
+export function useReview(session: string, guided: boolean) {
   const key = storeKey(session, guided)
   let s = stores.get(key)
   if (!s) {
@@ -81,7 +84,12 @@ function useReview(session: string, guided: boolean) {
     clearTimeout(timer)
     timer = setTimeout(() => localStorage.setItem(key, JSON.stringify(saved())), 300)
   }
-  return { saved, update }
+  const viewed = createMemo(() => new Set(saved().viewed))
+  /** Hunks, by id, ticked off as read or not: a file's are all of them. */
+  const isViewed = (id: string) => viewed().has(id)
+  const setViewed = (ids: string[], on: boolean) =>
+    update((s) => ({ ...s, viewed: on ? [...new Set([...s.viewed, ...ids])] : s.viewed.filter((v) => !ids.includes(v)) }))
+  return { saved, update, isViewed, setViewed }
 }
 
 /** What a comment's on, over it. */
@@ -313,7 +321,7 @@ export function ReviewPage(props: {
    */
   whole?: boolean
 }) {
-  const { saved, update } = useReview(
+  const { saved, update, isViewed, setViewed: tick } = useReview(
     untrack(() => props.sessionId),
     untrack(() => props.guided),
   )
@@ -329,42 +337,52 @@ export function ReviewPage(props: {
     })
   })
   const openFile = useOpenFile()
-  const [diff, setDiff] = createSignal<ReviewDiff>()
+  // The checkout's changes, as everything showing them shares them; all of one file (`whole`) is read on its own.
+  const changes = useChanges(
+    () => ({ cwd: props.cwd, machine: props.machine }),
+    () => props.running,
+  )
+  const [wholeDiff, setWholeDiff] = createSignal<ReviewDiff>()
+  const isWhole = () => !!(props.whole && props.only)
+  const diff = () => (isWhole() ? wholeDiff() : changes.diff())
+  /** All of one file: its hunks as the chat's diff has them, ticked off there, so ticked here as one. */
+  const split = () => (isWhole() ? changes.diff()?.files.find((f) => f.path === props.only)?.hunks.map((h) => h.id) : undefined)
   /** Opens a file of the changes whole, at a line if given; not one that's been deleted, which has nothing to show. */
   const openerFor = (f: ReviewFile) => {
     const root = diff()?.root
     if (!openFile || !root || f.status === 'deleted') return
     return (line?: number) => openFile.open(`${root}/${f.path}`, line)
   }
-  const [error, setError] = createSignal<string>()
-  const [loading, setLoading] = createSignal(false)
+  const [wholeError, setWholeError] = createSignal<string>()
+  const [wholeLoading, setWholeLoading] = createSignal(false)
+  const error = () => (isWhole() ? wholeError() : changes.error())
+  const loading = () => (isWhole() ? wholeLoading() : changes.loading())
   /** Hunks opened or folded by hand, overriding whether they're viewed. */
   const [open, setOpen] = createStore<Record<string, boolean>>({})
   const [draft, setDraft] = createSignal<Draft>()
   const [draftText, setDraftText] = createSignal('')
 
+  // All of one file, read again whenever the changes are, since that's when it changes too.
   let seq = 0
-  const load = async () => {
+  const loadWhole = async () => {
     const dir = props.cwd
-    if (!dir) return
+    const only = props.only
+    if (!dir || !only || !props.whole) return
     const mine = ++seq
-    setLoading(true)
+    setWholeLoading(true)
     try {
-      const whole = props.whole && props.only
       // All of it is as much context as there is.
-      const next = await api.review(dir, 'base', whole ? 100_000 : 3, props.machine, whole || undefined)
+      const next = await api.review(dir, 'base', 100_000, props.machine, only)
       if (mine !== seq) return
-      setDiff(next)
-      setError(undefined)
+      setWholeDiff(next)
+      setWholeError(undefined)
     } catch (e) {
-      if (mine === seq) setError((e as Error).message)
+      if (mine === seq) setWholeError((e as Error).message)
     } finally {
-      if (mine === seq) setLoading(false)
+      if (mine === seq) setWholeLoading(false)
     }
   }
-  createEffect(on(() => props.cwd, () => void load()))
-  createEffect(on(() => props.running, (r) => !r && void load(), { defer: true }))
-  createEffect(on(baseChanged, () => void load(), { defer: true }))
+  createEffect(on(changes.diff, () => void loadWhole()))
 
   // Worked out again only when a guide call comes or finishes, not on every message.
   // A chat's diff has none: the chat it's beside wasn't asked for one.
@@ -455,13 +473,12 @@ export function ReviewPage(props: {
     return out
   })
 
-  const viewed = createMemo(() => new Set(saved().viewed))
-  const isViewed = (id: string) => viewed().has(id)
   const total = () => placed().size
   const viewedCount = () => [...placed().keys()].filter(isViewed).length
   const isOpen = (id: string) => open[id] ?? !isViewed(id)
+  /** Ticked, a hunk folds away; unticked, it opens again. */
   const setViewed = (ids: string[], on: boolean) => {
-    update((s) => ({ ...s, viewed: on ? [...new Set([...s.viewed, ...ids])] : s.viewed.filter((v) => !ids.includes(v)) }))
+    tick(ids, on)
     setOpen(Object.fromEntries(ids.map((id) => [id, !on])))
   }
 
@@ -661,53 +678,29 @@ export function ReviewPage(props: {
   const tools = () => (
     <div class="flex min-w-0 flex-1 items-center gap-3 text-xs whitespace-nowrap text-fg-3">
       <Show when={diff()}>
+        {/* The branch is in the bar above; what it's compared with is the review's own. */}
         {(d) => (
-          <>
-            {/* The branch is in the bar above; what it's compared with is the review's own. */}
-            <Show when={props.cwd}>
-              {(dir) => (
-                <BasePicker
-                  dir={dir()}
-                  machine={props.machine}
-                  title={d().base ? `Compared with ${d().base}, ${howText[d().baseHow ?? 'nearest']}. Pick another` : 'Pick a branch to compare with'}
-                  triggerClass={(open) => `-mx-1.5 flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors hover:bg-surface ${open ? 'bg-surface' : ''}`}
-                  trigger={() => (
-                    <>
-                      <Show when={d().base} fallback="Uncommitted only">
-                        <span class="hidden @md:inline">against </span>
-                        <span class="min-w-0 truncate font-mono text-fg-2">{d().base}</span>
-                      </Show>
-                      <ChevronDown class="size-3 shrink-0" />
-                    </>
-                  )}
-                />
-              )}
-            </Show>
-            <DiffCount
-              files={files().length}
-              added={files().reduce((n, f) => n + f.added, 0)}
-              removed={files().reduce((n, f) => n + f.removed, 0)}
-              class="shrink-0"
-            />
-          </>
+          <Against
+            dir={props.cwd}
+            machine={props.machine}
+            base={d().base}
+            baseHow={d().baseHow}
+            files={files().length}
+            added={files().reduce((n, f) => n + f.added, 0)}
+            removed={files().reduce((n, f) => n + f.removed, 0)}
+          />
         )}
       </Show>
       <div class="flex-1" />
-      <Show when={total() && !props.whole}>
-        <span class="shrink-0 tabular-nums" title={`${viewedCount()} of ${plural(total(), 'hunk')} viewed`}>
-          {viewedCount()}/{total()}
-          <span class="hidden @md:inline"> viewed</span>
-        </span>
-      </Show>
       <div class="-mx-1.5 flex shrink-0 items-center">
         <Show when={!commenting()}>
           <GhostButton title="Comment on the changes as a whole. To comment on lines, select them." onClick={startComment}>
             <MessageSquarePlus class="size-3.5" />
           </GhostButton>
         </Show>
-        <GhostButton title="Read the changes again" onClick={() => void load()}>
-          <RotateCw class={`size-3.5 ${loading() ? 'animate-spin' : ''}`} />
-        </GhostButton>
+        <Show when={props.whole && split()?.length ? split() : undefined}>
+          {(ids) => <ViewedBox narrow viewed={ids().every(isViewed)} onChange={(on) => setViewed(ids(), on)} />}
+        </Show>
         <Show when={!props.whole && props.onGuide}>
           {(guide) => (
             <button
@@ -732,17 +725,13 @@ export function ReviewPage(props: {
         {props.lead}
         {tools()}
       </PaneBar>
-      {/* How much has been viewed, as a line along the foot of what's above, over its edge but under the header's menus. */}
-      <Show when={total() && !props.whole}>
-        <div class="relative z-10 h-0">
-          <div class="absolute inset-x-0 -top-0.5 h-0.5">
-            <div class="h-full bg-ok transition-[width]" style={{ width: `${(viewedCount() / total()) * 100}%` }} />
-          </div>
-        </div>
+      <Show when={!props.whole}>
+        <ViewedLine viewed={viewedCount()} total={total()} />
       </Show>
 
       <div class="flex min-h-0 flex-1">
-        <nav class={`hidden w-72 shrink-0 overflow-y-auto border-r border-line py-2 ${props.whole ? '' : '@6xl:block'}`}>
+        {/* A guided review's groups, where there's room; a chat's diff has the files' tree to get around it by instead. */}
+        <nav class={`hidden w-72 shrink-0 overflow-y-auto border-r border-line py-2 ${props.guided ? '@6xl:block' : ''}`}>
           <For each={sections()}>
             {(s) => {
               const done = () => s.hunks.filter((p) => isViewed(p.hunk.id)).length
@@ -913,6 +902,7 @@ export function ReviewPage(props: {
                         <header class="sticky top-0 z-10 flex h-9 items-center gap-2 bg-surface px-2 text-xs">
                           <FoldButton open={ids().some(isOpen)} onClick={foldAll} />
                           <span class={`shrink-0 font-mono ${STATUS_TONE[file.status]}`}>{STATUS_LETTER[file.status]}</span>
+                          <FileTypeIcon name={file.path.split('/').pop()!} class="size-3.5" />
                           <h2 class="flex min-w-0">
                             <button onClick={foldAll} class="flex min-w-0 text-left text-fg">
                               <PathLabel path={file.path} oldPath={file.oldPath} />
@@ -923,7 +913,7 @@ export function ReviewPage(props: {
                           </Show>
                           <div class="flex-1" />
                           <OpenFileButton onOpen={openerFor(file)} />
-                          <ViewedBox viewed={allViewed()} onChange={(on) => setViewed(ids(), on)} />
+                          <ViewedBox viewed={allViewed()} some={ids().some(isViewed)} onChange={(on) => setViewed(ids(), on)} />
                         </header>
                         <For each={s.hunks}>{(p) => hunk(p, { bar: s.hunks.length > 1 })}</For>
                       </section>
@@ -950,7 +940,7 @@ export function ReviewPage(props: {
                           </span>
                         </Show>
                         {/* Even with one hunk: the header stays stuck at the top, so it's in reach from anywhere in a long one. */}
-                        <ViewedBox viewed={allViewed()} onChange={(on) => setViewed(ids(), on)} label={s.hunks.length > 1 ? 'All viewed' : 'Viewed'} />
+                        <ViewedBox viewed={allViewed()} some={ids().some(isViewed)} onChange={(on) => setViewed(ids(), on)} label={s.hunks.length > 1 ? 'All viewed' : 'Viewed'} />
                       </header>
                       {/* The explanation beside its hunks where there's room, each pinned (see pin); above them where there isn't. */}
                       <div class={`grid gap-4 pt-3 ${side() ? '@4xl:grid-cols-[minmax(16rem,26rem)_minmax(0,1fr)]' : ''}`}>
@@ -1054,17 +1044,6 @@ function OpenFileButton(props: { onOpen?: (line?: number) => void; line?: number
   )
 }
 
-function ViewedBox(props: { viewed: boolean; onChange: (on: boolean) => void; label?: string }) {
-  return (
-    <label class="flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-xs text-fg-3 hover:text-fg-2">
-      <input type="checkbox" checked={props.viewed} onChange={(e) => props.onChange(e.currentTarget.checked)} class="accent-(--color-primary)" />
-      {props.label ?? 'Viewed'}
-    </label>
-  )
-}
-
-const STATUS_LETTER = { added: 'A', modified: 'M', deleted: 'D', renamed: 'R' } as const
-const STATUS_TONE = { added: 'text-ok', modified: 'text-fg-3', deleted: 'text-danger', renamed: 'text-accent' } as const
 
 function HunkView(props: {
   ref: (el: HTMLElement) => void

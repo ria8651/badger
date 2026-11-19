@@ -133,7 +133,7 @@ export function ChatHeader(props: {
     const items: GitItem[] = []
     const diff = props.onDiff
     if (diff) {
-      items.push({ label: 'Diff', description: 'Every change, file by file, beside the chat. Comment line by line for this chat to act on.', run: diff })
+      items.push({ label: 'Diff', description: 'The changed files beside the chat, each opening its diff, or all of them on one page. Comment line by line for this chat to act on.', run: diff })
     }
     const review = props.onReview
     if (review) {

@@ -127,6 +127,7 @@ function machineFileRoutes({ machines, chats, listChanged }: ApiDeps): Route[] {
       '/api/files/find',
       async ({ url }) => [200, await query(url).runner.remote.findFiles(absolutePath(url.searchParams.get('cwd')), url.searchParams.get('q') ?? '')],
     ],
+    ['GET', '/api/files', async ({ url }) => [200, await query(url).runner.remote.checkoutFiles(absolutePath(url.searchParams.get('cwd')))]],
     [
       'GET',
       '/api/git',

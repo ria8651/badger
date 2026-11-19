@@ -2,7 +2,7 @@ import { readFile, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, join, relative } from 'node:path'
 import type { SlashCommand } from '@anthropic-ai/claude-agent-sdk'
-import type { CommandInfo, CommandSource } from '../shared/protocol.ts'
+import type { CheckoutFiles, CommandInfo, CommandSource } from '../shared/protocol.ts'
 import { oneOff } from './claudeProbe.ts'
 import { run } from './proc.ts'
 
@@ -119,13 +119,14 @@ const projectPaths = cached(async (cwd: string): Promise<string[]> => {
 })
 
 /** The files under `cwd`, relative to it: git's tracked and untracked-but-not-ignored ones, or a walk outside a repo. */
-async function projectFiles(cwd: string): Promise<string[]> {
+async function projectFiles(cwd: string, limit = MAX_FILES): Promise<string[]> {
   const git = await run('git', ['ls-files', '-co', '--exclude-standard', '-z'], { cwd, maxBuffer: 64 << 20 }).catch(() => undefined)
-  if (git) return git.stdout.split('\0').filter(Boolean).slice(0, MAX_FILES)
+  // Each once: a file with a merge conflict is listed once per side.
+  if (git) return [...new Set(git.stdout.split('\0').filter(Boolean))].slice(0, limit)
   const files: string[] = []
   const walk = async (dir: string) => {
     for (const d of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
-      if (files.length >= MAX_FILES) return
+      if (files.length >= limit) return
       if (d.name.startsWith('.') || SKIPPED_DIRS.has(d.name)) continue
       const path = join(dir, d.name)
       if (d.isDirectory()) await walk(path)
@@ -134,6 +135,17 @@ async function projectFiles(cwd: string): Promise<string[]> {
   }
   await walk(cwd)
   return files
+}
+
+/** Every file in the checkout `cwd` is in, from its top, for browsing it: read afresh each time, since it's asked for when files change. */
+export async function checkoutFiles(cwd: string): Promise<CheckoutFiles> {
+  const top = await run('git', ['rev-parse', '--show-toplevel'], { cwd }).then(
+    (r) => r.stdout.trim(),
+    () => '',
+  )
+  const root = top || cwd
+  const files = await projectFiles(root, MAX_FILES + 1)
+  return { root, files: files.slice(0, MAX_FILES), truncated: files.length > MAX_FILES }
 }
 
 /** The files and folders under `cwd` best matching what's typed after `@`, best first. Folders end in `/`. */

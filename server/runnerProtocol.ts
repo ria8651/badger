@@ -7,6 +7,7 @@ import type {
   ChatCommand,
   ChatCommandReply,
   ChatStatus,
+  CheckoutFiles,
   CommandInfo,
   GitStatus,
   ReviewDiff,
@@ -39,7 +40,7 @@ import type { CreateSpec } from './ptyProtocol.ts'
  * Runners and the hub are updated separately, so bump this when either side
  * would misread the other; the hub turns away runners on another version.
  */
-export const RUNNER_PROTOCOL = 10
+export const RUNNER_PROTOCOL = 11
 
 /** Header a runner sends its protocol version in, so a mismatch is caught before the upgrade. */
 export const PROTOCOL_HEADER = 'x-badger-protocol'
@@ -175,6 +176,8 @@ export interface RunnerApi {
   commands(cwd: string): Promise<CommandInfo[]>
   /** Files and folders under `cwd` matching what's typed after `@`, relative to it, best first. */
   findFiles(cwd: string, typed: string): Promise<string[]>
+  /** Every file in the checkout `cwd` is in, to browse it by. */
+  checkoutFiles(cwd: string): Promise<CheckoutFiles>
   worktreeStatus(path: string): Promise<WorktreeStatus>
   /** Undefined outside a git repo. Fetches first if asked, at most once a minute. */
   gitStatus(path: string, fetch: boolean): Promise<GitStatus | undefined>
@@ -220,6 +223,7 @@ export const RUNNER_METHODS = [
   'workspaceRoot',
   'commands',
   'findFiles',
+  'checkoutFiles',
   'worktreeStatus',
   'gitStatus',
   'gitPush',
