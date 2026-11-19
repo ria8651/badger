@@ -329,7 +329,7 @@ export function FileView(props: {
           {crumbs()}
           {/* As its Diff's bar has it, beside the path. */}
           <div class="flex min-w-0 flex-1 items-center text-xs">
-            <Show when={diff()}>
+            <Show when={relative() ? diff() : undefined}>
               {(d) => (
                 <Against
                   dir={props.cwd}

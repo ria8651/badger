@@ -54,8 +54,17 @@ const byName = (a: string, b: string) => a.localeCompare(b, undefined, { numeric
  * What's shown: folders first, then files, by name. A folder with only one folder in it shares its row, as a/b, and
  * opens with it. Under a closed folder nothing shows; with `all`, every folder's open, as when filtering.
  */
-function rowsOf(root: Dir, isOpen: (path: string) => boolean, all: boolean): Row[] {
+/**
+ * What's shown: folders first, then files, by name. A folder with only one folder in it shares its row, as a/b, and
+ * opens with it. Under a closed folder nothing shows; with `all`, every folder's open, as when filtering. A row that's
+ * the same as last time is the same object (`was`), so the list only redraws the rows that changed.
+ */
+function rowsOf(root: Dir, isOpen: (path: string) => boolean, all: boolean, was: Map<string, Row>): Row[] {
   const rows: Row[] = []
+  const keep = (r: Row) => {
+    const key = `${r.kind}\0${r.path}\0${r.depth}\0${r.name}`
+    rows.push(was.get(key) ?? r)
+  }
   const walk = (dir: Dir, depth: number) => {
     for (const d of [...dir.dirs.values()].sort((a, b) => byName(a.name, b.name))) {
       let at = d
@@ -64,10 +73,10 @@ function rowsOf(root: Dir, isOpen: (path: string) => boolean, all: boolean): Row
         at = [...at.dirs.values()][0]
         name += `/${at.name}`
       }
-      rows.push({ kind: 'dir', name, path: at.path, depth })
+      keep({ kind: 'dir', name, path: at.path, depth })
       if (all || isOpen(at.path)) walk(at, depth + 1)
     }
-    for (const f of [...dir.files].sort((a, b) => byName(nameOf(a), nameOf(b)))) rows.push({ kind: 'file', name: nameOf(f), path: f, depth })
+    for (const f of [...dir.files].sort((a, b) => byName(nameOf(a), nameOf(b)))) keep({ kind: 'file', name: nameOf(f), path: f, depth })
   }
   walk(root, 0)
   return rows
@@ -76,23 +85,25 @@ function rowsOf(root: Dir, isOpen: (path: string) => boolean, all: boolean): Row
 /** Which folders are open, per chat and way: all files start folded, changes open, so each keeps the folders that aren't. */
 function useFolds(session: string, mode: () => FilesMode) {
   const key = () => `badger.files.${session}.${mode()}`
-  const read = (k: string) => {
+  // Bumped on each fold, so what's read from storage is read again.
+  const [folded, setFolded] = createSignal(0)
+  // Read with the mode, not after it, so a switch never shows one way's folds the other way round.
+  const flipped = createMemo(() => {
+    folded()
     try {
-      return new Set<string>(JSON.parse(localStorage.getItem(k) ?? '[]'))
+      return new Set<string>(JSON.parse(localStorage.getItem(key()) ?? '[]'))
     } catch {
       return new Set<string>()
     }
-  }
-  const [flipped, setFlipped] = createSignal(read(untrack(key)))
-  createEffect(on(key, (k) => setFlipped(read(k)), { defer: true }))
+  })
   const isOpen = (path: string) => flipped().has(path) !== (mode() === 'changes')
   const toggle = (path: string, open = !isOpen(path)) => {
     if (open === isOpen(path)) return
     const next = new Set(flipped())
     if (next.has(path)) next.delete(path)
     else next.add(path)
-    setFlipped(next)
     localStorage.setItem(key(), JSON.stringify([...next]))
+    setFolded((n) => n + 1)
   }
   return { isOpen, toggle }
 }
@@ -104,6 +115,8 @@ export function Files(props: {
   machine: string
   mode: FilesMode
   onMode: (mode: FilesMode) => void
+  /** There are changes to show: not in a folder outside git, nor in a guided review's chat, whose changes are its page. */
+  canDiff: boolean
   /** Read again when a turn ends, since that's when files change. */
   running: boolean
   /** Opens a file, by absolute path: all of it, or its diff. */
@@ -112,22 +125,27 @@ export function Files(props: {
   onFullDiff?: () => void
   onReady?: (focus: () => void) => void
 }) {
-  const [version, setVersion] = createSignal(0)
-  createEffect(on(() => props.running, (r) => !r && setVersion((n) => n + 1), { defer: true }))
-
-  const [listing] = createResource(
-    () => (props.cwd ? { cwd: props.cwd, machine: props.machine, v: version() } : false),
-    ({ cwd, machine }) => api.checkoutFiles(cwd, machine),
-  )
+  /** All files, or only those changed: where there's nothing to diff against (no git, say), all of them. */
+  const mode = (): FilesMode => (props.canDiff ? props.mode : 'all')
   // The changes as the chat's diff has them, so its hunks are the ones ticked there.
   const changes = useChanges(
-    () => ({ cwd: props.cwd, machine: props.machine }),
+    () => ({ cwd: props.canDiff ? props.cwd : undefined, machine: props.machine }),
     () => props.running,
   )
   const diff = changes.diff
-  const root = () => diff()?.root ?? listing.latest?.root
+  // Every file, only while they're shown: read again when a turn ends, or when the changes do, since files come and go with them.
+  const [version, setVersion] = createSignal(0)
+  createEffect(on(() => props.running, (r) => !r && setVersion((n) => n + 1), { defer: true }))
+  const [listing] = createResource(
+    () => (props.cwd && mode() === 'all' ? { cwd: props.cwd, machine: props.machine, v: version(), d: diff() } : false),
+    ({ cwd, machine }) => api.checkoutFiles(cwd, machine),
+  )
+  // What was read last; none once a read's failed, rather than the throw that reading `latest` then is.
+  const listed = () => (listing.error ? undefined : listing.latest)
+  const root = () => diff()?.root ?? listed()?.root
   const changed = createMemo(() => new Map((diff()?.files ?? []).map((f) => [f.path, f])))
-  const error = () => (listing.error as Error | undefined)?.message ?? changes.error()
+  /** Why nothing's shown: the files couldn't be listed, or, showing changes, the changes couldn't be read. */
+  const error = () => (mode() === 'all' ? (listing.error as Error | undefined)?.message : changes.error())
 
   // Ticked as the chat's diff ticks them, hunk by hunk: a file is viewed when all its hunks are.
   const review = useReview(
@@ -145,7 +163,7 @@ export function Files(props: {
   /** What's in the tree: the checkout's files, and any deleted since the base, or only those changed. */
   const paths = createMemo(() => {
     const q = filter().trim().toLowerCase()
-    const all = props.mode === 'changes' ? [...changed().keys()] : [...new Set([...(listing.latest?.files ?? []), ...changed().keys()])]
+    const all = mode() === 'changes' ? [...changed().keys()] : [...new Set([...(listed()?.files ?? []), ...changed().keys()])]
     return q ? all.filter((p) => p.toLowerCase().includes(q)) : all
   })
   const tree = createMemo(() => treeOf(paths()))
@@ -157,14 +175,19 @@ export function Files(props: {
       if (!f) continue
       for (let i = p.indexOf('/'); i >= 0; i = p.indexOf('/', i + 1)) {
         const dir = p.slice(0, i)
-        out.set(dir, [...(out.get(dir) ?? []), f])
+        const list = out.get(dir)
+        if (list) list.push(f)
+        else out.set(dir, [f])
       }
     }
     return out
   })
 
-  const folds = useFolds(untrack(() => props.sessionId), () => props.mode)
-  const allRows = createMemo(() => rowsOf(tree(), folds.isOpen, !!filter().trim()))
+  const folds = useFolds(untrack(() => props.sessionId), mode)
+  const allRows = createMemo<Row[]>((was) => {
+    const known = new Map((was ?? []).map((r) => [`${r.kind}\0${r.path}\0${r.depth}\0${r.name}`, r]))
+    return rowsOf(tree(), folds.isOpen, !!filter().trim(), known)
+  })
   const rows = createMemo(() => allRows().slice(0, MAX_ROWS))
 
   // ── Moving about by keyboard ──
@@ -183,7 +206,7 @@ export function Files(props: {
   const open = (r: Row) => {
     if (r.kind === 'dir') return folds.toggle(r.path)
     const f = changed().get(r.path)
-    if (root()) props.onOpen(`${root()}/${r.path}`, props.mode === 'changes' || f?.status === 'deleted')
+    if (root()) props.onOpen(`${root()}/${r.path}`, mode() === 'changes' || f?.status === 'deleted')
   }
   const onKey = (e: KeyboardEvent) => {
     const r = rows()[at()]
@@ -203,9 +226,10 @@ export function Files(props: {
       }
     } else if (e.key === 'Escape' && r) setCursor()
     else if (e.key === 'Enter' && r) open(r)
-    else if (e.key === ' ' && r?.kind === 'file' && props.mode === 'changes' && changed().has(r.path)) {
-      const f = changed().get(r.path)!
-      setViewed([f], !isViewed(f))
+    else if (e.key === ' ') {
+      // Ticks a file, or all of a folder, off as viewed; anything else, nothing, rather than a space in the filter.
+      const files = !r || mode() !== 'changes' ? [] : r.kind === 'dir' ? (changedUnder().get(r.path) ?? []) : changed().has(r.path) ? [changed().get(r.path)!] : []
+      if (files.length) setViewed(files, !files.every(isViewed))
     } else if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
       // Typing filters, from wherever the tree has focus.
       filterBox.focus()
@@ -223,36 +247,39 @@ export function Files(props: {
   return (
     <div class="@container flex size-full min-h-0 flex-col text-ui">
       <PaneBar>
-        <Segmented
-          value={props.mode}
-          onChange={props.onMode}
-          options={[
-            {
-              value: 'all',
-              // Narrow, just "All", so the bar's buttons keep their room.
-              label: (
-                <>
-                  All<span class="-ml-0.5 hidden @xs:inline">files</span>
-                </>
-              ),
-              title: 'Every file in the checkout',
-            },
-            {
-              value: 'changes',
-              label: (
-                <>
-                  Changes
-                  <Show when={totals().files}>
-                    <span class="text-fg-3 tabular-nums">{totals().files}</span>
-                  </Show>
-                </>
-              ),
-              title: 'Only the files changed, each opening its diff',
-            },
-          ]}
-        />
+        {/* With nothing to diff, there's only the one way to show them. */}
+        <Show when={props.canDiff}>
+          <Segmented
+            value={mode()}
+            onChange={props.onMode}
+            options={[
+              {
+                value: 'all',
+                // Narrow, just "All", so the bar's buttons keep their room.
+                label: (
+                  <>
+                    All<span class="-ml-0.5 hidden @xs:inline">files</span>
+                  </>
+                ),
+                title: 'Every file in the checkout',
+              },
+              {
+                value: 'changes',
+                label: (
+                  <>
+                    Changes
+                    <Show when={totals().files}>
+                      <span class="text-fg-3 tabular-nums">{totals().files}</span>
+                    </Show>
+                  </>
+                ),
+                title: 'Only the files changed, each opening its diff',
+              },
+            ]}
+          />
+        </Show>
         {/* What the changes are against and how much of them, as the diff's and a file's bars have it. Narrow, the words go. */}
-        <Show when={props.mode === 'changes' && diff()}>
+        <Show when={mode() === 'changes' && diff()}>
           {(d) => (
             <Against
               dir={props.cwd}
@@ -282,7 +309,7 @@ export function Files(props: {
           </Show>
         </div>
       </PaneBar>
-      <Show when={props.mode === 'changes'}>
+      <Show when={mode() === 'changes'}>
         <ViewedLine viewed={totals().viewed} total={totals().files} />
       </Show>
 
@@ -367,7 +394,7 @@ export function Files(props: {
                   </span>
                   {/* As a file's row has it, in the same places: how it changed, and in Changes, ticked off, all of it at once. */}
                   <Show when={under().length}>
-                    <Show when={props.mode === 'changes' && done() < under().length}>
+                    <Show when={mode() === 'changes' && done() < under().length}>
                       <span class="shrink-0 text-xs text-fg-3 tabular-nums">
                         {done()}/{under().length}
                       </span>
@@ -375,7 +402,7 @@ export function Files(props: {
                     <span class={`w-3 shrink-0 text-center font-mono text-xs ${STATUS_TONE[toneOf(under())]}`} title={toneOf(under())}>
                       {STATUS_LETTER[toneOf(under())]}
                     </span>
-                    <Show when={props.mode === 'changes'}>
+                    <Show when={mode() === 'changes'}>
                       <ViewedBox label={false} viewed={done() === under().length} some={done() > 0} onChange={(on) => setViewed(under(), on)} />
                     </Show>
                   </Show>
@@ -401,7 +428,7 @@ export function Files(props: {
                 <span
                   class={`min-w-0 flex-1 truncate ${
                     f()
-                      ? `${NAME_TONE[f()!.status]} ${props.mode === 'changes' && done() ? 'opacity-60' : ''} ${f()!.generated ? 'opacity-60' : ''}`
+                      ? `${NAME_TONE[f()!.status]} ${mode() === 'changes' && done() ? 'opacity-60' : ''} ${f()!.generated ? 'opacity-60' : ''}`
                       : 'text-fg-2'
                   }`}
                 >
@@ -416,7 +443,7 @@ export function Files(props: {
                       <span class={`w-3 shrink-0 text-center font-mono text-xs ${STATUS_TONE[file().status]}`} title={file().status}>
                         {STATUS_LETTER[file().status]}
                       </span>
-                      <Show when={props.mode === 'changes'}>
+                      <Show when={mode() === 'changes'}>
                         <ViewedBox label={false} viewed={done()} onChange={(on) => setViewed([file()], on)} />
                       </Show>
                     </>
@@ -429,12 +456,12 @@ export function Files(props: {
         <Show when={allRows().length > MAX_ROWS}>
           <p class="px-3 py-2 text-xs text-fg-3">Only the first {MAX_ROWS} are shown. Filter to narrow it down.</p>
         </Show>
-        <Show when={listing.latest?.truncated && props.mode === 'all'}>
-          <p class="px-3 py-2 text-xs text-fg-3">The checkout has more files than can be listed: only the first {listing.latest!.files.length} are.</p>
+        <Show when={listed()?.truncated && mode() === 'all'}>
+          <p class="px-3 py-2 text-xs text-fg-3">The checkout has more files than can be listed: only the first {listed()!.files.length} are.</p>
         </Show>
-        <Show when={props.cwd && !rows().length && (props.mode === 'changes' ? diff() : listing.latest)}>
+        <Show when={props.cwd && !rows().length && (mode() === 'changes' ? diff() : listed())}>
           <p class="p-6 text-center text-fg-3">
-            {filter().trim() ? 'Nothing matches' : props.mode === 'changes' ? 'No changes that aren’t on the base already.' : 'No files'}
+            {filter().trim() ? 'Nothing matches' : mode() === 'changes' ? 'No changes that aren’t on the base already.' : 'No files'}
           </p>
         </Show>
       </div>

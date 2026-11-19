@@ -1,13 +1,14 @@
 import { For, Show } from 'solid-js'
 import { FRAMES, PALETTES, setTheme, themeChoice, type Frame, type Mode, type Palette } from '../theme.ts'
 import { powerMode, setPowerMode } from '../powerMode.tsx'
+import { diffMarks, setDiffMarks } from '../prefs.ts'
 import { Segmented } from './ui.tsx'
 
 /**
  * Settings' theme picker: a section per frame with a tile per everyday palette
  * in it, then the fun ones, which bring their own frame. Each tile is drawn in its own theme.
  */
-export function Appearance() {
+export function Theme() {
   const everyday: { id: Mode; label: string }[] = [...PALETTES.filter((p) => !p.frame), { id: 'system', label: 'System' }]
   const sections = [
     ...FRAMES.map((frame) => ({ ...frame, themes: everyday.map((mode) => ({ mode: mode.id, frame: frame.id, label: mode.label })) })),
@@ -58,6 +59,27 @@ export function Appearance() {
           </div>
         )}
       </For>
+    </div>
+  )
+}
+
+/** How things look, other than the theme. Each is kept in this browser. */
+export function Appearance() {
+  return (
+    <div>
+      <h3 class="text-sm font-medium text-fg">Diffs</h3>
+      <p class="mt-1 mb-2 text-ui leading-relaxed text-fg-2">
+        Every changed line is tinted. What changed in it is marked more strongly: in every line, so a new or removed one is marked
+        all over, or only in lines that were edited, where it’s the words that changed.
+      </p>
+      <Segmented
+        value={diffMarks()}
+        options={[
+          { value: 'all', label: 'Mark every change', title: 'Added and removed lines marked all over, and the words changed in edited ones' },
+          { value: 'edits', label: 'Mark edits only', title: 'Only the words changed in edited lines; added and removed lines just tinted' },
+        ]}
+        onChange={setDiffMarks}
+      />
 
       <h3 class="mt-8 text-sm font-medium text-fg">Power mode</h3>
       <p class="mt-1 mb-2 text-ui leading-relaxed text-fg-2">Sparks fly from the cursor and the screen shakes as you type. Keep it up for a combo.</p>

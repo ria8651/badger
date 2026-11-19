@@ -329,6 +329,7 @@ export function Chat(props: {
         machine={machine()}
         mode={view().mode ?? 'all'}
         onMode={(mode) => ws() && setFilesMode(ws()!, view(), mode)}
+        canDiff={panes.hasDiff()}
         running={state.running}
         onOpen={(path, diff) =>
           ws() && openFile(ws()!, { kind: 'file', session: props.sessionId, path, mode: diff ? 'diff' : openingMode(path) }, viewKey(view()))

@@ -76,6 +76,8 @@ export const api = {
   /** `only`: one file's changes, by its path in the checkout. */
   review: (path: string, scope: string, context: number, machine?: string, only?: string) =>
     get<ReviewDiff>(`/api/review?${on(machine, { path, scope, context: String(context), ...(only ? { only } : {}) })}`),
+  /** Changes whenever a checkout's changes might: cheap, to know when to read them again. */
+  changesStamp: (path: string, machine?: string) => get<{ stamp: string }>(`/api/review/stamp?${on(machine, { path })}`),
   push: (path: string, machine?: string) => request<void>('POST', '/api/git/push', { path, machine }),
   pull: (path: string, machine?: string) => request<void>('POST', '/api/git/pull', { path, machine }),
   baseChoices: (path: string, machine?: string) => get<BaseChoices>(`/api/git/base?${on(machine, { path })}`),

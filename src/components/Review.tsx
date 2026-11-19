@@ -7,6 +7,7 @@ import { useComments, type Asked } from '../comments.ts'
 import { SIGN, anchorOf, digitsOf, rowsFor, startOf, type Line, type Row } from '../diffRows.ts'
 import { plural } from '../format.ts'
 import { highlight, languageOf } from '../highlight.ts'
+import { diffMarks } from '../prefs.ts'
 import { recall, remember, settle } from '../scrollMemory.ts'
 import { TranscriptIndex } from '../transcript/context.ts'
 import type { Block, Index } from '../transcript/model.ts'
@@ -316,8 +317,8 @@ export function ReviewPage(props: {
   /** Only this file's changes, by its path in the checkout: a file's own diff. */
   only?: string
   /**
-   * With `only`: all of the file, its changes in place, as one hunk rather than split up. Nothing to tick off as viewed,
-   * since that's done hunk by hunk in the chat's diff, and the file's toolbar is above it, so no header of its own.
+   * With `only`: all of the file, its changes in place, as one hunk rather than split up. Ticked off as viewed as a
+   * whole, by the hunks the chat's diff splits it into, and the file's toolbar is above it, so no header of its own.
    */
   whole?: boolean
 }) {
@@ -382,7 +383,8 @@ export function ReviewPage(props: {
       if (mine === seq) setWholeLoading(false)
     }
   }
-  createEffect(on(changes.diff, () => void loadWhole()))
+  // Once the changes are read, and again only when they've changed: the shared read only gives a new diff then.
+  createEffect(on(changes.diff, (d) => d && void loadWhole()))
 
   // Worked out again only when a guide call comes or finishes, not on every message.
   // A chat's diff has none: the chat it's beside wasn't asked for one.
@@ -1114,6 +1116,8 @@ function HunkView(props: {
     const boxes: Record<'add' | 'del', Box[]> = { add: [], del: [] }
     props.rows.forEach((r, i) => {
       if (r.kind === 'hunk' || r.kind === 'ctx' || !r.marks?.length || !codeEls[i]?.isConnected) return
+      // Set to mark only edits: a line added or removed whole has its row's tint alone.
+      if (diffMarks() === 'edits' && !r.edited) return
       // Under what's selected the selection shows instead, rather than its colour mixing with theirs.
       const cut = [selectedIn(i), draftedIn(i)].filter((x): x is [number, number] => !!x)
       for (const m of r.marks.flatMap((m) => cut.reduce<[number, number][]>((left, c) => left.flatMap((x) => without(x, c)), [m]))) {
@@ -1264,6 +1268,7 @@ function HunkView(props: {
   const draft = createMemo(() => props.draft)
   createEffect(on(draft, redraw, { defer: true }))
   createEffect(on(near, (n) => n && redraw(), { defer: true }))
+  createEffect(on(diffMarks, redraw, { defer: true }))
   createEffect(() => {
     const el = body()
     if (!el) return

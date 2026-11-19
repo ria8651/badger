@@ -155,6 +155,34 @@ function parsePatch(out: string, maxLines = FILE_LINES): ReviewFile[] {
   return files
 }
 
+/**
+ * A short stamp of what a checkout's changes are made of, which changes whenever they might: where HEAD and the base
+ * are, which files git sees as changed or new, and each of those files' size and time, since editing one that's
+ * already changed doesn't change what git lists. Cheap, so it can be asked often, to know when to read the changes again.
+ */
+export async function changesStamp(path: string): Promise<string> {
+  const [head, base, status, top] = await Promise.all([
+    git(path, 'rev-parse', '-q', '--verify', 'HEAD').catch(() => ''),
+    baseOf(path).catch(() => undefined),
+    // Without taking git's lock on the index, which would make a commit made meanwhile fail.
+    run('git', ['--no-optional-locks', 'status', '--porcelain', '-z', '--untracked-files=all'], { cwd: path, maxBuffer: 64 * 1024 * 1024 }).then((r) => r.stdout),
+    git(path, 'rev-parse', '--show-toplevel'),
+  ])
+  const hash = createHash('sha1').update(`${head}\0${base?.branch ?? ''}\0${base?.sha ?? ''}\0${status}\0`)
+  // Each entry is its two letters, a space and its path; a rename or copy is followed by where it was.
+  const parts = status.split('\0')
+  const paths: string[] = []
+  for (let i = 0; i < parts.length; i++) {
+    const entry = parts[i]
+    if (entry.length < 4) continue
+    paths.push(entry.slice(3))
+    if (entry[0] === 'R' || entry[0] === 'C') i++
+  }
+  const stats = await Promise.all(paths.map((p) => stat(join(top, p)).catch(() => undefined)))
+  for (const s of stats) hash.update(s ? `${s.size}:${s.mtimeMs}\0` : '-\0')
+  return hash.digest('hex').slice(0, 16)
+}
+
 const recent = new Map<string, { at: number; diff: Promise<ReviewDiff> }>()
 
 /**

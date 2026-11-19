@@ -5,7 +5,16 @@ import type { ReviewFile, ReviewHunk } from '../shared/protocol.ts'
  * The diff draws them; a file shown whole marks its lines from them.
  */
 
-export type Line = { kind: 'ctx' | 'add' | 'del'; old?: number; new?: number; text: string; /** The characters that changed, from..to: against its pair, or all of it. */ marks?: [number, number][] }
+export type Line = {
+  kind: 'ctx' | 'add' | 'del'
+  old?: number
+  new?: number
+  text: string
+  /** The characters that changed, from..to: against its pair, or all of it. */
+  marks?: [number, number][]
+  /** Paired with a line it was edited from or into, so its marks are the words that changed rather than all of it. */
+  edited?: boolean
+}
 /** A hunk's @@ line: the function or such it's in, and the line, by its number now, its first line comes after. */
 export type Row = { kind: 'hunk'; text: string; after: number } | Line
 
@@ -130,6 +139,7 @@ function markChanges(rows: Row[]) {
       const diff = y && lineDiff(x.text, y.text)
       x.marks = diff ? diff.a : whole(x.text)
       if (y) y.marks = diff ? diff.b : whole(y.text)
+      if (diff) x.edited = y.edited = true
     })
     for (const y of added.slice(removed.length)) y.marks = whole(y.text)
     i = Math.max(a, i + 1)

@@ -187,6 +187,8 @@ export interface RunnerApi {
   setBase(path: string, base: string | null): Promise<void>
   /** The changes a review looks at; see ReviewScope. */
   reviewDiff(path: string, scope: ReviewScope, context: number, only?: string): Promise<ReviewDiff>
+  /** Changes whenever the checkout's changes might: cheap, to know when to read them again. */
+  changesStamp(path: string): Promise<string>
   /** Fast-forward only; refused while a chat is working there. */
   gitPull(path: string): Promise<void>
   branchChoices(path: string): Promise<BranchChoices>
@@ -230,6 +232,7 @@ export const RUNNER_METHODS = [
   'baseChoices',
   'setBase',
   'reviewDiff',
+  'changesStamp',
   'gitPull',
   'branchChoices',
   'gitSwitch',

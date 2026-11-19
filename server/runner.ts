@@ -14,7 +14,7 @@ import { OpError, forwarded, mcpServer, toolName, type Op } from './ops.ts'
 import { Later, Peer, remote, type Link, type Remote } from './peer.ts'
 import { bridgeOps, openPreviewOp, previewInstructions } from './previewTools.ts'
 import type { CreateSpec } from './ptyProtocol.ts'
-import { reviewDiff } from './reviewDiff.ts'
+import { changesStamp, reviewDiff } from './reviewDiff.ts'
 import { REVIEW_DIFF_TOOL, REVIEW_DONE_TOOL, REVIEW_GROUP_TOOL, reviewGuideTools } from './reviewGuide.ts'
 import {
   RUNNER_METHODS,
@@ -330,6 +330,10 @@ export class Runner implements RunnerApi {
 
   reviewDiff(path: string, scope: ReviewScope, context: number, only?: string) {
     return reviewDiff(path, scope, context, only).catch(badRequest)
+  }
+
+  changesStamp(path: string) {
+    return changesStamp(path).catch(badRequest)
   }
 
   /** Fine while a chat is working: a fast-forward won't touch files with uncommitted changes, and Claude rereads a file that changed under it. */

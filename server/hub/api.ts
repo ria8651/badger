@@ -185,6 +185,12 @@ function machineFileRoutes({ machines, chats, listChanged }: ApiDeps): Route[] {
         return [200, await query(url).runner.remote.reviewDiff(dir, scope, context, url.searchParams.get('only') || undefined)]
       },
     ],
+    // Asked often while changes are on screen, to know when to read them again.
+    [
+      'GET',
+      '/api/review/stamp',
+      async ({ url }) => [200, { stamp: await query(url).runner.remote.changesStamp(absolutePath(url.searchParams.get('path'))) }],
+    ],
     ...(['push', 'pull'] as const).map(
       (action): Route => [
         'POST',
