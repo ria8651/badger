@@ -247,10 +247,11 @@ function restart(t: Term): Promise<TerminalInfo> {
 function remove(t: Term): Promise<void> {
   return serial(t, async () => {
     if (!terms.delete(t.info.id)) return
+    // Out of the list now: a stubborn process can take seconds to kill, and meanwhile it would look deletable again.
+    changed()
     t.keep = true
     await kill(t)
     t.screen.dispose()
-    changed()
     idleCheck()
   })
 }
@@ -294,7 +295,11 @@ const api: PtyHostApi = {
   stop: (id) => stop(need(id)),
   restart: (id) => restart(need(id)),
   rename: (id, name) => rename(need(id), name),
-  remove: (id) => remove(need(id)),
+  // One already gone, e.g. deleted again while the first delete is still killing it, is removed.
+  remove: async (id) => {
+    const t = terms.get(id)
+    if (t) await remove(t)
+  },
   snapshot: (id) => {
     const t = need(id)
     return flushed(t, () => t.serializer.serialize({ scrollback: SCROLLBACK }))

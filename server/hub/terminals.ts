@@ -143,12 +143,15 @@ export class HubTerminals {
       [
         'DELETE',
         ID,
-        listed(async (t) => {
+        // Not `listed`: one that's already gone, e.g. deleted twice, is deleted.
+        async (req) => {
+          const t = this.find(req.params[0])
+          if (!t) return [404, { error: 'No such terminal' }]
           await t.runner.remote.termRemove(t.id)
           const list = this.lists.get(t.runner)
           if (list) this.lists.set(t.runner, list.filter((x) => x.id !== t.id))
           return [204, null]
-        }),
+        },
       ],
     ]
   }
