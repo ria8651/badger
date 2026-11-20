@@ -1,8 +1,9 @@
-import { For, Show, createMemo, createSignal, onCleanup, type Component, type JSX } from 'solid-js'
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, type Component, type JSX } from 'solid-js'
 import { Dynamic } from 'solid-js/web'
-import { Archive, ArchiveRestore, Bell, BellOff, Bot, ChevronDown, ChevronRight, Columns3, FolderInput, MessagesSquare, Pencil, Plus, Radar as RadarIcon, Search, Settings as SettingsIcon, Trash2, X } from '../icons'
+import { Archive, ArchiveRestore, Bell, BellOff, Bot, ChevronDown, ChevronRight, Columns3, FolderInput, Loader2, MessagesSquare, Pencil, Plus, Radar as RadarIcon, Search, Settings as SettingsIcon, Trash2, X } from '../icons'
 import type { Card, NestedChat, SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
+import { createArchivedList } from '../archivedList.ts'
 import { attention, needsYou, notifications, toggleNotifications } from '../attention.ts'
 import { searchChats } from '../chatSearch.ts'
 import { basename } from '../folders.ts'
@@ -11,7 +12,7 @@ import { mac, openView, viewKey, viewShown } from '../layout.ts'
 import { LOCAL, onMachine } from '../machines.ts'
 import { navigate, route } from '../router.tsx'
 import { cardOf, cards, cardsLoaded, projects } from '../stores/cards.ts'
-import { discardDraft, parentOf, sessions, sessionsLoaded, toggleArchived } from '../stores/sessions.ts'
+import { discardDraft, parentOf, sessionById, sessions, sessionsLoaded, toggleArchived } from '../stores/sessions.ts'
 import { leftBehind, offerCleanup } from '../worktreeCleanup.ts'
 import { terminalLabel, terminalTooltip, terminalWs, terminals, wsKey } from '../terminals.ts'
 import { accountUsage } from '../usage.ts'
@@ -47,17 +48,49 @@ export function Sidebar(props: {
   const currentRow = createMemo(() => (props.current && parentOf(props.current)?.parent) || props.current)
   const shown = (s: SessionSummary) => !s.sideOf && (s.id === currentRow() || inFocus(s.id))
   const active = createMemo(() => sessions().filter((s) => !s.archived && shown(s)))
-  const archived = createMemo(() => sessions().filter((s) => s.archived && shown(s)))
   const [showArchived, setShowArchived] = createSignal(false)
-  /** What the search box has in it, and the chats that match it: see searchChats. */
+  /** What the search box has in it, and the chats that aren't archived that match it: see searchChats. */
   const [query, setQuery] = createSignal('')
   const found = createMemo(() => searchChats(query()))
+  /** The search the server's asked, a moment after typing stops. */
+  const [searched, setSearched] = createSignal('')
+  createEffect(
+    on(query, (q) => {
+      const wait = setTimeout(() => setSearched(q.trim()), q ? 200 : 0)
+      onCleanup(() => clearTimeout(wait))
+    }),
+  )
+  /** Archived chats: the ones in focus, or for a search, any that match it, after the others. */
+  const archivedList = createArchivedList(() =>
+    searched()
+      ? { query: searched(), showing: true }
+      : { project: unfiled() ? 'none' : focus()?.id, showing: showArchived() },
+  )
+  /** Archived chats that match the search are on their way, or will be once typing stops. */
+  const searching = () => !!query().trim() && (searched() !== query().trim() || archivedList.growing())
+  /** The archived chats that match the search, once they're for what's typed now, not what was before. */
+  const archivedFound = () => (searched() === query().trim() ? archivedList.sessions() : [])
+  /** The chat on screen, if it's archived, which is listed under them even when they aren't showing. */
+  const currentArchived = () => {
+    const s = sessionById(currentRow() ?? '')
+    return s?.archived && !s.sideOf ? s : undefined
+  }
+  const archived = () => {
+    const page = archivedList.sessions()
+    const current = currentArchived()
+    if (!showArchived()) return current ? [current] : []
+    return current && !page.includes(current) ? [current, ...page] : page
+  }
   const openBoard = () => navigate(focus() ? { kind: 'card', id: focus()!.id } : { kind: 'board' })
 
   // ── Keyboard: Alt+↑/↓ steps through what's listed, and with Shift, through the chats that need you ──
 
   /** The chats as listed, top to bottom, leaving out the nested ones under them. */
-  const listed = () => found() ?? [...active(), ...(showArchived() ? archived() : archived().filter((s) => s.id === currentRow()))]
+  const listed = () => {
+    const f = found()
+    return f ? [...f, ...archivedFound()] : [...active(), ...archived()]
+  }
+
   /**
    * A new chat is on screen: home's, or in a project, one on its card. That one has a page of its own, but isn't
    * listed until something's typed in it.
@@ -103,6 +136,18 @@ export function Sidebar(props: {
   }
   addEventListener('keydown', onKey, true)
   onCleanup(() => removeEventListener('keydown', onKey, true))
+
+  // ── Older archived chats are listed as the list is scrolled to its end ──
+
+  let nav!: HTMLElement
+  /** Near the end, or with the list too short to scroll. */
+  const loadIfAtEnd = () => {
+    // Only the list that's showing: until typing stops, the one fetched is for what was there before.
+    const showing = found() ? searched() === query().trim() : showArchived()
+    if (showing && nav.scrollTop + nav.clientHeight >= nav.scrollHeight - 300) archivedList.loadMore()
+  }
+  // Once a page has been laid out, or a fetch has settled, it may still not reach the end.
+  createEffect(on([() => archivedList.sessions().length, showArchived, archivedList.loading], () => requestAnimationFrame(loadIfAtEnd)))
 
   /** The chat whose project picker or rename box is open, so its row keeps its buttons showing. */
   const [filing, setFiling] = createSignal<string>()
@@ -243,7 +288,9 @@ export function Sidebar(props: {
         </div>
       </Show>
       <div class="relative mx-2">
-        <Search class="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-fg-3" />
+        <Show when={searching()} fallback={<Search class="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-fg-3" />}>
+          <Loader2 class="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 animate-spin text-fg-3" />
+        </Show>
         <input
           type="search"
           value={query()}
@@ -267,7 +314,7 @@ export function Sidebar(props: {
           </button>
         </Show>
       </div>
-      <nav class="flex-1 overflow-y-auto px-2 py-2">
+      <nav ref={nav} onScroll={loadIfAtEnd} class="flex-1 overflow-y-auto px-2 py-2">
         <Show
           when={found()}
           fallback={
@@ -276,26 +323,38 @@ export function Sidebar(props: {
               <Show when={unfiled() && sessionsLoaded() && cardsLoaded() && !active().length}>
                 <p class="px-2 py-1.5 text-ui text-fg-3">Every chat is in a project.</p>
               </Show>
-              <Show when={archived().length}>
+              <Show when={archivedList.total() || archived().length}>
                 <button
                   onClick={() => setShowArchived((v) => !v)}
                   class="mt-2 flex h-7 w-full items-center gap-1 rounded-lg px-2 text-meta text-fg-3 transition-colors hover:text-fg-2"
                 >
                   <ChevronRight class={`size-3 transition-transform ${showArchived() ? 'rotate-90' : ''}`} />
-                  Archived ({archived().length})
+                  Archived ({Math.max(archivedList.total(), archived().length)})
                 </button>
-                <For each={showArchived() ? archived() : archived().filter((s) => s.id === currentRow())}>
+                <For each={archived()}>
                   {(s) => <SessionRow session={s} current={s.id === props.current} onScreen={props.current} filing={filing() === s.id} onOpenChange={keepOpen(s.id)} />}
                 </For>
+              </Show>
+              <Show when={showArchived() && archivedList.growing()}>
+                <Loading>Loading archived chats</Loading>
               </Show>
             </>
           }
         >
           {(found) => (
             <>
-              <For each={found()}>{(s) => <SessionRow session={s} current={s.id === props.current} onScreen={props.current} filing={filing() === s.id} onOpenChange={keepOpen(s.id)} />}</For>
-              <Show when={!found().length}>
-                <p class="px-2 py-1.5 text-ui text-fg-3">No chats match.</p>
+              <For each={[...found(), ...archivedFound().filter((s) => !found().includes(s))]}>
+                {(s) => <SessionRow session={s} current={s.id === props.current} onScreen={props.current} filing={filing() === s.id} onOpenChange={keepOpen(s.id)} />}
+              </For>
+              <Show
+                when={searching()}
+                fallback={
+                  <Show when={!found().length && !archivedFound().length && !archivedList.loading()}>
+                    <p class="px-2 py-1.5 text-ui text-fg-3">No chats match.</p>
+                  </Show>
+                }
+              >
+                <Loading>Searching archived chats</Loading>
               </Show>
             </>
           )}
@@ -303,6 +362,16 @@ export function Sidebar(props: {
       </nav>
       <Show when={accountUsage()}>{(u) => <AccountLimits usage={u()} />}</Show>
     </>
+  )
+}
+
+/** A row at the end of the list while more of it is on its way. */
+function Loading(props: { children: JSX.Element }) {
+  return (
+    <p role="status" class="flex items-center gap-2 px-2 py-1.5 text-ui text-fg-3">
+      <Loader2 class="size-3.5 shrink-0 animate-spin" />
+      {props.children}…
+    </p>
   )
 }
 

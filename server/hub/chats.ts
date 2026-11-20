@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import type { WebSocket } from 'ws'
 import { commentsMessage, splitComments } from '../../shared/comments.ts'
+import { chatMatches, searchWords } from '../../shared/chatSearch.ts'
+import { projectOf } from '../../shared/cardTree.ts'
+import { folderLabelOf } from '../../shared/folders.ts'
 import { SIDE_NOTE, renderMoveNote } from '../../shared/forkNote.ts'
 import {
   LOCAL_MACHINE,
@@ -17,6 +20,7 @@ import {
   type ImageAttachment,
   type PermissionMode,
   type ServerEvent,
+  type ArchivedPage,
   type SessionSummary,
   type StartAt,
   type WireMessage,
@@ -35,6 +39,7 @@ import { reviewPrompt } from '../reviewGuide.ts'
 import { IDLE, type LiveSnapshot, type TranscriptLines } from '../runnerProtocol.ts'
 import { suggestTitle } from '../titles.ts'
 import { externalizeImages } from '../transcriptImages.ts'
+import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk'
 import { titleOf, transcriptModel, type Transcripts } from '../transcripts.ts'
 import { CHAT_ID, type Route } from './http.ts'
 import { debounced, type Viewers } from './viewers.ts'
@@ -51,8 +56,10 @@ const LIVE_LIST_MS = 15 * 1000
  * nothing until the ping drops it.
  */
 const QUICK_TIMEOUT_MS = 10 * 1000
-/** How many chats the sidebar lists. */
-const LIST_LIMIT = 200
+/** How many archived chats a page has, unless it asks for fewer. */
+const ARCHIVED_PAGE = 50
+/** Most archived chats a page can ask for: the sidebar asks for as many as it has listed, to check them again. */
+const ARCHIVED_MAX = 10_000
 /**
  * How long a chat's ended turn goes unread before it's recapped. Read before then, the user was there for it; much
  * later, the chat's cached context may have expired, and recapping it would mean paying for the whole conversation again.
@@ -134,9 +141,99 @@ export class Chats {
 
   // ── The list ──
 
+  /**
+   * The chats the browser keeps up to date: every one that isn't archived, and every one on a card, archived or not, so
+   * a card shows all of its own. Other archived chats are fetched a page at a time: see archived.
+   */
   async list(): Promise<SessionSummary[]> {
-    const { meta, transcripts, machines, placement } = this.d
-    // Children show inside the chat that started them, and under it in the list while they run, as its subagents do.
+    const archived = this.d.meta.archivedIds()
+    const onCards = new Set(this.d.board.cards().flatMap((c) => c.sessionIds))
+    const leaveOut = (id: string) => archived.has(id) && !onCards.has(id)
+    return this.summarize(await this.infos(leaveOut), leaveOut)
+  }
+
+  /**
+   * Archived chats, newest first: in a project, or on no card, if asked, and matching a search if there is one. `limit`
+   * of them, after the one `after` names, with how many there are in all and where the next page starts. Side chats are
+   * left out, as they're under their chat.
+   */
+  async archived(opts: { project?: number | 'none'; query?: string; limit: number; after?: string }): Promise<ArchivedPage> {
+    const { board, meta, machines } = this.d
+    const archived = meta.archivedIds()
+    const side = meta.sideChats()
+    const cards = board.cards()
+    const cardOf = new Map(cards.flatMap((c) => c.sessionIds.map((id) => [id, c] as const)))
+    const projectOfChat = (id: string) => {
+      const card = cardOf.get(id)
+      return card && projectOf(cards, card.id)
+    }
+    const scratch = new Set([this.d.scratchDir, ...machines.list().flatMap((m) => (m.scratchDir ? [m.scratchDir] : []))])
+    const words = searchWords(opts.query ?? '')
+    const all = (await this.infos((id) => !archived.has(id) || side.has(id)))
+      .filter((s) => {
+        const project = projectOfChat(s.sessionId)
+        if (opts.project === 'none' ? cardOf.has(s.sessionId) : opts.project !== undefined && project?.id !== opts.project) return false
+        const folder = s.cwd && folderLabelOf(s.cwd, scratch.has(s.cwd))
+        return chatMatches(words, { title: titleOf(s) || 'Untitled', folder, card: cardOf.get(s.sessionId), project })
+      })
+      // Ties broken by id, so the order, and with it where a page starts, is the same every time.
+      .sort((a, b) => b.lastModified - a.lastModified || (a.sessionId < b.sessionId ? -1 : 1))
+    // Named by the last chat on the page before rather than counted, so chats added above don't shift the pages.
+    const cursor = (s: SDKSessionInfo) => `${s.lastModified}:${s.sessionId}`
+    const [time, id] = opts.after?.split(':') ?? []
+    const start = opts.after === undefined ? 0 : all.findIndex((s) => s.lastModified < Number(time) || (s.lastModified === Number(time) && s.sessionId > id))
+    const from = start < 0 ? all.length : start
+    const page = all.slice(from, from + opts.limit)
+    return {
+      sessions: await this.summarize(page),
+      total: all.length,
+      ...(page.length && from + page.length < all.length ? { next: cursor(page[page.length - 1]) } : {}),
+    }
+  }
+
+  /**
+   * One chat, as the list has it, archived or not, then its side chats, for its panel: an archived chat's may not be in
+   * the list either. Not a child chat, which isn't listed but shows inside the chat that started it.
+   */
+  async withSideChats(sessionId: string): Promise<SessionSummary[]> {
+    const { meta, transcripts } = this.d
+    if (meta.parentOf(sessionId)) return []
+    const ids = [sessionId, ...[...meta.sideChats()].flatMap(([id, s]) => (s.parent === sessionId ? [id] : []))]
+    const infos = await Promise.all(ids.map((id) => transcripts.info(id)))
+    // Not the side chats unless there's the chat.
+    return infos[0] ? this.summarize(infos.filter((i) => !!i)) : []
+  }
+
+  /** Every folder a chat on a machine has run in, archived ones' too, with when it was last used there. */
+  async foldersUsed(machine: string): Promise<Map<string, number>> {
+    const { machines, placement } = this.d
+    const infos = await this.infos(() => false)
+    const where = placement.machinesOf(infos.map((s) => s.sessionId))
+    const used = new Map<string, number>()
+    for (const s of infos) {
+      // A live chat may have moved into a worktree since its transcript was last written.
+      const cwd = machines.live(s.sessionId)?.cwd ?? s.cwd
+      if ((where.get(s.sessionId) ?? LOCAL_MACHINE) !== machine || !cwd) continue
+      used.set(cwd, Math.max(s.lastModified, used.get(cwd) ?? 0))
+    }
+    // Less those that are gone, e.g. removed worktrees, as far as the machine has said.
+    const gone = await this.goneFolders([...used.keys()].map((cwd) => ({ machine, cwd })))
+    for (const cwd of gone.get(machine) ?? []) used.delete(cwd)
+    return used
+  }
+
+  /** Every chat with a transcript, newest first, less those left out and child chats, which show inside the chat that started them. */
+  private infos(leaveOut: (id: string) => boolean): Promise<SDKSessionInfo[]> {
+    const children = new Set(this.d.meta.allChildren().map((c) => c.sessionId))
+    return this.d.transcripts.list((id) => children.has(id) || leaveOut(id))
+  }
+
+  /**
+   * Chats as the browser lists them. With `leaveOut`, it's the whole list: brand-new chats with no transcript yet are
+   * added, and drafts that haven't started, less those it leaves out.
+   */
+  private async summarize(listed: SDKSessionInfo[], leaveOut?: (id: string) => boolean): Promise<SessionSummary[]> {
+    const { meta, machines, placement } = this.d
     const children = meta.allChildren()
     const childIds = new Set(children.map((c) => c.sessionId))
     const nested = (id: string) => {
@@ -151,7 +248,6 @@ export class Chats {
       const s = side.get(id)
       return s ? { sideOf: s.parent, forkedAt: s.at } : {}
     }
-    const listed = await transcripts.list(LIST_LIMIT, childIds)
     const archived = meta.archivedIds()
     const reviews = meta.reviewIds()
     const recaps = meta.recaps()
@@ -179,9 +275,9 @@ export class Chats {
       }
     })
     // A brand-new live session may not have a transcript here yet.
-    for (const runner of machines.online()) {
+    for (const runner of leaveOut ? machines.online() : []) {
       for (const live of runner.live.values()) {
-        if (childIds.has(live.id) || summaries.some((s) => s.id === live.id)) continue
+        if (childIds.has(live.id) || leaveOut!(live.id) || summaries.some((s) => s.id === live.id)) continue
         summaries.unshift({
           id: live.id,
           title: reviews.has(live.id) ? 'Guided review' : 'New chat',
@@ -189,7 +285,7 @@ export class Chats {
           machine: runner.id,
           lastModified: Date.now(),
           running: live.running,
-          archived: false,
+          archived: archived.has(live.id),
           ...(reviews.has(live.id) ? { review: true } : {}),
           ...under(live.id),
           ...nested(live.id),
@@ -204,7 +300,7 @@ export class Chats {
     for (const d of drafts) {
       const listed = byId.get(d.sessionId)
       if (listed) listed.draft = true
-      else if (d.start && !placed.has(d.sessionId)) {
+      else if (leaveOut && d.start && !placed.has(d.sessionId) && !leaveOut(d.sessionId)) {
         summaries.push({
           id: d.sessionId,
           title: draftTitle(d.text, d.images > 0),
@@ -221,7 +317,7 @@ export class Chats {
     // A working chat writes to its transcript all the time, so it's placed by when it started working instead: it moves
     // up once when its turn starts and once when it ends, rather than with every line. The runner's clock might be ahead.
     const position = (s: SessionSummary) => (s.runningSince ? Math.min(s.runningSince, Date.now()) : s.lastModified)
-    summaries.sort((a, b) => position(b) - position(a))
+    if (leaveOut) summaries.sort((a, b) => position(b) - position(a))
     // Sent with the list so a chat's panels are known before it's opened, not looked up after.
     // A chat with no machine on record is the hub's, as the browser takes it to be.
     const roots = await Promise.all(summaries.map((s) => s.cwd && this.workspaceRoot(s.machine ?? LOCAL_MACHINE, s.cwd)))
@@ -717,6 +813,32 @@ export class Chats {
     const path = (action: string) => new RegExp(`^/api/sessions/${CHAT_ID}/${action}$`)
     return [
       ['GET', '/api/sessions', async () => [200, await this.list()]],
+      [
+        'GET',
+        '/api/sessions/archived',
+        async ({ url }) => {
+          const q = url.searchParams
+          const limit = Number(q.get('limit') ?? ARCHIVED_PAGE)
+          const project = q.get('project')
+          return [
+            200,
+            await this.archived({
+              project: project === 'none' ? 'none' : project ? Number(project) : undefined,
+              query: q.get('q') ?? undefined,
+              limit: Number.isInteger(limit) ? Math.min(Math.max(limit, 0), ARCHIVED_MAX) : ARCHIVED_PAGE,
+              after: q.get('after') ?? undefined,
+            }),
+          ]
+        },
+      ],
+      [
+        'GET',
+        new RegExp(`^/api/sessions/${CHAT_ID}$`),
+        async ({ params: [id] }) => {
+          const found = await this.withSideChats(id)
+          return found.length ? [200, found] : [404, { error: 'No such chat' }]
+        },
+      ],
       ['POST', path('fork'), async ({ params: [id], json }) => [201, await this.fork(id, await json())]],
       ['POST', '/api/reviews', async ({ json }) => [200, await this.review(await json())]],
       ['POST', path('btw'), async ({ params: [id], json }) => [201, await this.btw(id, await json())]],

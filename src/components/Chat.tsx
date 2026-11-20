@@ -17,7 +17,7 @@ import { lastModel, modelChoices, modelName, modelValue, models, setLastModel, t
 import { navigate } from '../router.tsx'
 import { createStickyScroll } from '../stickyScroll.ts'
 import { cardOf } from '../stores/cards.ts'
-import { sessionById } from '../stores/sessions.ts'
+import { lookUp, sessionById, sessionsLoaded } from '../stores/sessions.ts'
 import { inWs, knownRoot, terminals, workspaceOf, type Ws } from '../terminals.ts'
 import { defaultStart, rememberMachine } from '../drafts.ts'
 import { Checking, ChildChats, createChat, createChildChats, type Chat as ChatHandle } from '../useChat.ts'
@@ -66,6 +66,8 @@ export function Chat(props: {
   const state = chat.state
   /** The chat as the sidebar lists it, which may be a draft that hasn't started. */
   const listed = () => sessionById(props.sessionId)
+  // An archived one isn't in the list unless it's on a card, so it's fetched.
+  createEffect(() => sessionsLoaded() && lookUp(props.sessionId))
   /** Once it's started and listed, for the header's title, move, rename and archive. */
   const session = () => (listed()?.unstarted ? undefined : listed())
   let composer: ComposerControls | undefined

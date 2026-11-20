@@ -40,7 +40,9 @@ export class Attention {
 
   chats(): Record<string, AttentionState> {
     const chats: Record<string, AttentionState> = {}
-    for (const id of this.meta.unreadIds()) chats[id] = 'unread'
+    // An archived chat left unread has been put away; one waiting on a prompt still needs you.
+    const archived = this.meta.archivedIds()
+    for (const id of this.meta.unreadIds()) if (!archived.has(id)) chats[id] = 'unread'
     for (const id of this.waiting()) chats[this.root(id)] = 'waiting'
     return chats
   }

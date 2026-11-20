@@ -97,6 +97,15 @@ export interface Machine {
 /** The hub's own machine's id. */
 export const LOCAL_MACHINE = 'local'
 
+/** A page of archived chats, newest first. */
+export interface ArchivedPage {
+  sessions: SessionSummary[]
+  /** How many there are in all, on this page or not. */
+  total: number
+  /** Where the next page starts, if there is one. */
+  next?: string
+}
+
 export interface SessionSummary {
   id: string
   title: string
