@@ -1,5 +1,5 @@
 import { createSignal } from 'solid-js'
-import { createStore, produce, reconcile } from 'solid-js/store'
+import { createStore, produce, reconcile, unwrap } from 'solid-js/store'
 import type { SessionSummary } from '../../shared/protocol.ts'
 import { api, socket } from '../api.ts'
 import { LOCAL } from '../machines.ts'
@@ -7,9 +7,9 @@ import { knowRoots } from '../terminals.ts'
 import { configReady } from './config.ts'
 
 /**
- * Every chat as the sidebar lists it, kept current over the socket. Reconciled by id, so a refresh updates
- * rows in place rather than rebuilding them, and changes made here show at once and are undone if the server
- * says no.
+ * The chats the app knows of, kept current over the socket: every one that isn't archived and every one on a card,
+ * as the list has them, and archived ones fetched besides it. Reconciled by id, so a refresh updates rows in place
+ * rather than rebuilding them, and changes made here show at once and are undone if the server says no.
  */
 const [list, setList] = createStore<SessionSummary[]>([])
 export const sessions = () => list
@@ -19,13 +19,60 @@ export const sessionsLoaded = loaded
 
 export const sessionById = (id: string) => list.find((s) => s.id === id)
 
+/**
+ * Every chat that isn't archived, and every one on a card, come in the list, so a card shows all of its own. Other
+ * archived chats are fetched as they're wanted, a page at a time for the sidebar (see archivedList.ts) or one that's
+ * opened, and kept with the list from then on, so they're looked up and changed like the rest.
+ */
+const fetched = new Set<string>()
+/** What the list last had, which wins over a chat fetched besides it. */
+let inList = new Set<string>()
+/** Goes up each time the list is fetched, for what's fetched besides it to be fetched again. */
+const [version, setVersion] = createSignal(0)
+export const listVersion = version
+/** Chats looked up once already: see lookUp. */
+const asked = new Set<string>()
+
+const knowRootsOf = (list: SessionSummary[]) =>
+  knowRoots(list.flatMap((s) => (s.cwd && s.root ? [{ machine: s.machine ?? LOCAL, cwd: s.cwd, root: s.root }] : [])))
+
 const refresh = () =>
   api.sessions().then((next) => {
     // Their workspaces too, so a chat opens beside its panels on the first frame.
-    knowRoots(next.flatMap((s) => (s.cwd && s.root ? [{ machine: s.machine ?? LOCAL, cwd: s.cwd, root: s.root }] : [])))
-    setList(reconcile(next, { key: 'id' }))
+    knowRootsOf(next)
+    const before = inList
+    inList = new Set(next.map((s) => s.id))
+    // One that's gone from the list, archived from somewhere else say, can be looked up again if it's open.
+    for (const id of before) if (!inList.has(id)) asked.delete(id)
+    const kept = unwrap(list).filter((s) => fetched.has(s.id) && !inList.has(s.id))
+    setList(reconcile([...next, ...kept], { key: 'id' }))
     setLoaded(true)
+    setVersion((v) => v + 1)
   })
+
+/** Keeps chats fetched besides the list, updating ones already kept in place, so their rows stay as they are. */
+export function remember(found: SessionSummary[]): void {
+  knowRootsOf(found)
+  for (const s of found) {
+    fetched.add(s.id)
+    const i = list.findIndex((x) => x.id === s.id)
+    if (i < 0) setList(list.length, s)
+    else if (!inList.has(s.id)) setList(i, reconcile(s))
+  }
+}
+
+/**
+ * Fetches a chat that's open but not in the list, e.g. an archived one, with its side chats. Once, as one that
+ * doesn't exist yet is new, until it leaves the list.
+ */
+export function lookUp(id: string): void {
+  if (!loaded() || sessionById(id) || asked.has(id)) return
+  asked.add(id)
+  api
+    .session(id)
+    .then(remember)
+    .catch(() => {})
+}
 
 let timer: ReturnType<typeof setTimeout> | undefined
 /** Several changes in a row, like a turn's messages arriving, make one fetch. */
@@ -83,6 +130,8 @@ async function change(id: string, local: Partial<SessionSummary>, remote: () => 
 /** Archives a chat, or brings it back. */
 export const toggleArchived = (s: SessionSummary) => {
   const archived = !s.archived
+  // Kept once it's archived, though the list won't have it, for if it's on screen.
+  fetched.add(s.id)
   return change(s.id, { archived }, () => (archived ? api.archive(s.id) : api.unarchive(s.id)))
 }
 

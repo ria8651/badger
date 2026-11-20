@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createResource, createSignal, on, type JSX } from 'solid-js'
+import { For, Show, createEffect, createMemo, createResource, createSignal, on, onCleanup, type JSX } from 'solid-js'
 import { ChevronDown, FolderInput, GitBranch, Link, Loader2, Pencil, Plus, Trash2, X } from '../icons'
 import { ancestors, descendants } from '../../shared/cardTree.ts'
 import { CARD_STATUSES, type Card, type SessionSummary } from '../../shared/protocol.ts'
@@ -14,7 +14,7 @@ import { ChatSummary, MachineName } from './ChatSummary.tsx'
 import { LOCAL, onMachine } from '../machines.ts'
 import { attention } from '../attention.ts'
 import { cardOf, cards, deleteCard, linkSession, projectOf, unlinkSession, updateCard } from '../stores/cards.ts'
-import { sessions } from '../stores/sessions.ts'
+import { remember, sessions } from '../stores/sessions.ts'
 import { removalNotes, updateCardTidying } from '../worktreeCleanup.ts'
 
 const STATUS_OPTIONS = CARD_STATUSES.map((value) => ({ value, label: STATUS_LABELS[value] }))
@@ -49,10 +49,29 @@ export function CardView(props: {
   // Linked ids with no transcript yet are left out, unless something's typed in them: then they're drafts.
   const chats = createMemo(() => sessions().filter((s) => props.card.sessionIds.includes(s.id)))
   /**
+   * Archived chats that match what's typed, asked of the server a moment after typing stops, as only some are kept
+   * here. Once they're kept, the list of chats to pick from has them.
+   */
+  let askedArchived: string | undefined
+  let archivedTimer: ReturnType<typeof setTimeout> | undefined
+  const findArchived = (q: string) => {
+    if (q === askedArchived) return
+    askedArchived = q
+    clearTimeout(archivedTimer)
+    archivedTimer = setTimeout(() => {
+      api
+        .archivedSessions({ q, limit: 100 })
+        .then((page) => remember(page.sessions))
+        .catch(() => {})
+    }, 200)
+  }
+  onCleanup(() => clearTimeout(archivedTimer))
+  /**
    * Chats that could go on this card: ones on no card first, then ones it would take off another card, then archived
    * ones, greyed. Newest first in each.
    */
   const linkable = (q: string): SearchItem[] => {
+    findArchived(q)
     const needle = q.toLowerCase()
     const found = sessions().filter(
       (s) =>

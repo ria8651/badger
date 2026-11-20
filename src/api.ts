@@ -1,5 +1,6 @@
 import { createSignal } from 'solid-js'
 import type {
+  ArchivedPage,
   BaseChoices,
   BranchChoices,
   Card,
@@ -47,6 +48,13 @@ type CardPatch = Partial<Pick<Card, 'title' | 'description' | 'status' | 'positi
 export const api = {
   config: () => get<Config>('/api/config'),
   sessions: () => get<SessionSummary[]>('/api/sessions'),
+  /** A page of archived chats: in a project, or on no card, and matching a search, if asked. */
+  archivedSessions: (opts: { project?: number | 'none'; q?: string; limit: number; after?: string }) =>
+    get<ArchivedPage>(
+      `/api/sessions/archived?${new URLSearchParams(Object.entries(opts).flatMap(([k, v]) => (v === undefined || v === '' ? [] : [[k, String(v)]])))}`,
+    ),
+  /** A chat, archived or not, and its side chats. */
+  session: (sessionId: string) => get<SessionSummary[]>(`/api/sessions/${sessionId}`),
   models: () => get<ModelOption[]>('/api/models'),
   archive: (sessionId: string) => request<void>('POST', `/api/sessions/${sessionId}/archive`),
   unarchive: (sessionId: string) => request<void>('DELETE', `/api/sessions/${sessionId}/archive`),

@@ -1,3 +1,4 @@
+import { basename, folderLabelOf, worktreeOf } from '../shared/folders.ts'
 import { LOCAL, machineOf, machines } from './machines.ts'
 import { config } from './stores/config.ts'
 
@@ -10,20 +11,10 @@ export const scratchDir = (machine: string = LOCAL) => machineOf(machine)?.scrat
 /** Any machine's folder for folderless chats. */
 export const isScratch = (cwd?: string) => !!cwd && (cwd === scratch() || machines().some((m) => m.scratchDir === cwd))
 
-export const basename = (path: string) => path.split('/').filter(Boolean).pop() ?? path
-
-/** The repo and name of a worktree Claude Code made (`<repo>/.claude/worktrees/<name>`). */
-export function worktreeOf(cwd?: string): { repo: string; name: string } | undefined {
-  const m = cwd?.match(/^(.*)\/\.claude\/worktrees\/([^/]+)\/?$/)
-  return m ? { repo: m[1], name: m[2] } : undefined
-}
+export { basename, worktreeOf }
 
 /** How a chat's directory is shown: its last segment, "repo · name" for a worktree, or "No folder" for scratch. */
-export function folderLabel(cwd: string): string {
-  if (isScratch(cwd)) return 'No folder'
-  const wt = worktreeOf(cwd)
-  return wt ? `${basename(wt.repo)} · ${wt.name}` : basename(cwd)
-}
+export const folderLabel = (cwd: string): string => folderLabelOf(cwd, isScratch(cwd))
 
 /** A worktree name for a card's work: its number and the start of its title. */
 export function cardWorktreeName(card: { id: number; title: string }): string {

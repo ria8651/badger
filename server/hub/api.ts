@@ -229,11 +229,7 @@ function machineFileRoutes({ machines, chats, listChanged }: ApiDeps): Route[] {
       '/api/folders',
       async ({ url }) => {
         const { runner } = query(url)
-        const used = new Map<string, number>()
-        for (const s of await chats.list()) {
-          if ((s.machine ?? LOCAL_MACHINE) !== runner.id || !s.cwd || s.gone || TEMP_DIR.test(s.cwd)) continue
-          used.set(s.cwd, Math.max(s.lastModified, used.get(s.cwd) ?? 0))
-        }
+        const used = new Map([...(await chats.foldersUsed(runner.id))].filter(([cwd]) => !TEMP_DIR.test(cwd)))
         const { added, hidden } = machines.folders(runner.id)
         return [200, await runner.remote.listFolders([...used], [...added], [...hidden])]
       },

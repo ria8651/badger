@@ -65,7 +65,8 @@ prepareScratch(SCRATCH_DIR)
 
 const viewers = new Viewers()
 /** Tells every tab to fetch the chat list again; each fetch asks every machine about its folders. */
-const listChanged = debounced(() => viewers.toAll({ type: 'sessions_changed' }), LIST_DEBOUNCE_MS)
+// Archiving a chat changes what needs you too, as archived ones don't.
+const listChanged = debounced(() => (viewers.toAll({ type: 'sessions_changed' }), attention.update()), LIST_DEBOUNCE_MS)
 const machinesChanged = debounced(() => viewers.toAll({ type: 'machines', machines: machines.list() }), LIST_DEBOUNCE_MS)
 const cardsChanged = () => viewers.toAll({ type: 'cards_changed' })
 

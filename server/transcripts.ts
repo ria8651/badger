@@ -156,12 +156,11 @@ export class Transcripts {
     })
   }
 
-  /** The most recently changed chats, newest first, less the `except` ones: left out before the limit, so they can't crowd others out. */
-  list(limit: number, except: Set<string>): Promise<SDKSessionInfo[]> {
-    const listed = () => this.summaries().filter((s) => !except.has(s.sessionId))
+  /** Every chat, newest first, less those left out. */
+  list(leaveOut: (sessionId: string) => boolean): Promise<SDKSessionInfo[]> {
+    const listed = () => this.summaries().filter((s) => !leaveOut(s.sessionId))
     return listSessions({
       sessionStore: { ...this.store, listSessions: async () => listed().map(({ sessionId, mtime }) => ({ sessionId, mtime })), listSessionSummaries: async () => listed() },
-      limit,
     })
   }
 
