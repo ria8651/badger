@@ -24,3 +24,19 @@ export function toggleWrap(): void {
   setWrapSignal(!wrap())
   localStorage.setItem(WRAP_KEY, wrap() ? '1' : '0')
 }
+
+/**
+ * What a diff marks over its lines' tint: the characters that changed in every changed line, a new or removed one
+ * all over; or only in lines that were edited, where it's the words that changed, which say the most.
+ */
+export type DiffMarks = 'all' | 'edits'
+
+const MARKS_KEY = 'badger.diffMarks'
+const [diffMarks, setDiffMarksSignal] = createSignal<DiffMarks>(localStorage.getItem(MARKS_KEY) === 'all' ? 'all' : 'edits')
+export { diffMarks }
+
+/** One setting for every diff, kept in this browser. */
+export function setDiffMarks(next: DiffMarks): void {
+  setDiffMarksSignal(next)
+  localStorage.setItem(MARKS_KEY, next)
+}

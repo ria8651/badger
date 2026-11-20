@@ -350,6 +350,15 @@ export interface FileEntry {
   git?: boolean
 }
 
+/** The files of a checkout, to browse it by. */
+export interface CheckoutFiles {
+  /** Its top folder, which the files' paths are from. */
+  root: string
+  files: string[]
+  /** More than were sent. */
+  truncated: boolean
+}
+
 export interface Listing {
   path: string
   /** Null at the root. */

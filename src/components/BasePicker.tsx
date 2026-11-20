@@ -1,8 +1,9 @@
-import { createSignal, type JSX } from 'solid-js'
+import { Show, createSignal, type JSX } from 'solid-js'
+import { ChevronDown } from '../icons'
 import type { BaseChoices, BaseHow } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { showError } from './Popover.tsx'
-import { SearchMenu, type SearchItem } from './ui.tsx'
+import { DiffCount, SearchMenu, type SearchItem } from './ui.tsx'
 
 const [changes, setChanges] = createSignal(0)
 /** Goes up whenever a base is picked anywhere, so whatever shows one reads it again. */
@@ -89,5 +90,37 @@ export function BasePicker(props: {
         api.baseChoices(props.dir, props.machine).then(setChoices, (e: Error) => showError("Couldn't read the branches", e.message))
       }}
     />
+  )
+}
+
+/**
+ * What a diff is against, to pick another by, and how much it adds and takes out: the same in every bar that shows
+ * changes. Short of room, the counts go first (wrapped onto a line that's clipped, so they're never drawn over
+ * anything), then the base's name shortens; the word "against" only shows in a wide pane.
+ */
+export function Against(props: { dir?: string; machine: string; base?: string; baseHow?: BaseHow; files: number; added: number; removed: number }) {
+  return (
+    <div class="-mx-1.5 flex h-6 min-w-0 flex-wrap content-start items-center gap-x-3 overflow-hidden px-1.5 whitespace-nowrap text-fg-3">
+      <Show when={props.dir}>
+        {(dir) => (
+          <BasePicker
+            dir={dir()}
+            machine={props.machine}
+            title={props.base ? `Compared with ${props.base}, ${howText[props.baseHow ?? 'nearest']}. Pick another` : 'Pick a branch to compare with'}
+            triggerClass={(open) => `-mx-1.5 flex h-6 min-w-0 items-center gap-1 rounded-md px-1.5 transition-colors hover:bg-surface ${open ? 'bg-surface' : ''}`}
+            trigger={() => (
+              <>
+                <Show when={props.base} fallback="Uncommitted only">
+                  <span class="hidden @md:inline">against </span>
+                  <span class="min-w-0 truncate font-mono text-fg-2">{props.base}</span>
+                </Show>
+                <ChevronDown class="size-3 shrink-0" />
+              </>
+            )}
+          />
+        )}
+      </Show>
+      <DiffCount files={props.files} added={props.added} removed={props.removed} class="h-6 shrink-0" />
+    </div>
   )
 }

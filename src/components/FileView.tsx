@@ -14,7 +14,9 @@ import { QuoteSelection } from './QuoteSelection.tsx'
 import { Breadcrumbs } from './Breadcrumbs.tsx'
 import { Markdown } from './Markdown.tsx'
 import { OpenFile, fileLink, useOpenFile } from '../fileLinks.ts'
-import { DiffCount, GhostButton, PaneBar, Segmented } from './ui.tsx'
+import { GhostButton, PaneBar, Segmented } from './ui.tsx'
+import { Against } from './BasePicker.tsx'
+import { useChanges } from '../changes.ts'
 
 /** Lines drawn per block; blocks off screen skip layout, so a long file costs little until it's scrolled through. */
 const BLOCK = 200
@@ -116,14 +118,14 @@ export function FileView(props: {
     () => !image() && { path: props.path, machine: props.machine, v: version() },
     ({ path, machine }) => readText(path, machine).catch((e: Error) => ({ error: e.message })),
   )
-  const [changes] = createResource(
-    () => (props.cwd ? { cwd: props.cwd, machine: props.machine, v: version() } : false),
-    ({ cwd, machine }): Promise<ReviewDiff | { error: string }> => api.review(cwd, 'base', 0, machine).catch((e: Error) => ({ error: e.message })),
+  // The checkout's changes, as everything showing them shares them, kept up to date as they change (see useChanges).
+  const changes = useChanges(
+    () => ({ cwd: props.cwd, machine: props.machine }),
+    () => props.running,
   )
-  const diff = () => {
-    const c = changes()
-    return c && 'files' in c ? c : undefined
-  }
+  const diff = changes.diff
+  // The file's read again with them, so its text and the lines marked changed in it are from the same moment.
+  createEffect(on(diff, reload, { defer: true }))
   const changed = createMemo(() => changesIn(diff(), props.path))
   const relative = () => {
     const root = diff()?.root
@@ -132,9 +134,9 @@ export function FileView(props: {
   /** Why its Diff can't be shown: there's no checkout, its changes couldn't be read, or the file is outside it. */
   const noDiff = () => {
     if (!props.cwd) return 'There’s no checkout to diff this file against.'
-    const c = changes()
-    if (changes.loading && !c) return 'Reading the changes…'
-    return c && 'error' in c ? `Couldn’t read the changes: ${c.error}` : 'This file isn’t in the checkout, so it has no diff.'
+    if (changes.error()) return `Couldn’t read the changes: ${changes.error()}`
+    if (!diff()) return 'Reading the changes…'
+    return 'This file isn’t in the checkout, so it has no diff.'
   }
 
   const text = () => {
@@ -326,7 +328,23 @@ export function FileView(props: {
       <div class="flex min-h-0 flex-1 flex-col text-ui">
         <PaneBar class="whitespace-nowrap text-fg-3">
           {toggle()}
-          {crumbs(<Show when={changed().file}>{(f) => <DiffCount files={1} added={f().added} removed={f().removed} class="shrink-0" />}</Show>)}
+          {crumbs()}
+          {/* As its Diff's bar has it, beside the path. */}
+          <div class="flex min-w-0 flex-1 items-center text-xs">
+            <Show when={relative() ? diff() : undefined}>
+              {(d) => (
+                <Against
+                  dir={props.cwd}
+                  machine={props.machine}
+                  base={d().base}
+                  baseHow={d().baseHow}
+                  files={changed().file ? 1 : 0}
+                  added={changed().file?.added ?? 0}
+                  removed={changed().file?.removed ?? 0}
+                />
+              )}
+            </Show>
+          </div>
           <Show when={!image() && !rendered()}>
             <GhostButton title={wrap() ? 'Don’t wrap long lines' : 'Wrap long lines'} active={wrap()} aria-pressed={wrap()} onClick={toggleWrap}>
               <TextWrap class="size-3.5" />

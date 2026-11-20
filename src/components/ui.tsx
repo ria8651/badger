@@ -3,6 +3,7 @@ import { Dynamic, Portal } from 'solid-js/web'
 import { Check, ChevronDown, X } from '../icons'
 import type { AttentionState } from '../../shared/protocol.ts'
 import { connected } from '../api.ts'
+import { fileIcon } from '../fileIcons.ts'
 import { compact, plural } from '../format.ts'
 
 /** Open modals, innermost last. A dialog can open over another, and a modal popover over either. */
@@ -661,5 +662,50 @@ export function SearchMenu(props: {
         </Portal>
       </Show>
     </>
+  )
+}
+
+/**
+ * Ticks something off as read: a hunk, a file, or everything in a folder or group, `some` when only part of it is.
+ * Without a label it's the box alone, as in a row; `narrow`, the label goes when the pane is narrow and the box stays.
+ */
+export function ViewedBox(props: { viewed: boolean; some?: boolean; onChange: (on: boolean) => void; label?: string | false; narrow?: boolean }) {
+  return (
+    <label
+      title={props.viewed ? 'Viewed. Untick to read again' : props.some ? 'Some viewed. Tick to mark all of it' : 'Mark viewed'}
+      // Not whatever it's in, say a row that opens a file.
+      onClick={(e) => e.stopPropagation()}
+      class={`flex shrink-0 cursor-pointer items-center gap-1 rounded text-xs text-fg-3 hover:text-fg-2 ${props.label === false ? '' : 'px-1.5 py-0.5'}`}
+    >
+      <input
+        type="checkbox"
+        checked={props.viewed}
+        ref={(el) => createEffect(() => (el.indeterminate = !props.viewed && !!props.some))}
+        onChange={(e) => props.onChange(e.currentTarget.checked)}
+        class="accent-(--color-primary)"
+      />
+      <Show when={props.label !== false}>
+        <span class={props.narrow ? 'hidden @md:inline' : undefined}>{props.label || 'Viewed'}</span>
+      </Show>
+    </label>
+  )
+}
+
+/** A file's icon, by its name: its kind's shape in its language's colour, the same wherever a file's shown. */
+export function FileTypeIcon(props: { name: string; class?: string }) {
+  const icon = () => fileIcon(props.name)
+  return <Dynamic component={icon().icon} class={`shrink-0 ${props.class ?? 'size-4'}`} style={icon().color ? { color: icon().color! } : undefined} />
+}
+
+/** How much has been viewed, as a line along the foot of the bar above it, over its edge but under its menus. */
+export function ViewedLine(props: { viewed: number; total: number }) {
+  return (
+    <Show when={props.total}>
+      <div class="relative z-10 h-0">
+        <div class="absolute inset-x-0 -top-0.5 h-0.5">
+          <div class="h-full bg-ok transition-[width]" style={{ width: `${(props.viewed / props.total) * 100}%` }} />
+        </div>
+      </div>
+    </Show>
   )
 }

@@ -68,6 +68,8 @@
   --color-ok: #3d7a4a;
   /* What's selected in code, drawn as a shape: unlike both the accent and the diff's red and green. */
   --color-selection: #3b74d9;
+  /* A file changed in place, beside the diff's red and green for taken out and put in: amber, as editors have it. */
+  --color-changed: #b5851f;
   --color-primary: #1b1a18;
   --color-on-primary: #fafaf8;
   --color-sidebar: #fafaf8;
@@ -159,6 +161,8 @@
   --color-danger: #c13a2e;
   --color-ok: #3d7a4a;
   --color-selection: #3b74d9;
+  /* A file changed in place, beside the diff's red and green for taken out and put in: amber, as editors have it. */
+  --color-changed: #b5851f;
   --pane-ring: rgb(0 0 0 / 0.07);
   /* Open mSupply's size: its 2xl, at its roundness. */
   --radius-composer: 1.25rem;
@@ -176,6 +180,7 @@
   --color-accent: #d97757;
   --color-danger: #e26d5f;
   --color-ok: #7cb08a;
+  --color-changed: #d6b35c;
   --color-selection: #5b8ff0;
   --pane-ring: rgb(255 255 255 / 0.1);
   --radius-composer: 1.25rem;
@@ -194,6 +199,7 @@
   --color-accent: #d97757;
   --color-danger: #e26d5f;
   --color-ok: #7cb08a;
+  --color-changed: #d6b35c;
   --color-selection: #5b8ff0;
   --pane-ring: rgb(255 255 255 / 0.1);
 }
@@ -211,6 +217,7 @@
   --color-accent: #ffb000;
   --color-danger: #ff5f4f;
   --color-ok: #b4ffc6;
+  --color-changed: #ffd166;
   --color-selection: #4d8dff;
   --pane-ring: rgb(107 255 143 / 0.18);
   --font-sans: var(--font-mono);
@@ -240,6 +247,7 @@
   --color-accent: #3e7bfa;
   --color-danger: #e63535;
   --color-ok: #2e7d32;
+  --color-changed: #b26a00;
   --color-selection: #3e7bfa;
   --font-sans: "Inter Variable", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --roundness: 1.25;
@@ -275,6 +283,7 @@
   --color-accent: #000080;
   --color-danger: #a00000;
   --color-ok: #006400;
+  --color-changed: #808000;
   --color-selection: #000080;
   --color-button-edge: transparent;
   --color-bar: #000080;

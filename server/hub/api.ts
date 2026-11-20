@@ -127,6 +127,7 @@ function machineFileRoutes({ machines, chats, listChanged }: ApiDeps): Route[] {
       '/api/files/find',
       async ({ url }) => [200, await query(url).runner.remote.findFiles(absolutePath(url.searchParams.get('cwd')), url.searchParams.get('q') ?? '')],
     ],
+    ['GET', '/api/files', async ({ url }) => [200, await query(url).runner.remote.checkoutFiles(absolutePath(url.searchParams.get('cwd')))]],
     [
       'GET',
       '/api/git',
@@ -183,6 +184,12 @@ function machineFileRoutes({ machines, chats, listChanged }: ApiDeps): Route[] {
         const context = Number.isInteger(n) && n >= 0 ? n : 3
         return [200, await query(url).runner.remote.reviewDiff(dir, scope, context, url.searchParams.get('only') || undefined)]
       },
+    ],
+    // Asked often while changes are on screen, to know when to read them again.
+    [
+      'GET',
+      '/api/review/stamp',
+      async ({ url }) => [200, { stamp: await query(url).runner.remote.changesStamp(absolutePath(url.searchParams.get('path'))) }],
     ],
     ...(['push', 'pull'] as const).map(
       (action): Route => [

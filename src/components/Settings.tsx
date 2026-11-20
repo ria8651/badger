@@ -1,10 +1,10 @@
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, type Component } from 'solid-js'
 import { Dynamic } from 'solid-js/web'
-import { Check, CircleCheck, Copy, Ellipsis, Laptop, Loader2, Palette, Pencil, Plus, Server, TriangleAlert, X } from '../icons'
+import { Check, CircleCheck, Copy, Ellipsis, Laptop, Loader2, Palette, Pencil, Plus, Server, SlidersHorizontal, TriangleAlert, X } from '../icons'
 import type { Machine } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { machines } from '../machines.ts'
-import { Appearance } from './Appearance.tsx'
+import { Appearance, Theme } from './Appearance.tsx'
 import { Button, Menu, inputClass, ltr, plural, Dialog, DialogTitle } from './ui.tsx'
 
 interface Section {
@@ -15,7 +15,8 @@ interface Section {
 }
 
 const SECTIONS: Section[] = [
-  { id: 'appearance', label: 'Appearance', icon: Palette, view: Appearance },
+  { id: 'theme', label: 'Theme', icon: Palette, view: Theme },
+  { id: 'appearance', label: 'Appearance', icon: SlidersHorizontal, view: Appearance },
   { id: 'runners', label: 'Runners', icon: Server, view: Runners },
 ]
 

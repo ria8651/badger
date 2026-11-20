@@ -24,6 +24,7 @@ export type View =
   | AttachmentView
   | BtwView
   | DiffView
+  | FilesView
   | FileView
 /**
  * What a port serves, in a frame; id is the port. Path is where the page is:
@@ -45,6 +46,9 @@ export const btwView = (session: string): BtwView => ({ kind: 'btw', session })
 /** The changes in a chat's checkout, to read without Claude explaining them, with a way on to a guided review. */
 export type DiffView = { kind: 'diff'; session: string }
 export const diffView = (session: string): DiffView => ({ kind: 'diff', session })
+/** The files of a chat's checkout as a tree, all of them or only those changed, each opening in a tab of its own. */
+export type FilesView = { kind: 'files'; session: string; mode?: 'all' | 'changes' }
+export const filesView = (session: string, mode?: FilesView['mode']): FilesView => ({ kind: 'files', session, mode })
 /**
  * A file on its chat's machine, by absolute path: all of it, or its changes. `line` is where to go, and opening it
  * again bumps `nav`, which goes there again.
@@ -53,7 +57,7 @@ export type FileView = { kind: 'file'; session: string; path: string; line?: num
 export const viewKey = (v: View) =>
   v.kind === 'task'
     ? `task:${v.session}:${v.id}`
-    : v.kind === 'plan' || v.kind === 'btw' || v.kind === 'diff'
+    : v.kind === 'plan' || v.kind === 'btw' || v.kind === 'diff' || v.kind === 'files'
       ? `${v.kind}:${v.session}`
       : v.kind === 'attachment'
         ? `attachment:${v.session}:${v.prompt}:${v.part}`
@@ -62,7 +66,7 @@ export const viewKey = (v: View) =>
           : `${v.kind}:${v.id}`
 /** The chat a view belongs to, if it only shows beside one. */
 export const sessionOf = (v: View) =>
-  v.kind === 'task' || v.kind === 'plan' || v.kind === 'attachment' || v.kind === 'btw' || v.kind === 'diff' || v.kind === 'file' ? v.session : undefined
+  v.kind === 'task' || v.kind === 'plan' || v.kind === 'attachment' || v.kind === 'btw' || v.kind === 'diff' || v.kind === 'files' || v.kind === 'file' ? v.session : undefined
 
 /**
  * A tab group. One with no tabs is only kept once every panel's closed, out of sight, so the next view
@@ -590,23 +594,58 @@ export async function openTerminal(ws: Ws, session: string, cwd: string, where?:
  * Shows a view that needs nothing started, e.g. a task: where it already is,
  * else in the group last worked in, else in a new panel beside the chat.
  */
-export function openView(ws: Ws, view: View): void {
+export function openView(ws: Ws, view: View, from?: string): void {
   const key = viewKey(view)
   updateLayout(ws, (l) => {
     const at = groupOf(l.tree, key)
-    if (at) return { ...l, tree: setActive(l.tree, key), focus: at.id, hidden: false }
     const session = sessionOf(view) ?? ''
+    const into = !at && from ? pickedInto(l.tree, session, from) : undefined
+    if (from) picked.set(from, key)
+    if (at) return { ...l, tree: setActive(l.tree, key), focus: at.id, hidden: false }
+    if (into) return { ...l, tree: addToGroup(l.tree, into, view), focus: into, hidden: false }
     const placed = place(l.tree, session, view, focused(l, l.tree, session), 'right')
     return { ...l, tree: placed.tree, focus: placed.group, hidden: false }
   })
   setFocusRequest(key)
 }
 
-/** Shows a file beside its chat: the tab it already has, gone to `line` again and in `mode` if given, or a new one. */
-export function openFile(ws: Ws, view: FileView): void {
+/** What was last opened from a view, e.g. a tree of files, by the view's key: the next goes where that is. */
+const picked = new Map<string, string>()
+
+/**
+ * Where something picked in a view (`from`, by key), such as a file in a tree, goes: the panel the last one picked
+ * there is in; else one the chat sees already showing files or a diff; else on top of the view itself. Never a new
+ * split, and never in with terminals or anything else that's only there by chance.
+ */
+function pickedInto(tree: Node, session: string, from: string): string | undefined {
+  const own = groupOf(tree, from)?.id
+  const last = picked.get(from)
+  const lastAt = last && groupOf(tree, last)?.id
+  if (lastAt) return lastAt
+  const files = groupsOf(shownTree(tree, session)).find((g) => g.id !== own && g.views.some((v) => v.kind === 'file' || v.kind === 'diff'))
+  return files?.id ?? own
+}
+
+/**
+ * Shows a file beside its chat: the tab it already has, gone to `line` again and in `mode` if given, or a new one,
+ * where things picked in `from` go if it's opened from a view.
+ */
+export function openFile(ws: Ws, view: FileView, from?: string): void {
   const was = viewsOf(layoutOf(ws).tree).find((v): v is FileView => v.kind === 'file' && viewKey(v) === viewKey(view))
   if (was) updateLayout(ws, (l) => ({ ...l, tree: replaceView(l.tree, { ...was, line: view.line ?? was.line, mode: view.mode ?? was.mode, nav: (was.nav ?? 0) + 1 }) }))
+  openView(ws, view, from)
+}
+
+/** Shows a chat's files, in `mode` if given: the tab they already have, switched to it, or a new one. */
+export function openFiles(ws: Ws, view: FilesView): void {
+  const was = viewsOf(layoutOf(ws).tree).find((v): v is FilesView => v.kind === 'files' && v.session === view.session)
+  if (was && view.mode && was.mode !== view.mode) setFilesMode(ws, was, view.mode)
   openView(ws, view)
+}
+
+/** Switches a chat's files between all of them and only those changed. */
+export function setFilesMode(ws: Ws, view: FilesView, mode: NonNullable<FilesView['mode']>): void {
+  updateLayout(ws, (l) => ({ ...l, tree: replaceView(l.tree, { ...view, mode }) }))
 }
 
 /** Switches a file's tab between all of it, rendered if it's Markdown, and its diff. */

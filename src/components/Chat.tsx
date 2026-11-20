@@ -4,9 +4,10 @@ import { NO_ATTACHMENTS, type DraftAttachments, type PermissionMode, type Queued
 import { chatActions } from '../actions.ts'
 import { api, connected } from '../api.ts'
 import { cardWorktreeName, isScratch, worktreeOf } from '../folders.ts'
-import { diffView, openFile, openTerminal, openView, planView, setFileMode, viewKey, viewShown, wide } from '../layout.ts'
+import { diffView, filesView, openFile, openFiles, openTerminal, openView, planView, setFileMode, setFilesMode, viewKey, viewShown, wide } from '../layout.ts'
 import { OpenFile, expandHome, useOpenFile } from '../fileLinks.ts'
 import { FileView, openingMode } from './FileView.tsx'
+import { Files } from './Files.tsx'
 import { QuoteSelection } from './QuoteSelection.tsx'
 import { anchorOf } from './ReplyComments.tsx'
 import { openSideChat, sideChatsOf, startSideChat } from '../btw.ts'
@@ -327,9 +328,25 @@ export function Chat(props: {
     renderAttachment: (v, onReady) => <AttachmentPane index={index} prompt={v.prompt} part={v.part} onReady={onReady} />,
     btwLive: () => sideChatsOf(props.sessionId).some((s) => s.running),
     renderBtw: (onReady) => <BtwPane parent={props.sessionId} onNew={() => askAside('')} onReady={onReady} />,
-    // As the header's button has it: a review chat's changes are its own page, and a scratch folder has none.
-    hasDiff: () => !isReview() && !!cwd() && !isScratch(cwd()),
+    // As the header's button has it: a review chat's changes are its own page, and a scratch folder, or any outside git, has none.
+    hasDiff: () => !isReview() && !!cwd() && !isScratch(cwd()) && !!git.status(),
     renderDiff: (onReady) => <div class="flex size-full flex-col">{reviewPage(false, { onReady })}</div>,
+    renderFiles: (view, onReady) => (
+      <Files
+        sessionId={props.sessionId}
+        cwd={cwd()}
+        machine={machine()}
+        mode={view().mode ?? 'all'}
+        onMode={(mode) => ws() && setFilesMode(ws()!, view(), mode)}
+        canDiff={panes.hasDiff()}
+        running={state.running}
+        onOpen={(path, diff) =>
+          ws() && openFile(ws()!, { kind: 'file', session: props.sessionId, path, mode: diff ? 'diff' : openingMode(path) }, viewKey(view()))
+        }
+        onFullDiff={isReview() || isScratch(cwd()) ? undefined : () => ws() && openView(ws()!, diffView(props.sessionId), viewKey(view()))}
+        onReady={onReady}
+      />
+    ),
     renderFile: (view, onReady) => (
       <div class="flex size-full flex-col">
         <FileView
@@ -436,10 +453,13 @@ export function Chat(props: {
       ({ sessionId }) => openChat(sessionId),
       (err: Error) => showError("Couldn't start a guided review", err.message),
     )
-  /** The checkout's changes in a panel beside the chat, to read without Claude; a guided review is a step on from there. */
+  /**
+   * The checkout's changed files in a panel beside the chat, each opening its diff, with all of them on one page a
+   * click on; a guided review is a step on from there.
+   */
   const openDiff = () => {
     const w = beside()
-    if (w) openView(w, diffView(props.sessionId))
+    if (w) openFiles(w, filesView(props.sessionId, 'changes'))
     else startReview()
   }
   /** This chat's changes: its own page if it's a review chat, else its diff, whose comments and questions come here. */
