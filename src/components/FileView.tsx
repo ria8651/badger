@@ -118,12 +118,14 @@ export function FileView(props: {
     () => !image() && { path: props.path, machine: props.machine, v: version() },
     ({ path, machine }) => readText(path, machine).catch((e: Error) => ({ error: e.message })),
   )
-  // The checkout's changes, as everything showing them shares them: read again when a turn ends or a base is picked.
+  // The checkout's changes, as everything showing them shares them, kept up to date as they change (see useChanges).
   const changes = useChanges(
     () => ({ cwd: props.cwd, machine: props.machine }),
     () => props.running,
   )
   const diff = changes.diff
+  // The file's read again with them, so its text and the lines marked changed in it are from the same moment.
+  createEffect(on(diff, reload, { defer: true }))
   const changed = createMemo(() => changesIn(diff(), props.path))
   const relative = () => {
     const root = diff()?.root

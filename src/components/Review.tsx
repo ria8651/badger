@@ -733,64 +733,66 @@ export function ReviewPage(props: {
 
       <div class="flex min-h-0 flex-1">
         {/* A guided review's groups, where there's room; a chat's diff has the files' tree to get around it by instead. */}
-        <nav class={`hidden w-72 shrink-0 overflow-y-auto border-r border-line py-2 ${props.guided ? '@6xl:block' : ''}`}>
-          <For each={sections()}>
-            {(s) => {
-              const done = () => s.hunks.filter((p) => isViewed(p.hunk.id)).length
-              return (
-                <div>
-                  <div class={`flex items-center ${current() === s.id ? 'bg-surface' : 'hover:bg-surface/60'}`}>
-                    <button
-                      onClick={() => setUnfolded((u) => ({ ...u, [s.id]: !isUnfolded(s.id) }))}
-                      title={isUnfolded(s.id) ? 'Fold' : 'Show its hunks'}
-                      class="grid h-6 w-6 shrink-0 place-items-center pl-1 text-fg-3 hover:text-fg-2"
-                    >
-                      {isUnfolded(s.id) ? <ChevronDown class="size-3" /> : <ChevronRight class="size-3" />}
-                    </button>
-                    <button onClick={() => jumpTo(sectionEls.get(s.id))} title={s.title} class="flex min-w-0 flex-1 items-center gap-2 py-1 pr-3 text-left text-xs">
-                      <AttentionDot attention={s.attention} />
-                      <span class={`min-w-0 flex-1 truncate ${current() === s.id ? 'text-fg' : done() === s.hunks.length ? 'text-fg-3' : 'text-fg-2'}`}>{s.title}</span>
-                      <Show when={done() === s.hunks.length} fallback={<span class="shrink-0 text-fg-3 tabular-nums">{done()}/{s.hunks.length}</span>}>
-                        <Check class="size-3 shrink-0 text-ok" />
-                      </Show>
-                    </button>
-                  </div>
-                  <Show when={isUnfolded(s.id)}>
-                    <For each={outlineRows(s.hunks)}>
-                      {(row) => {
-                        const ids = row.kind === 'folder' ? [] : row.hunks.map((p) => p.hunk.id)
-                        const here = () => ids.includes(currentHunk() ?? '')
-                        const done = () => ids.length > 0 && ids.every(isViewed)
-                        const indent = { 'padding-left': `${1.75 + row.depth * 0.75}rem` }
-                        if (row.kind === 'folder')
+        <Show when={props.guided}>
+          <nav class="hidden w-72 shrink-0 overflow-y-auto border-r border-line py-2 @6xl:block">
+            <For each={sections()}>
+              {(s) => {
+                const done = () => s.hunks.filter((p) => isViewed(p.hunk.id)).length
+                return (
+                  <div>
+                    <div class={`flex items-center ${current() === s.id ? 'bg-surface' : 'hover:bg-surface/60'}`}>
+                      <button
+                        onClick={() => setUnfolded((u) => ({ ...u, [s.id]: !isUnfolded(s.id) }))}
+                        title={isUnfolded(s.id) ? 'Fold' : 'Show its hunks'}
+                        class="grid h-6 w-6 shrink-0 place-items-center pl-1 text-fg-3 hover:text-fg-2"
+                      >
+                        {isUnfolded(s.id) ? <ChevronDown class="size-3" /> : <ChevronRight class="size-3" />}
+                      </button>
+                      <button onClick={() => jumpTo(sectionEls.get(s.id))} title={s.title} class="flex min-w-0 flex-1 items-center gap-2 py-1 pr-3 text-left text-xs">
+                        <AttentionDot attention={s.attention} />
+                        <span class={`min-w-0 flex-1 truncate ${current() === s.id ? 'text-fg' : done() === s.hunks.length ? 'text-fg-3' : 'text-fg-2'}`}>{s.title}</span>
+                        <Show when={done() === s.hunks.length} fallback={<span class="shrink-0 text-fg-3 tabular-nums">{done()}/{s.hunks.length}</span>}>
+                          <Check class="size-3 shrink-0 text-ok" />
+                        </Show>
+                      </button>
+                    </div>
+                    <Show when={isUnfolded(s.id)}>
+                      <For each={outlineRows(s.hunks)}>
+                        {(row) => {
+                          const ids = row.kind === 'folder' ? [] : row.hunks.map((p) => p.hunk.id)
+                          const here = () => ids.includes(currentHunk() ?? '')
+                          const done = () => ids.length > 0 && ids.every(isViewed)
+                          const indent = { 'padding-left': `${1.75 + row.depth * 0.75}rem` }
+                          if (row.kind === 'folder')
+                            return (
+                              <div style={indent} title={row.path} class="truncate py-0.5 pr-3 font-mono text-xs text-fg-3">
+                                {row.name}/
+                              </div>
+                            )
                           return (
-                            <div style={indent} title={row.path} class="truncate py-0.5 pr-3 font-mono text-xs text-fg-3">
-                              {row.name}/
-                            </div>
+                            <button
+                              ref={(el) => createEffect(() => here() && el.scrollIntoView({ block: 'nearest' }))}
+                              onClick={() => jumpTo(hunkEls.get(row.hunks[0].hunk.id))}
+                              title={row.path}
+                              style={indent}
+                              class={`flex w-full items-center gap-2 py-0.5 pr-3 text-left font-mono text-xs ${here() ? 'bg-surface text-fg' : done() ? 'text-fg-3 hover:bg-surface/60' : 'text-fg-2 hover:bg-surface/60'}`}
+                            >
+                              <span class={`h-3.5 w-0.5 shrink-0 rounded-full ${here() ? 'bg-primary' : 'bg-line'}`} />
+                              <span class="min-w-0 flex-1 truncate">{row.name}</span>
+                              <Show when={done()}>
+                                <Check class="size-3 shrink-0 text-ok" />
+                              </Show>
+                            </button>
                           )
-                        return (
-                          <button
-                            ref={(el) => createEffect(() => here() && el.scrollIntoView({ block: 'nearest' }))}
-                            onClick={() => jumpTo(hunkEls.get(row.hunks[0].hunk.id))}
-                            title={row.path}
-                            style={indent}
-                            class={`flex w-full items-center gap-2 py-0.5 pr-3 text-left font-mono text-xs ${here() ? 'bg-surface text-fg' : done() ? 'text-fg-3 hover:bg-surface/60' : 'text-fg-2 hover:bg-surface/60'}`}
-                          >
-                            <span class={`h-3.5 w-0.5 shrink-0 rounded-full ${here() ? 'bg-primary' : 'bg-line'}`} />
-                            <span class="min-w-0 flex-1 truncate">{row.name}</span>
-                            <Show when={done()}>
-                              <Check class="size-3 shrink-0 text-ok" />
-                            </Show>
-                          </button>
-                        )
-                      }}
-                    </For>
-                  </Show>
-                </div>
-              )
-            }}
-          </For>
-        </nav>
+                        }}
+                      </For>
+                    </Show>
+                  </div>
+                )
+              }}
+            </For>
+          </nav>
+        </Show>
 
         {/* The diff, with what goes back to Claude under it; the outline beside them runs the full height. Its own
             layer, so its sticky headers stay under the bar's shadow above. */}

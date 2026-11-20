@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createResource, createSignal, on, onMount, untrack } from 'solid-js'
+import { For, Show, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack } from 'solid-js'
 import { Dynamic } from 'solid-js/web'
 import { ChevronDown, ChevronRight, FileDiff, Folder, FolderOpen } from '../icons'
 import type { ReviewFile } from '../../shared/protocol.ts'
@@ -28,7 +28,7 @@ interface Dir {
   files: string[]
 }
 
-type Row = { kind: 'dir'; name: string; path: string; depth: number } | { kind: 'file'; name: string; path: string; depth: number }
+type Row = { kind: 'dir' | 'file'; name: string; path: string; depth: number }
 
 /** Paths, relative to the checkout's top, as folders of folders and files. */
 function treeOf(paths: string[]): Dir {
@@ -50,10 +50,9 @@ function treeOf(paths: string[]): Dir {
 const nameOf = (path: string) => path.slice(path.lastIndexOf('/') + 1)
 const byName = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
 
-/**
- * What's shown: folders first, then files, by name. A folder with only one folder in it shares its row, as a/b, and
- * opens with it. Under a closed folder nothing shows; with `all`, every folder's open, as when filtering.
- */
+/** A row as it's drawn: the same key, the same row, so it's not drawn again. */
+const rowKey = (r: Row) => `${r.kind}\0${r.path}\0${r.depth}\0${r.name}`
+
 /**
  * What's shown: folders first, then files, by name. A folder with only one folder in it shares its row, as a/b, and
  * opens with it. Under a closed folder nothing shows; with `all`, every folder's open, as when filtering. A row that's
@@ -62,8 +61,7 @@ const byName = (a: string, b: string) => a.localeCompare(b, undefined, { numeric
 function rowsOf(root: Dir, isOpen: (path: string) => boolean, all: boolean, was: Map<string, Row>): Row[] {
   const rows: Row[] = []
   const keep = (r: Row) => {
-    const key = `${r.kind}\0${r.path}\0${r.depth}\0${r.name}`
-    rows.push(was.get(key) ?? r)
+    rows.push(was.get(rowKey(r)) ?? r)
   }
   const walk = (dir: Dir, depth: number) => {
     for (const d of [...dir.dirs.values()].sort((a, b) => byName(a.name, b.name))) {
@@ -115,7 +113,7 @@ export function Files(props: {
   machine: string
   mode: FilesMode
   onMode: (mode: FilesMode) => void
-  /** There are changes to show: not in a folder outside git, nor in a guided review's chat, whose changes are its page. */
+  /** There are changes to show: not outside git or in the scratch folder, nor in a guided review's chat, whose changes are its page. */
   canDiff: boolean
   /** Read again when a turn ends, since that's when files change. */
   running: boolean
@@ -185,7 +183,7 @@ export function Files(props: {
 
   const folds = useFolds(untrack(() => props.sessionId), mode)
   const allRows = createMemo<Row[]>((was) => {
-    const known = new Map((was ?? []).map((r) => [`${r.kind}\0${r.path}\0${r.depth}\0${r.name}`, r]))
+    const known = new Map((was ?? []).map((r) => [rowKey(r), r]))
     return rowsOf(tree(), folds.isOpen, !!filter().trim(), known)
   })
   const rows = createMemo(() => allRows().slice(0, MAX_ROWS))
@@ -209,6 +207,8 @@ export function Files(props: {
     if (root()) props.onOpen(`${root()}/${r.path}`, mode() === 'changes' || f?.status === 'deleted')
   }
   const onKey = (e: KeyboardEvent) => {
+    // Only keys pressed on the list itself: one on a row's tick box is that box's.
+    if (e.target !== e.currentTarget) return
     const r = rows()[at()]
     if (e.key === 'ArrowDown') moveTo(at() + 1)
     else if (e.key === 'ArrowUp') moveTo(at() - 1)
@@ -239,10 +239,10 @@ export function Files(props: {
   }
   onMount(() => props.onReady?.(() => list.focus({ preventScroll: true })))
 
-  const totals = () => {
+  const totals = createMemo(() => {
     const files = diff()?.files ?? []
     return { files: files.length, added: files.reduce((n, f) => n + f.added, 0), removed: files.reduce((n, f) => n + f.removed, 0), viewed: files.filter(isViewed).length }
-  }
+  })
 
   return (
     <div class="@container flex size-full min-h-0 flex-col text-ui">
@@ -371,7 +371,7 @@ export function Files(props: {
               const done = () => under().filter(isViewed).length
               return (
                 <div
-                  ref={(el) => rowEls.set(r.path, el)}
+                  ref={(el) => (rowEls.set(r.path, el), onCleanup(() => rowEls.get(r.path) === el && rowEls.delete(r.path)))}
                   role="treeitem"
                   aria-expanded={isOpen()}
                   title={r.path}
@@ -413,7 +413,7 @@ export function Files(props: {
             const done = () => !!f() && isViewed(f()!)
             return (
               <div
-                ref={(el) => rowEls.set(r.path, el)}
+                ref={(el) => (rowEls.set(r.path, el), onCleanup(() => rowEls.get(r.path) === el && rowEls.delete(r.path)))}
                 role="treeitem"
                 title={f()?.oldPath ? `${f()!.oldPath} → ${r.path}` : r.path}
                 style={indent}

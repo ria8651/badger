@@ -155,30 +155,62 @@ function parsePatch(out: string, maxLines = FILE_LINES): ReviewFile[] {
   return files
 }
 
+/** How long a checkout's base, as worked out, serves its stamps: working it out takes several git commands. */
+const BASE_MS = 10_000
+/** How long one stamp serves everyone asking for the same checkout's, e.g. several browser tabs polling it. */
+const STAMP_MS = 1000
+/** The most changed files whose size and time go into a stamp: past that, a further edit to one already changed is missed. */
+const STAMP_FILES = 2000
+
+const bases = new Map<string, { at: number; base: ReturnType<typeof baseOf> }>()
+const stamps = new Map<string, { at: number; stamp: Promise<string> }>()
+
+/** A checkout's base, worked out at most every BASE_MS. Picking a base reads the changes anyway, not by the stamp. */
+function recentBase(path: string) {
+  const now = Date.now()
+  const hit = bases.get(path)
+  if (hit && now - hit.at < BASE_MS) return hit.base
+  const base = baseOf(path).catch(() => undefined)
+  bases.set(path, { at: now, base })
+  return base
+}
+
 /**
  * A short stamp of what a checkout's changes are made of, which changes whenever they might: where HEAD and the base
  * are, which files git sees as changed or new, and each of those files' size and time, since editing one that's
  * already changed doesn't change what git lists. Cheap, so it can be asked often, to know when to read the changes again.
  */
-export async function changesStamp(path: string): Promise<string> {
+export function changesStamp(path: string): Promise<string> {
+  const now = Date.now()
+  for (const [k, s] of stamps) if (now - s.at > STAMP_MS) stamps.delete(k)
+  const hit = stamps.get(path)
+  if (hit) return hit.stamp
+  const stamp = readStamp(path)
+  stamps.set(path, { at: now, stamp })
+  stamp.catch(() => stamps.delete(path))
+  return stamp
+}
+
+async function readStamp(path: string): Promise<string> {
   const [head, base, status, top] = await Promise.all([
     git(path, 'rev-parse', '-q', '--verify', 'HEAD').catch(() => ''),
-    baseOf(path).catch(() => undefined),
+    recentBase(path),
     // Without taking git's lock on the index, which would make a commit made meanwhile fail.
     run('git', ['--no-optional-locks', 'status', '--porcelain', '-z', '--untracked-files=all'], { cwd: path, maxBuffer: 64 * 1024 * 1024 }).then((r) => r.stdout),
     git(path, 'rev-parse', '--show-toplevel'),
   ])
   const hash = createHash('sha1').update(`${head}\0${base?.branch ?? ''}\0${base?.sha ?? ''}\0${status}\0`)
-  // Each entry is its two letters, a space and its path; a rename or copy is followed by where it was.
+  // Each entry is its two letters, a space and its path. One renamed or copied, by what's staged or by what isn't (as
+  // when it was added with --intent-to-add), is followed by where it was.
   const parts = status.split('\0')
   const paths: string[] = []
   for (let i = 0; i < parts.length; i++) {
     const entry = parts[i]
     if (entry.length < 4) continue
     paths.push(entry.slice(3))
-    if (entry[0] === 'R' || entry[0] === 'C') i++
+    if ('RC'.includes(entry[0]) || 'RC'.includes(entry[1])) i++
   }
-  const stats = await Promise.all(paths.map((p) => stat(join(top, p)).catch(() => undefined)))
+  const stats = await Promise.all(paths.slice(0, STAMP_FILES).map((p) => stat(join(top, p)).catch(() => undefined)))
   for (const s of stats) hash.update(s ? `${s.size}:${s.mtimeMs}\0` : '-\0')
   return hash.digest('hex').slice(0, 16)
 }

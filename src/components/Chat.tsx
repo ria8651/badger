@@ -319,8 +319,8 @@ export function Chat(props: {
     renderAttachment: (v, onReady) => <AttachmentPane index={index} prompt={v.prompt} part={v.part} onReady={onReady} />,
     btwLive: () => sideChatsOf(props.sessionId).some((s) => s.running),
     renderBtw: (onReady) => <BtwPane parent={props.sessionId} onNew={() => askAside('')} onReady={onReady} />,
-    // As the header's button has it: a review chat's changes are its own page, and a scratch folder has none.
-    hasDiff: () => !isReview() && !!cwd() && !isScratch(cwd()),
+    // As the header's button has it: a review chat's changes are its own page, and a scratch folder, or any outside git, has none.
+    hasDiff: () => !isReview() && !!cwd() && !isScratch(cwd()) && !!git.status(),
     renderDiff: (onReady) => <div class="flex size-full flex-col">{reviewPage(false, { onReady })}</div>,
     renderFiles: (view, onReady) => (
       <Files

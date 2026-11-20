@@ -1,6 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, dirname, join, relative } from 'node:path'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import type { SlashCommand } from '@anthropic-ai/claude-agent-sdk'
 import type { CheckoutFiles, CommandInfo, CommandSource } from '../shared/protocol.ts'
 import { oneOff } from './claudeProbe.ts'
@@ -139,11 +139,13 @@ async function projectFiles(cwd: string, limit = MAX_FILES): Promise<string[]> {
 
 /** Every file in the checkout `cwd` is in, from its top, for browsing it: read afresh each time, since it's asked for when files change. */
 export async function checkoutFiles(cwd: string): Promise<CheckoutFiles> {
-  const top = await run('git', ['rev-parse', '--show-toplevel'], { cwd }).then(
-    (r) => r.stdout.trim(),
-    () => '',
+  // Its top as the folder was given rather than git's own path to it, which follows symlinks, as the diff has it: files
+  // are opened by the former, and the two have to match for a file's changes to be found.
+  const up = await run('git', ['rev-parse', '--show-cdup'], { cwd }).then(
+    (r) => r.stdout.trim() || '.',
+    () => undefined,
   )
-  const root = top || cwd
+  const root = up ? resolve(cwd, up) : cwd
   const files = await projectFiles(root, MAX_FILES + 1)
   return { root, files: files.slice(0, MAX_FILES), truncated: files.length > MAX_FILES }
 }
