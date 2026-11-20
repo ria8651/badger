@@ -16,6 +16,7 @@ import { showError } from './Popover.tsx'
 import { Menu, plural, type MenuItem } from './ui.tsx'
 import { Link } from '../router.tsx'
 import { cardOf } from '../stores/cards.ts'
+import { UPDATING, gitState } from '../folderState.ts'
 
 /**
  * A checkout's git status, kept current: read as soon as it's shown and again
@@ -24,8 +25,14 @@ import { cardOf } from '../stores/cards.ts'
  * While `paused`, e.g. with the machine offline for a moment, what was read last stays.
  */
 export function createGitStatus(target: () => { dir: string; machine: string } | undefined, paused: () => boolean = () => false) {
-  const [status, setStatus] = createSignal<GitStatus>()
+  // What was read last for this folder, here or anywhere else, shows while it's read again.
+  const status = () => {
+    const t = target()
+    return (t && gitState.get(t.machine, t.dir)) ?? undefined
+  }
   const [fetching, setFetching] = createSignal(false)
+  /** Not read yet since it was shown here: what shows, if anything, is from before. */
+  const [updating, setUpdating] = createSignal(false)
   const key = (t?: { dir: string; machine: string }) => (t ? `${t.machine}:${t.dir}` : undefined)
   const refresh = async (fetch = false) => {
     const t = target()
@@ -34,14 +41,15 @@ export function createGitStatus(target: () => { dir: string; machine: string } |
     // One that fails, e.g. while git is busy mid-commit, leaves what's shown rather than blanking it.
     const next = await api.git(t.dir, t.machine, fetch).catch(() => false as const)
     if (fetch) setFetching(false)
-    // Dropped if the chat moved, e.g. into a worktree, while it was on its way.
-    if (next !== false && key(target()) === key(t)) setStatus(next ?? undefined)
+    // Kept for its own folder even if the chat moved, e.g. into a worktree, while it was on its way.
+    if (next !== false) gitState.set(t.machine, t.dir, next)
+    if (key(target()) === key(t)) setUpdating(false)
   }
-  // Cleared only for somewhere else, or nowhere; read again on coming back from a pause.
+  // Read again for somewhere else, and on coming back from a pause.
   let shown: string | undefined
   createEffect(
     on([() => key(target()), paused], ([k, p]) => {
-      if (k !== shown) setStatus(undefined)
+      if (k !== shown) setUpdating(!!k)
       shown = k
       if (k && !p) void refresh().then(() => refresh(true))
     }),
@@ -55,7 +63,12 @@ export function createGitStatus(target: () => { dir: string; machine: string } |
     document.removeEventListener('visibilitychange', onVisible)
     clearInterval(timer)
   })
-  return { status, fetching, refresh }
+  /** Being read with nothing from before, not even that it's outside git. */
+  const firstRead = () => {
+    const t = target()
+    return updating() && !!t && gitState.get(t.machine, t.dir) === undefined
+  }
+  return { status, fetching, updating, firstRead, refresh }
 }
 
 /** e.g. "+126 −38 in 4 files". */
@@ -78,6 +91,10 @@ export function ChatHeader(props: {
   ws?: Ws
   git?: GitStatus
   fetching: boolean
+  /** `git` is from before, and being read again. */
+  updating?: boolean
+  /** Nothing's known yet about how it stands in git, and it's being read. */
+  firstRead?: boolean
   onRefresh: (fetch: boolean) => Promise<void>
   actions: ChatAction[]
   /** Sends a prompt to the chat. Absent before it's started, so the header only does what needs no chat. */
@@ -248,6 +265,10 @@ export function ChatHeader(props: {
       </Show>
       {/* With a branch beside it, the next to go. */}
       <span title={props.cwd} class={`shrink-0 text-fg-2 ${props.git ? 'hidden @2xl:block' : ''}`}>{folder()}</span>
+      {/* Where its branch goes, while it's read for the first time. */}
+      <Show when={props.firstRead}>
+        <span class="h-2 w-16 shrink-0 animate-pulse rounded-full bg-fg-3/15" />
+      </Show>
       <Show when={props.git}>
         {(g) => (
           <>
@@ -260,7 +281,7 @@ export function ChatHeader(props: {
                 header={() => <GitDetail git={g()} path={props.cwd} class="mb-1 border-b border-line px-2.5 pt-2 pb-3" />}
                 class="w-80"
                 triggerClass={(open) => `${button} max-w-full min-w-0 gap-2 ${open ? 'bg-surface' : ''}`}
-                trigger={() => <GitSummary git={g()} branch hide={primary() === 'push' ? 'ahead' : primary() === 'pull' ? 'behind' : undefined} />}
+                trigger={() => <GitSummary git={g()} branch class={props.updating ? UPDATING : ''} hide={primary() === 'push' ? 'ahead' : primary() === 'pull' ? 'behind' : undefined} />}
               />
             </div>
             {/* Opened from the git menu's Base and Switch branch items, where the menu was, and back to its button when closed. */}

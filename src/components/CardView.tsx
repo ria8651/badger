@@ -16,6 +16,7 @@ import { attention } from '../attention.ts'
 import { cardOf, cards, deleteCard, linkSession, projectOf, unlinkSession, updateCard } from '../stores/cards.ts'
 import { sessions } from '../stores/sessions.ts'
 import { removalNotes, updateCardTidying } from '../worktreeCleanup.ts'
+import { UPDATING, worktreeState } from '../folderState.ts'
 
 const STATUS_OPTIONS = CARD_STATUSES.map((value) => ({ value, label: STATUS_LABELS[value] }))
 
@@ -302,17 +303,26 @@ export function CardView(props: {
 /** One worktree's branch and what's not merged yet, with a way to remove it once the work is in. */
 function WorktreeRow(props: { path: string; machine: string }) {
   // Refetched whenever the chat list changes, which is roughly whenever work happened.
-  const [status, { refetch }] = createResource(
+  const [read, { refetch }] = createResource(
     () => [props.path, props.machine, sessions()] as const,
-    ([path, machine]) => api.worktree(path, machine),
+    ([path, machine]) =>
+      api.worktree(path, machine).then((s) => {
+        worktreeState.set(machine, path, s)
+        return s
+      }),
   )
+  // As it was last read, here or on another card, while it's read again.
+  const status = () => worktreeState.get(props.machine, props.path)
+  /** Not read yet since this row showed: rereads after, on every change to the chat list, would make it flicker. */
+  const updating = () => read.loading && read.latest === undefined && !read.error
   const [error, setError] = createSignal<string>()
   // Stays on once it's gone: the row goes when its chats are marked gone.
   const [deleting, setDeleting] = createSignal(false)
   const summary = () => {
     if (deleting()) return 'Removing…'
+    if (read.error) return 'Unavailable'
     const s = status()
-    if (!s) return status.error ? 'Unavailable' : ''
+    if (!s) return ''
     const parts = [
       s.changes && `${s.changes} uncommitted ${s.changes === 1 ? 'change' : 'changes'}`,
       s.unmerged && `${s.unmerged} ${s.unmerged === 1 ? 'commit' : 'commits'} not on ${s.base || 'HEAD'}`,
@@ -339,7 +349,12 @@ function WorktreeRow(props: { path: string; machine: string }) {
           {status()?.branch || folderLabel(props.path)}
         </span>
         <Show when={onMachine(props.machine)}>{(name) => <MachineName machine={props.machine} name={name()} class="text-meta text-fg-3" />}</Show>
-        <span class="ml-auto shrink-0 text-meta text-fg-3">{summary()}</span>
+        <Show
+          when={summary() || !updating()}
+          fallback={<span class="ml-auto h-2 w-24 shrink-0 animate-pulse rounded-full bg-fg-3/15" />}
+        >
+          <span class={`ml-auto shrink-0 text-meta text-fg-3 ${updating() && !deleting() ? UPDATING : ''}`}>{summary()}</span>
+        </Show>
         <Show
           when={!deleting()}
           fallback={

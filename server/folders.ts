@@ -37,6 +37,7 @@ async function checkout(path: string, branch: string, main: boolean, repo: Repo)
     path,
     main,
     git: git ?? { branch, changes: 0, added: 0, removed: 0, ahead: 0, behind: 0 },
+    ...(git ? {} : { unread: true as const }),
     unpushed: remotes ? Number(unpushed ?? 0) : null,
     committedAt: committed,
   }

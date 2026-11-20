@@ -334,6 +334,8 @@ export interface Checkout {
   main: boolean
   /** As the chat header shows it, without fetching first. */
   git: GitStatus
+  /** Git couldn't be read, e.g. mid-commit: `git` is only its branch, with nothing counted. */
+  unread?: true
   /** Commits on HEAD that no remote has, upstream or not. Null when the repo has no remotes. */
   unpushed: number | null
   /** The last commit, ms since epoch; 0 before the first. */

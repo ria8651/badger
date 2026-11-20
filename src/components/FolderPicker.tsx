@@ -9,6 +9,7 @@ import { GitSummaryButton } from './GitSummary.tsx'
 import { confirmBy, showError } from './Popover.tsx'
 import { ltr, plural } from './ui.tsx'
 import { removalNotes } from '../worktreeCleanup.ts'
+import { UPDATING, gitState, sizeState } from '../folderState.ts'
 
 /** How many folders show before "Show more": the most recently used. */
 const FOLDERS_SHOWN = 4
@@ -40,6 +41,8 @@ export function FolderPicker(props: {
       api.folders(machine).then(
         (list) => {
           lastListed.set(machine, list)
+          // So a chat opened in one of them shows how it stands straight away.
+          for (const f of list) for (const c of f.checkouts ?? []) if (!c.unread) gitState.set(machine, c.path, c.git)
           return { machine, list, error: undefined }
         },
         (e: Error) => ({ machine, list: [] as Folder[], error: e.message }),
@@ -52,6 +55,8 @@ export function FolderPicker(props: {
   }
   /** What's shown is the last list, from before this picker opened, while it's listed again: its git status may be out of date for a moment. */
   const updating = () => folders.latest?.machine !== props.machine && lastListed.has(props.machine)
+  /** As last read here or anywhere else, e.g. by a chat's header, which fetches first. */
+  const gitOf = (c: Checkout) => gitState.get(props.machine, c.path) ?? c.git
   const listed = () => current()?.list ?? []
   const listError = () => current()?.error
   const [all, setAll] = createSignal(false)
@@ -210,7 +215,7 @@ export function FolderPicker(props: {
                                 <Show when={updating()}>
                                   <Loader2 class="size-3 animate-spin text-fg-3" aria-hidden="true" data-updating />
                                 </Show>
-                                <GitSummaryButton git={c.git} path={c.path} branch class={`text-meta ${updating() ? 'animate-pulse' : ''}`} />
+                                <GitSummaryButton git={gitOf(c)} path={c.path} branch class={`text-meta ${updating() ? UPDATING : ''}`} />
                               </span>
                             </div>
                             <Size path={c.path} machine={props.machine} />
@@ -232,7 +237,7 @@ export function FolderPicker(props: {
                               </Show>
                             </span>
                             <Show when={!isDeleting(c.path)} fallback={<span class="shrink-0 text-meta text-fg-3">Deleting…</span>}>
-                              <GitSummaryButton git={c.git} path={c.path} class={`shrink-0 text-meta ${updating() ? 'animate-pulse' : ''}`} />
+                              <GitSummaryButton git={gitOf(c)} path={c.path} class={`shrink-0 text-meta ${updating() ? UPDATING : ''}`} />
                             </Show>
                           </div>
                           <Size path={c.path} machine={props.machine} />
@@ -372,13 +377,24 @@ function FolderName(props: { folder: Folder; onHide: (button: Element) => void }
   )
 }
 
-/** Space on disk, looked up when shown since it can take a moment. */
+/** Space on disk, looked up when shown since it can take a moment: what it was last time shows meanwhile. */
 function Size(props: { path: string; machine: string }) {
-  const [size] = createResource(() => props.path, (path) => api.folderSize(path, props.machine).then((s) => s.bytes))
+  const [size] = createResource(
+    () => [props.path, props.machine] as const,
+    ([path, machine]) =>
+      api.folderSize(path, machine).then((s) => {
+        sizeState.set(machine, path, s.bytes)
+        return s.bytes
+      }),
+  )
+  const shown = () => sizeState.get(props.machine, props.path)
   return (
-    <span class="w-14 shrink-0 text-right text-meta text-fg-3 tabular-nums" title="Space on disk">
-      <Show when={size.latest !== undefined} fallback={<span class="ml-auto block h-2 w-8 animate-pulse rounded-full bg-fg-3/15" />}>
-        {formatBytes(size.latest!)}
+    <span class={`w-14 shrink-0 text-right text-meta text-fg-3 tabular-nums ${size.loading && shown() !== undefined ? UPDATING : ''}`} title="Space on disk">
+      <Show
+        when={shown() !== undefined}
+        fallback={size.error ? '—' : <span class="ml-auto block h-2 w-8 animate-pulse rounded-full bg-fg-3/15" />}
+      >
+        {formatBytes(shown()!)}
       </Show>
     </span>
   )

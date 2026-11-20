@@ -532,6 +532,8 @@ export function Chat(props: {
           ws={ws()}
           git={git.status()}
           fetching={git.fetching()}
+          updating={git.updating()}
+          firstRead={git.firstRead()}
           onRefresh={git.refresh}
           actions={actions()}
           onDiff={isReview() || !cwd() || isScratch(cwd()) ? undefined : openDiff}
