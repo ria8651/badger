@@ -1,11 +1,12 @@
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, type Component } from 'solid-js'
+import { For, Index, Show, createEffect, createMemo, createSignal, on, onCleanup, type Component } from 'solid-js'
 import { Dynamic } from 'solid-js/web'
-import { Check, CircleCheck, Copy, Ellipsis, Laptop, Loader2, Palette, Pencil, Plus, Server, SlidersHorizontal, TriangleAlert, X } from '../icons'
-import type { Machine } from '../../shared/protocol.ts'
+import { Check, CircleCheck, Copy, Ellipsis, GripVertical, Laptop, Loader2, Palette, Pencil, Plus, Server, SlidersHorizontal, Trash2, TriangleAlert, X, Zap } from '../icons'
+import type { Machine, QuickAction } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
+import { quickActions, saveQuickActions } from '../actions.ts'
 import { machines } from '../machines.ts'
 import { Appearance, Theme } from './Appearance.tsx'
-import { Button, Menu, inputClass, ltr, plural, Dialog, DialogTitle } from './ui.tsx'
+import { Button, Menu, inputClass, ltr, noteClass, plural, Dialog, DialogTitle } from './ui.tsx'
 
 interface Section {
   id: string
@@ -17,12 +18,19 @@ interface Section {
 const SECTIONS: Section[] = [
   { id: 'theme', label: 'Theme', icon: Palette, view: Theme },
   { id: 'appearance', label: 'Appearance', icon: SlidersHorizontal, view: Appearance },
+  { id: 'quick-actions', label: 'Quick actions', icon: Zap, view: QuickActions },
   { id: 'runners', label: 'Runners', icon: Server, view: Runners },
 ]
 
+/** The section Settings is open at, if it's open. App shows it. */
+const [openAt, setOpenAt] = createSignal<string>()
+export const settingsOpen = openAt
+export const openSettings = (section = SECTIONS[0].id) => setOpenAt(section)
+export const closeSettings = () => setOpenAt()
+
 /** Badger's settings in a modal: sections listed on the left, or across the top on narrow screens. */
-export function Settings(props: { onClose: () => void }) {
-  const [section, setSection] = createSignal(SECTIONS[0].id)
+export function Settings(props: { onClose: () => void; section?: string }) {
+  const [section, setSection] = createSignal(props.section ?? SECTIONS[0].id)
   const current = () => SECTIONS.find((s) => s.id === section()) ?? SECTIONS[0]
 
   return (
@@ -51,6 +59,229 @@ export function Settings(props: { onClose: () => void }) {
         </div>
       </div>
     </Dialog>
+  )
+}
+
+/** The prompts in the composer's quick actions menu: edited in place, dragged into order, removed and added. */
+function QuickActions() {
+  const [error, setError] = createSignal<string>()
+  const [draft, setDraft] = createSignal<QuickAction>()
+
+  const [adding, setAdding] = createSignal(false)
+
+  /** Says whether it saved; if not, the error says why. */
+  const save = (actions: QuickAction[]) => {
+    setError()
+    return saveQuickActions(actions).then(
+      () => true,
+      (e: Error) => (setError(`Couldn’t save quick actions: ${e.message}`), false),
+    )
+  }
+  const edit = (i: number, field: keyof QuickAction, el: HTMLInputElement | HTMLTextAreaElement) => {
+    const list = quickActions()
+    if (!list[i]) return
+    const value = el.value.trim()
+    // Emptied, it goes back to what it was: removing it is the bin's job.
+    if (!value) el.value = list[i][field]
+    if (!value || value === list[i][field]) return
+    void save(list.map((a, j) => (j === i ? { ...a, [field]: value } : a)))
+  }
+  // Fields save on change, which closing Settings with one focused, e.g. with Escape, never fires.
+  let focused: { i: number; field: keyof QuickAction; el: HTMLInputElement | HTMLTextAreaElement } | undefined
+  onCleanup(() => focused && edit(focused.i, focused.field, focused.el))
+  const field = (i: number, name: keyof QuickAction) => ({
+    onFocus: (e: FocusEvent) => (focused = { i, field: name, el: e.currentTarget as HTMLInputElement }),
+    onBlur: () => (focused = undefined),
+    onChange: (e: Event) => edit(i, name, e.currentTarget as HTMLInputElement),
+  })
+  /**
+   * The row picked up by its handle: how far it's been carried, where it would land among the others, and the line
+   * that shows where, in px from the top of the list. The other rows stay put until it's let go.
+   */
+  const [drag, setDrag] = createSignal<{ from: number; to: number; dy: number; hole: { top: number; height: number }; line?: number }>()
+  const moved = (list: QuickAction[], from: number, to: number) => {
+    const out = [...list]
+    out.splice(to, 0, ...out.splice(from, 1))
+    return out
+  }
+  const rows: HTMLDivElement[] = []
+  // With pointer events rather than HTML drag and drop, which touch screens don't do.
+  const startDrag = (from: number, e: PointerEvent) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    const handle = e.currentTarget as HTMLElement
+    handle.setPointerCapture(e.pointerId)
+    // Measured once, as nothing else moves: each row's middle, and the edges between rows where the line can go.
+    const list = rows.slice(0, quickActions().length)
+    const middles = list.map((r) => {
+      const box = r.getBoundingClientRect()
+      return box.top + box.height / 2
+    })
+    const edges = [...list.map((r) => r.offsetTop), list[list.length - 1].offsetTop + list[list.length - 1].offsetHeight]
+    const startY = e.clientY
+    // What it was dragged in: changed meanwhile, e.g. from another tab, `from` may no longer be this row, so it's not moved.
+    const start = quickActions()
+    // The slot it was lifted from stays open, shown as a hole, so nothing moves until it's dropped.
+    const hole = { top: edges[from], height: edges[from + 1] - edges[from] }
+    setDrag({ from, to: from, dy: 0, hole })
+    const onMove = (m: PointerEvent) => {
+      const dy = m.clientY - startY
+      // Where it lands is past however many of the others' middles its own middle has gone below.
+      const to = middles.filter((y, j) => j !== from && y < middles[from] + dy).length
+      // Back where it came from needs no line. Otherwise it's at the edge above the row it'd land before.
+      setDrag({ from, to, dy, hole, line: to === from ? undefined : edges[to < from ? to : to + 1] })
+    }
+    const onUp = () => {
+      const d = drag()
+      if (d && d.to !== d.from && quickActions() === start) void save(moved(start, d.from, d.to))
+    }
+    // Capture ends however the drag does: let go, cancelled, or the handle gone with its row.
+    const onEnd = () => {
+      handle.removeEventListener('pointermove', onMove)
+      handle.removeEventListener('pointerup', onUp)
+      handle.removeEventListener('lostpointercapture', onEnd)
+      setDrag()
+    }
+    handle.addEventListener('pointermove', onMove)
+    handle.addEventListener('pointerup', onUp)
+    handle.addEventListener('lostpointercapture', onEnd)
+  }
+  /** Without a pointer: the arrow keys on a handle move its row, which keeps the focus. */
+  const moveByKey = (i: number, e: KeyboardEvent) => {
+    const to = e.key === 'ArrowUp' ? i - 1 : e.key === 'ArrowDown' ? i + 1 : -1
+    if (to < 0 || to >= quickActions().length) return
+    e.preventDefault()
+    void save(moved(quickActions(), i, to))
+    rows[to]?.querySelector('button')?.focus()
+  }
+  const add = async () => {
+    const d = draft()
+    if (adding() || !d?.label.trim() || !d.prompt.trim()) return
+    setAdding(true)
+    // What was typed stays in the form if it couldn't be saved.
+    if (await save([...quickActions(), { label: d.label.trim(), prompt: d.prompt.trim() }])) setDraft()
+    setAdding(false)
+  }
+
+  const iconButton =
+    'grid size-7 shrink-0 place-items-center rounded-button-md text-fg-3 transition-colors hover:bg-surface hover:text-fg disabled:pointer-events-none disabled:opacity-30 pointer-coarse:size-9'
+
+  return (
+    <div>
+      <div class="flex items-start gap-4">
+        <div class="min-w-0 flex-1">
+          <h3 class="text-sm font-medium text-fg">Quick actions</h3>
+          <p class="mt-1 text-ui leading-relaxed text-fg-2">
+            Prompts in the composer’s <Zap class="inline size-3.5 align-[-2px]" /> menu, sent as if you’d typed them. The same on every device.
+          </p>
+        </div>
+        <Button primary disabled={!!draft()} onClick={() => setDraft({ label: '', prompt: '' })} class="flex shrink-0 items-center gap-1.5 pointer-coarse:h-10">
+          <Plus class="size-3.5" />
+          Add
+        </Button>
+      </div>
+
+      <Show when={error()}>
+        <p class="mt-4 flex items-start gap-2 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">
+          <TriangleAlert class="mt-px size-3.5 shrink-0" />
+          <span class="min-w-0 flex-1">{error()}</span>
+          <button type="button" title="Dismiss" onClick={() => setError()} class="shrink-0 opacity-70 hover:opacity-100">
+            <X class="size-3.5" />
+          </button>
+        </p>
+      </Show>
+
+      <div class={`relative mt-5 divide-y divide-line rounded-xl border border-line ${drag() ? 'select-none' : ''}`}>
+        {/* By position, so a field being edited stays put while the list is replaced. */}
+        <Index each={quickActions()}>
+          {(a, i) => (
+            <div
+              ref={(el) => (rows[i] = el)}
+              style={drag()?.from === i ? { transform: `translateY(${drag()!.dy}px)` } : undefined}
+              class={`flex items-start gap-1 py-3 pr-3 pl-1 sm:pr-4 ${
+                drag()?.from === i ? 'relative z-10 rounded-xl bg-bg shadow-lg ring-1 ring-edge' : ''
+              }`}
+            >
+              <button
+                type="button"
+                title="Drag to reorder"
+                aria-label={`Reorder ${a().label}: up and down arrow keys`}
+                onPointerDown={(e) => startDrag(i, e)}
+                onKeyDown={(e) => moveByKey(i, e)}
+                class={`${iconButton} touch-none ${drag() ? 'cursor-grabbing' : 'cursor-grab'}`}
+              >
+                <GripVertical class="size-3.5" />
+              </button>
+              <div class="min-w-0 flex-1 space-y-1.5">
+                <input value={a().label} aria-label="Label" {...field(i, 'label')} class={`${inputClass} h-7 px-2 font-medium`} />
+                <textarea rows={1} value={a().prompt} aria-label="Prompt" {...field(i, 'prompt')} class={`${noteClass} px-2 text-fg-2`} />
+              </div>
+              <button type="button" title="Remove" onClick={() => void save(quickActions().filter((_, j) => j !== i))} class={`${iconButton} hover:text-danger`}>
+                <Trash2 class="size-3.5" />
+              </button>
+            </div>
+          )}
+        </Index>
+        <Show when={drag()}>
+          {(d) => (
+            <>
+              <div class="pointer-events-none absolute inset-x-1.5 rounded-lg bg-surface" style={{ top: `${d().hole.top + 4}px`, height: `${d().hole.height - 8}px` }} />
+              <Show when={d().line !== undefined}>
+                <div class="pointer-events-none absolute inset-x-1.5 z-20 h-0.5 -translate-y-1/2 rounded-full bg-primary" style={{ top: `${d().line}px` }} />
+              </Show>
+            </>
+          )}
+        </Show>
+        <Show when={draft()}>
+          {(d) => (
+            <form
+              class="space-y-1.5 px-3 py-3 sm:px-4"
+              onSubmit={(e) => {
+                e.preventDefault()
+                void add()
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== 'Escape') return
+                e.preventDefault()
+                e.stopPropagation()
+                setDraft()
+              }}
+            >
+              <input
+                ref={(el) => queueMicrotask(() => el.focus())}
+                value={d().label}
+                placeholder="Label, e.g. Write tests"
+                aria-label="Label"
+                onInput={(e) => setDraft({ ...d(), label: e.currentTarget.value })}
+                class={`${inputClass} h-7 px-2 font-medium`}
+              />
+              <textarea
+                rows={1}
+                value={d().prompt}
+                placeholder="The prompt it sends"
+                aria-label="Prompt"
+                onInput={(e) => setDraft({ ...d(), prompt: e.currentTarget.value })}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void add()
+                }}
+                class={`${noteClass} px-2`}
+              />
+              <div class="flex justify-end gap-2 pt-1">
+                <Button type="button" onClick={() => setDraft()} class="pointer-coarse:h-10">
+                  Cancel
+                </Button>
+                <Button primary type="submit" disabled={adding() || !d().label.trim() || !d().prompt.trim()} class="pointer-coarse:h-10">
+                  Add quick action
+                </Button>
+              </div>
+            </form>
+          )}
+        </Show>
+        <Show when={!quickActions().length && !draft()}>
+          <p class="px-4 py-6 text-center text-ui text-fg-3">No quick actions yet.</p>
+        </Show>
+      </div>
+    </div>
   )
 }
 

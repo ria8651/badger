@@ -264,6 +264,16 @@ const MIGRATIONS = [
      stale INTEGER NOT NULL DEFAULT 0
    );
    CREATE INDEX session_recaps_current ON session_recaps (session_id) WHERE stale = 0;`,
+  // The prompts in a chat's quick actions menu, in the menu's order. Starts with the ones Badger used to build in.
+  `CREATE TABLE quick_actions (
+     position INTEGER PRIMARY KEY,
+     label TEXT NOT NULL,
+     prompt TEXT NOT NULL
+   );
+   INSERT INTO quick_actions (position, label, prompt) VALUES
+     (0, 'Review changes', 'Have a subagent review the changes here and report back.'),
+     (1, 'Merge', 'Merge this worktree into the main checkout''s branch.'),
+     (2, 'Preview', 'Start a preview of this app.');`,
 ]
 
 /** Who made a change. There are no users yet, so for now it's where the change came from. */
@@ -276,8 +286,8 @@ type AuditAction = 'create' | 'update' | 'delete' | 'link' | 'unlink' | 'archive
  * Badger's SQLite database, migrated to the latest schema. Each table has one
  * owner, which alone runs SQL on it: the board's are Board's, a chat's
  * draft, archive and the like ChatMeta's, machines' Machines', which machine
- * each chat is on ChatPlacement's, transcripts Transcripts', and analytics
- * (events, activity, clients, usage_samples) Analytics'.
+ * each chat is on ChatPlacement's, transcripts Transcripts', quick actions
+ * QuickActions', and analytics (events, activity, clients, usage_samples) Analytics'.
  */
 export class Database {
   readonly sql: DatabaseSync

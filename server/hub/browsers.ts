@@ -5,6 +5,7 @@ import type { Attention } from '../attention.ts'
 import { parseClientEvent } from '../clientProtocol.ts'
 import { message } from '../errors.ts'
 import type { Machines } from '../machines.ts'
+import type { QuickActions } from '../quickActions.ts'
 import type { SourceMaps } from '../sourceMaps.ts'
 import type { AccountLimits } from '../usage.ts'
 import type { Chats } from './chats.ts'
@@ -16,6 +17,7 @@ export interface BrowserDeps {
   chats: Chats
   terminals: HubTerminals
   machines: Machines
+  quickActions: QuickActions
   attention: Attention
   account: AccountLimits
   analytics: Analytics
@@ -30,6 +32,7 @@ export function serveBrowser(ws: WebSocket, d: BrowserDeps): void {
   const { viewers } = d
   viewers.add(ws)
   viewers.send(ws, { type: 'machines', machines: d.machines.list() })
+  viewers.send(ws, { type: 'quick_actions', actions: d.quickActions.list() })
   // Before every machine's PTY host has said hello the list is unknown, not empty; it's broadcast once they have.
   const terminals = d.terminals.list()
   if (terminals) viewers.send(ws, { type: 'terminals', terminals })

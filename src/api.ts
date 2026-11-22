@@ -15,6 +15,7 @@ import type {
   Machine,
   ModelOption,
   PermissionMode,
+  QuickAction,
   ReviewDiff,
   ServerEvent,
   SessionSummary,
@@ -127,6 +128,9 @@ export const api = {
   resetMachineToken: (id: string) => request<{ machine: Machine; token: string }>('POST', `/api/machines/${id}/token`),
   renameMachine: (id: string, name: string) => request<Machine>('PATCH', `/api/machines/${id}`, { name }),
   removeMachine: (id: string) => request<void>('DELETE', `/api/machines/${id}`),
+  quickActions: () => get<QuickAction[]>('/api/quick-actions'),
+  /** Replaces every quick action, in order. */
+  setQuickActions: (actions: QuickAction[]) => request<QuickAction[]>('PUT', '/api/quick-actions', actions),
 }
 
 /** Query parameters, with the machine when one is given. */

@@ -3,6 +3,7 @@ import type { Board } from '../board.ts'
 import type { Actor } from '../db.ts'
 import { BadRequest, absolutePath } from '../errors.ts'
 import type { Machines } from '../machines.ts'
+import type { QuickActions } from '../quickActions.ts'
 import { IMAGE_PATH, entryImage } from '../transcriptImages.ts'
 import type { Transcripts } from '../transcripts.ts'
 import type { Chats } from './chats.ts'
@@ -29,6 +30,7 @@ export interface ApiDeps {
   board: Board
   transcripts: Transcripts
   machines: Machines
+  quickActions: QuickActions
   chats: Chats
   cardsChanged: () => void
   listChanged: () => void
@@ -38,7 +40,7 @@ export interface ApiDeps {
 
 /** The REST API, but for chats' and terminals' own routes, which their modules have. */
 export function apiRoutes(d: ApiDeps): Route[] {
-  return [['GET', '/api/config', () => [200, d.config]], ...cardRoutes(d), ...machineRoutes(d), ...machineFileRoutes(d), imageRoute(d)]
+  return [['GET', '/api/config', () => [200, d.config]], ...cardRoutes(d), ...machineRoutes(d), ...quickActionRoutes(d), ...machineFileRoutes(d), imageRoute(d)]
 }
 
 /** The board. Every change tells every open tab to refetch. */
@@ -91,6 +93,14 @@ function machineRoutes({ machines }: ApiDeps): Route[] {
     ['POST', /^\/api\/machines\/([a-z0-9-]+)\/token$/, ({ params: [id] }) => [200, machines.resetToken(id)]],
     ['PATCH', MACHINE, async ({ params: [id], json }) => [200, machines.rename(id, (await json()).name)]],
     ['DELETE', MACHINE, ({ params: [id] }) => (machines.remove(id) ? [204, null] : [404, { error: 'No such runner' }])],
+  ]
+}
+
+/** The quick actions menu's prompts, replaced as a whole. Every open tab is sent the new list. */
+function quickActionRoutes({ quickActions }: ApiDeps): Route[] {
+  return [
+    ['GET', '/api/quick-actions', () => [200, quickActions.list()]],
+    ['PUT', '/api/quick-actions', async ({ json }) => [200, quickActions.set(await json())]],
   ]
 }
 

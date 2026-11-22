@@ -1,7 +1,6 @@
 import { Show, createEffect, createSignal, on, onCleanup } from 'solid-js'
-import { FileDiff, FolderInput, Zap } from '../icons'
+import { FileDiff, FolderInput } from '../icons'
 import type { GitStatus, SessionSummary } from '../../shared/protocol.ts'
-import type { ChatAction } from '../actions.ts'
 import { api } from '../api.ts'
 import { basename, worktreeOf } from '../folders.ts'
 import { ago } from '../format.ts'
@@ -79,7 +78,7 @@ type GitItem = MenuItem & { run: () => void }
 
 /**
  * Along the top of a chat: its title and card, where it's working and how that
- * checkout stands in git, with the git actions, the chat's actions, its terminals,
+ * checkout stands in git, with the git actions, its terminals,
  * and what the sidebar does to a chat: move, rename and archive.
  */
 export function ChatHeader(props: {
@@ -96,7 +95,6 @@ export function ChatHeader(props: {
   /** Nothing's known yet about how it stands in git, and it's being read. */
   firstRead?: boolean
   onRefresh: (fetch: boolean) => Promise<void>
-  actions: ChatAction[]
   /** Sends a prompt to the chat. Absent before it's started, so the header only does what needs no chat. */
   onAsk?: (prompt: string) => void
   /** Shows this folder's changes in a panel beside the chat. */
@@ -328,17 +326,6 @@ export function ChatHeader(props: {
           <button type="button" onClick={props.onDiff} title="Diff: every change, beside the chat" class={`${button} text-fg-3`}>
             <FileDiff class="size-3.5" />
           </button>
-        </Show>
-        <Show when={props.onAsk && props.actions.length}>
-          <Menu
-            items={props.actions.map((a) => ({ label: a.label, description: a.description }))}
-            onPick={(i) => props.onAsk!(props.actions[i].prompt)}
-            placement="bottom"
-            align="right"
-            title="Chat actions"
-            triggerClass={(open) => `${button} ${open ? 'bg-surface text-fg-2' : 'text-fg-3'}`}
-            trigger={() => <Zap class="size-3.5" />}
-          />
         </Show>
         <Show when={props.ws && props.cwd}>
           <TerminalButton ws={props.ws!} session={props.sessionId} cwd={props.cwd!} />

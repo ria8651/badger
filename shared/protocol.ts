@@ -67,6 +67,12 @@ export interface BackgroundTask {
  */
 export type AttentionState = 'waiting' | 'unread'
 
+/** A prompt in a chat's quick actions menu, set up in Settings. */
+export interface QuickAction {
+  label: string
+  prompt: string
+}
+
 /**
  * A computer chats and terminals run on: the hub's own, or another one whose
  * runner (`pnpm remote`) connects to the hub. A chat stays on the machine it
@@ -699,6 +705,8 @@ export type ServerEvent =
   | { type: 'cards_changed' }
   /** Every machine; sent on connect and whenever one connects, disconnects or changes. */
   | { type: 'machines'; machines: Machine[] }
+  /** Every quick action, in order; sent on connect and whenever they're changed. */
+  | { type: 'quick_actions'; actions: QuickAction[] }
   /** Every terminal; sent on connect and whenever any of them changes. */
   | { type: 'terminals'; terminals: TerminalInfo[] }
   /** The terminal's screen and scrollback as escape sequences; replaces whatever the viewer had. */

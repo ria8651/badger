@@ -24,6 +24,7 @@ import { Machines, mismatch } from './machines.ts'
 import { memoryLinks, wsLink } from './peer.ts'
 import { ChatPlacement } from './placement.ts'
 import { proxyPreview, proxyPreviewUpgrade, previewPort } from './preview.ts'
+import { QuickActions } from './quickActions.ts'
 import { bridgeOps } from './previewTools.ts'
 import { Runner } from './runner.ts'
 import { PROTOCOL_HEADER, RUNNER_MAX_FRAME, RUNNER_PROTOCOL } from './runnerProtocol.ts'
@@ -75,6 +76,7 @@ const meta = new ChatMeta(db, listChanged)
 const board = new Board(db, meta)
 const transcripts = new Transcripts(db.sql)
 const placement = new ChatPlacement(db)
+const quickActions = new QuickActions(db, (actions) => viewers.toAll({ type: 'quick_actions', actions }))
 const analytics = new Analytics(db, board, placement)
 const tracking = new HubTracking(analytics)
 const bridges = new Bridges()
@@ -140,7 +142,7 @@ const PREVIEW_HOSTS = { ownPort: PORT, localOnly: CHECK_HOST }
 
 const api = httpHandler(
   [
-    ...apiRoutes({ board, transcripts, machines, chats, cardsChanged, listChanged, config: { defaultCwd: WORKSPACE_DIR, scratchCwd: SCRATCH_DIR, port: PORT } }),
+    ...apiRoutes({ board, transcripts, machines, quickActions, chats, cardsChanged, listChanged, config: { defaultCwd: WORKSPACE_DIR, scratchCwd: SCRATCH_DIR, port: PORT } }),
     ...chats.routes(),
     ...terminals.routes(),
   ],
@@ -187,7 +189,7 @@ server.on('upgrade', (req, socket, head) => {
   }
   if (url.pathname !== '/ws') return refuse('404 Not Found')
   if (!sameOrigin(req, CHECK_HOST)) return refuse('403 Forbidden')
-  wss.handleUpgrade(req, socket, head, (ws) => serveBrowser(ws, { viewers, chats, terminals, machines, attention, account, analytics, sourceMaps }))
+  wss.handleUpgrade(req, socket, head, (ws) => serveBrowser(ws, { viewers, chats, terminals, machines, quickActions, attention, account, analytics, sourceMaps }))
 })
 
 // ── The hub's own machine: a runner in this process, over an in-memory link ──

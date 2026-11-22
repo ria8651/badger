@@ -21,7 +21,7 @@ import { CardView } from './components/CardView.tsx'
 import { Radar } from './components/Radar.tsx'
 import { Chat } from './components/Chat.tsx'
 import { TerminalPage } from './components/Terminals.tsx'
-import { Settings } from './components/Settings.tsx'
+import { Settings, closeSettings, openSettings, settingsOpen } from './components/Settings.tsx'
 import { Sidebar } from './components/Sidebar.tsx'
 import { Switcher } from './components/Switcher.tsx'
 import { ImageViewer } from './components/ImageViewer.tsx'
@@ -38,7 +38,6 @@ export function App() {
     onCleanup(offAttention)
   })
 
-  const [settings, setSettings] = createSignal(false)
   /** On narrow screens the sidebar is a drawer over the page; going anywhere closes it, back and forward included. */
   const [drawer, setDrawer] = createSignal(false)
   createEffect(on(route, () => setDrawer(false), { defer: true }))
@@ -48,7 +47,7 @@ export function App() {
     if (e.key === 'Escape' && !modalOpen()) setDrawer(false)
     if (e.key === ',' && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
       e.preventDefault()
-      setSettings(true)
+      openSettings()
     }
   }
   addEventListener('keydown', onKey)
@@ -200,7 +199,7 @@ export function App() {
           drawer() ? 'translate-x-0 max-md:shadow-(--shadow-modal)' : 'invisible -translate-x-full'
         }`}
       >
-        <Sidebar current={current()} onSettings={() => setSettings(true)} onNewChat={newHomeChat} />
+        <Sidebar current={current()} onSettings={() => openSettings()} onNewChat={newHomeChat} />
       </aside>
       {/* The gutter beside the sidebar, between the panes' outlines, grown a little each way so a thin one is easy to catch. */}
       <div
@@ -236,8 +235,8 @@ export function App() {
           </Show>
         </div>
       </div>
-      <Show when={settings()}>
-        <Settings onClose={() => setSettings(false)} />
+      <Show when={settingsOpen()}>
+        {(section) => <Settings section={section()} onClose={closeSettings} />}
       </Show>
       <Show when={switcher()}>
         <Switcher current={current()} onClose={() => setSwitcher(false)} />

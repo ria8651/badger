@@ -1,51 +1,40 @@
-import type { GitStatus } from '../shared/protocol.ts'
-import { worktreeOf } from './folders.ts'
-import { plural } from './format.ts'
+import { createSignal } from 'solid-js'
+import type { QuickAction } from '../shared/protocol.ts'
+import { api, socket } from './api.ts'
 
 /**
- * Something a chat can be asked to do from the composer. Each is a prompt;
- * what makes it more than a prompt is the Badger tool it leads Claude to,
- * which does the parts Claude can't, like running a chat elsewhere and
- * cleaning up after the turn.
+ * The prompts in the composer's quick actions menu, set up in Settings and
+ * kept on the hub, so each device has the same ones. Kept current over the socket.
  */
-export interface ChatAction {
-  label: string
-  description: string
-  prompt: string
-}
+const [list, setList] = createSignal<QuickAction[]>([])
+export const quickActions = list
 
-/** cwd decides whether it can be merged: Badger merges the worktrees Claude Code makes, not others. */
-export function chatActions(git?: GitStatus, cwd?: string): ChatAction[] {
-  const actions: ChatAction[] = []
-  if (git) {
-    // A worktree's work is measured against the main checkout, any other branch's against its upstream.
-    const base = git.base?.branch ?? git.upstream
-    const ahead = git.base ? git.base.ahead : git.upstream ? git.ahead : 0
-    const pending = [ahead && `${plural(ahead, 'commit')} not on ${base}`, git.changes && plural(git.changes, 'uncommitted change')].filter(Boolean)
-    actions.push({
-      label: 'Review changes',
-      description: pending.length
-        ? `${pending.join(', ')}. A subagent reviews them and reports back here.`
-        : `Nothing to review: no uncommitted changes${base ? `, and everything is already on ${base}` : ''}.`,
-      prompt: 'Have a subagent review the changes here and report back.',
-    })
+/** Saves not yet answered, and the newest list the hub sent meanwhile. */
+let pending = 0
+let held: QuickAction[] | undefined
+
+socket.on((e) => {
+  if (e.type !== 'quick_actions') return
+  // While saves are on their way, the hub's echoes of the earlier ones would undo the later ones shown here,
+  // and the next edit would build on that. Only the last one sent counts, once they're all answered.
+  if (pending) held = e.actions
+  else setList(e.actions)
+})
+
+/** Shown straight away; the hub then sends it back to every tab, this one included. */
+export async function saveQuickActions(actions: QuickAction[]): Promise<void> {
+  pending++
+  setList(actions)
+  try {
+    await api.setQuickActions(actions)
+  } catch (err) {
+    // What the hub has now, in place of what couldn't be saved.
+    held = await api.quickActions().catch(() => held)
+    throw err
+  } finally {
+    if (!--pending && held) {
+      setList(held)
+      held = undefined
+    }
   }
-  if (git?.base && worktreeOf(cwd)) {
-    const wt = git.base
-    // Uncommitted work counts: Claude commits it before merging.
-    const pending = [wt.ahead && plural(wt.ahead, 'commit'), git.changes && plural(git.changes, 'uncommitted change')].filter(Boolean)
-    actions.push({
-      label: `Merge into ${wt.branch}`,
-      description: pending.length
-        ? `${pending.join(', ')}. A chat in the main checkout merges it, then the worktree goes.`
-        : `Nothing to merge: everything here is already on ${wt.branch}.`,
-      prompt: `Merge this worktree into ${wt.branch}.`,
-    })
-  }
-  actions.push({
-    label: 'Preview',
-    description: 'Start the dev server, or reuse a running one, and show it beside the chat.',
-    prompt: 'Start a preview of this app.',
-  })
-  return actions
 }

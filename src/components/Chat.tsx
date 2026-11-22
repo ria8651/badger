@@ -1,7 +1,6 @@
 import { For, Show, createEffect, createMemo, createSignal, on, onMount, untrack, type Accessor, type JSX } from 'solid-js'
 import { FolderX, GitBranch, MonitorOff, Pencil, ScrollText, WifiOff, X } from '../icons'
 import { NO_ATTACHMENTS, type DraftAttachments, type PermissionMode, type QueuedMessage, type StartAt } from '../../shared/protocol.ts'
-import { chatActions } from '../actions.ts'
 import { api, connected } from '../api.ts'
 import { cardWorktreeName, isScratch, worktreeOf } from '../folders.ts'
 import { diffView, filesView, openFile, openFiles, openTerminal, openView, planView, setFileMode, setFilesMode, viewKey, viewShown, wide } from '../layout.ts'
@@ -392,7 +391,6 @@ export function Chat(props: {
     () => !state.loaded || offline(),
   )
   createEffect(on(() => state.running, (running) => !running && void git.refresh(), { defer: true }))
-  const actions = () => chatActions(git.status(), cwd())
 
   const send = (text: string, attachments: DraftAttachments = NO_ATTACHMENTS) => {
     if (state.gone || stranded()) return
@@ -537,7 +535,6 @@ export function Chat(props: {
           updating={git.updating()}
           firstRead={git.firstRead()}
           onRefresh={git.refresh}
-          actions={actions()}
           onDiff={isReview() || !cwd() || isScratch(cwd()) ? undefined : openDiff}
           onReview={isReview() || !cwd() || isScratch(cwd()) ? undefined : startReview}
           onAsk={picking() ? undefined : (prompt) => send(prompt)}

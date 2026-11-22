@@ -1,8 +1,9 @@
 import { For, Show, createEffect, createSignal, on, onCleanup, type JSX } from 'solid-js'
-import { ArrowUp, ChevronDown, ListChevronsDownUp, ListChevronsUpDown, Paperclip, SlidersHorizontal, Square } from '../icons'
+import { ArrowUp, ChevronDown, ListChevronsDownUp, ListChevronsUpDown, Paperclip, SlidersHorizontal, Square, Zap } from '../icons'
 import { isLongPaste } from '../../shared/pastes.ts'
-import { IMAGE_EXTENSIONS, type Card, type DraftAttachments, type PermissionMode } from '../../shared/protocol.ts'
+import { IMAGE_EXTENSIONS, NO_ATTACHMENTS, type Card, type DraftAttachments, type PermissionMode } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
+import { quickActions } from '../actions.ts'
 import { isScratch } from '../folders.ts'
 import { readImage } from '../images.ts'
 import type { ModelChoice } from '../models.ts'
@@ -13,6 +14,7 @@ import { Attachments } from './Attachments.tsx'
 import { FileBrowser } from './FileBrowser.tsx'
 import { PromptInput, type PromptInputControls } from './PromptInput.tsx'
 import { showError } from './Popover.tsx'
+import { openSettings } from './Settings.tsx'
 import { ContextMeter } from './Usage.tsx'
 import { IconButton, Menu, Select, createDismiss, type Option } from './ui.tsx'
 
@@ -23,6 +25,9 @@ export const MODES: Option<PermissionMode>[] = [
   { value: 'plan', label: 'Plan', description: 'Read and propose only. Nothing changes until you approve.' },
   { value: 'bypassPermissions', label: 'Bypass permissions', description: 'Never asks. Anything can run.', tone: 'danger' },
 ]
+
+/** A quick action's prompt, short enough to sit under its label. */
+const clip = (prompt: string) => (prompt.length > 120 ? `${prompt.slice(0, 120).trimEnd()}…` : prompt)
 
 /** What a chat's view can ask of its composer. */
 export interface ComposerControls {
@@ -258,6 +263,17 @@ export function Composer(props: {
         >
           <Paperclip class="size-3.5" />
         </button>
+        <Menu
+          items={[...quickActions().map((a) => ({ label: a.label, description: clip(a.prompt) })), { label: 'Edit quick actions…' }]}
+          // Sent as if typed, so one picked while Claude works queues. The last item, after every prompt, is the way to Settings.
+          onPick={(i) => (i < quickActions().length ? !props.disabled && props.onSubmit(quickActions()[i].prompt, NO_ATTACHMENTS) : openSettings('quick-actions'))}
+          placement="top"
+          title="Quick actions"
+          triggerClass={(open) =>
+            `flex h-7 items-center rounded-button-md px-2 transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9 ${open ? 'bg-surface text-fg-2' : 'text-fg-3'}`
+          }
+          trigger={() => <Zap class="size-3.5" />}
+        />
         <Show when={browsing()}>
           <FileBrowser
             mode="files"
