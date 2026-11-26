@@ -68,7 +68,7 @@ export function openPreviewOp(previews: Previews): Op {
     async run(args, ctx) {
       const path = args.path ? (args.path.startsWith('/') ? args.path : `/${args.path}`) : '/'
       const listening = await isListening(args.port)
-      const { tabs, url } = await previews.open(ctx.sessionId, { root: workspaceRoot(ctx.cwd()), port: args.port, name: args.name, path })
+      const { tabs, url } = await previews.open(ctx.sessionId, { root: await workspaceRoot(ctx.cwd()), port: args.port, name: args.name, path })
       const text = [
         tabs ? `Opened in the panels of ${tabs === 1 ? 'the browser tab' : `${tabs} browser tabs`} showing Badger.` : 'No browser has Badger open, so nothing was shown.',
         url ? `URL: ${url}` : '',

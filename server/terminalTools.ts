@@ -128,19 +128,19 @@ export function terminalOps(terminals: Terminals): Op[] {
         )
     })
     if (!tid) fail(outcome)
+    const here = await root(ctx)
     const t = find(tid!)
     if (!t) return { text: [outcome, `Terminal ${tid} is closed.`].filter(Boolean).join('\n'), value: { outcome, output: '' } }
     const output = clip(await terminals.text(tid!, opts.lines ?? DEFAULT_LINES).catch(() => ''), MAX_RESULT_CHARS, 'tail')
     return {
-      text: [outcome, describe(t, ctx), '', output || '(no output)'].filter((l, i) => i > 0 || l).join('\n'),
+      text: [outcome, describe(t, ctx, here), '', output || '(no output)'].filter((l, i) => i > 0 || l).join('\n'),
       value: { outcome, terminal: t, output },
     }
   }
 
-  const describe = (t: TerminalInfo, ctx: OpContext) => {
+  const describe = (t: TerminalInfo, ctx: OpContext, here: string) => {
     const state = t.running ? 'running' : t.signal ? `killed (signal ${t.signal})` : `exited ${t.exitCode ?? '?'}`
     const what = `${t.name ? `"${t.name}" ` : ''}${t.command ? `$ ${t.command}` : `shell, showing "${t.title}"`}`
-    const here = root(ctx)
     const where = t.root === here ? (t.cwd === here ? '' : ` in ${t.cwd}`) : ` in ${t.cwd} (another workspace)`
     const ports = t.ports?.length ? `, listening on ${t.ports.join(', ')}` : ''
     return `${t.id} [${state}${ports}] ${what}${where}${t.sessionId === ctx.sessionId ? ' (started by this chat)' : ''}`
@@ -159,9 +159,9 @@ export function terminalOps(terminals: Terminals): Op[] {
       autoAllow: true,
       annotations: { readOnlyHint: true },
       async run(_args, ctx) {
-        const here = root(ctx)
+        const here = await root(ctx)
         const all = [...terminals.terminals].sort((a, b) => Number(b.root === here) - Number(a.root === here))
-        return { text: all.length ? all.map((t) => describe(t, ctx)).join('\n') : 'No terminals.', value: all }
+        return { text: all.length ? all.map((t) => describe(t, ctx, here)).join('\n') : 'No terminals.', value: all }
       },
     }),
     op({

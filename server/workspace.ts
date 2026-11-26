@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process'
 import { accessSync, constants, existsSync, mkdirSync, writeFileSync, statSync } from 'node:fs'
 import { appendFile, mkdir, open, readFile, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
@@ -9,19 +8,19 @@ import { type Repo, git, readRepo, readStatus } from './repo.ts'
 
 export { git }
 
+/** How long git gets to name a folder's root: one it can't read, e.g. behind a permission prompt, mustn't hold things up. */
+const ROOT_TIMEOUT_MS = 10_000
+
 /** The git root of a directory (each worktree has its own), or the directory itself outside a repo. */
-export function workspaceRoot(cwd: string): string {
-  try {
-    return execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || cwd
-  } catch {
-    return cwd
-  }
+export async function workspaceRoot(cwd: string): Promise<string> {
+  const out = await run('git', ['rev-parse', '--show-toplevel'], { cwd, timeout: ROOT_TIMEOUT_MS }).then((r) => r.stdout.trim(), () => '')
+  return out || cwd
 }
 
-const roots = new Map<string, string>()
+const roots = new Map<string, Promise<string>>()
 
 /** workspaceRoot, looked up once per folder: it's asked about the same few over and over. */
-export function rootOf(cwd: string): string {
+export function rootOf(cwd: string): Promise<string> {
   if (!roots.has(cwd)) roots.set(cwd, workspaceRoot(cwd))
   return roots.get(cwd)!
 }

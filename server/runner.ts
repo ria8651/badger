@@ -292,7 +292,7 @@ export class Runner implements RunnerApi {
     return dirs.filter(inaccessible)
   }
 
-  workspaceRoot(cwd: string): string {
+  workspaceRoot(cwd: string): Promise<string> {
     return rootOf(cwd)
   }
 
