@@ -154,7 +154,7 @@ export function ReplyBody(props: { id?: string; text: string; /** Its shell bloc
   })
   onCleanup(() => hosts.forEach((h) => h.remove()))
 
-  // What each comment is on, drawn as a shape behind the text; the one being written in the selection's colour.
+  // What each comment is on, drawn as a shape behind the text; the one being written in the system's selection colour.
   let frame = 0
   const draw = () => {
     frame = 0
@@ -192,7 +192,7 @@ export function ReplyBody(props: { id?: string; text: string; /** Its shell bloc
     const writing = d ? boxesOf(d.on.start, d.on.end) : []
     marks.innerHTML = [
       kept.length ? `<path d="${blobs(kept, 4)}" style="fill: var(--color-accent); opacity: 0.18" />` : '',
-      writing.length ? `<path d="${blobs(writing, 4)}" style="fill: var(--color-selection); opacity: 0.3" />` : '',
+      writing.length ? `<path d="${blobs(writing, 4)}" style="fill: Highlight; opacity: 0.45" />` : '',
     ].join('')
   }
   const redraw = () => (frame ||= requestAnimationFrame(draw))

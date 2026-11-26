@@ -145,7 +145,7 @@ const PLAIN: FileIcon = { icon: File }
 
 /** How a changed file changed, the same wherever one's shown: its letter, and the colour of it (and of its name). */
 export const STATUS_LETTER = { added: 'A', modified: 'M', deleted: 'D', renamed: 'R' } as const
-export const STATUS_TONE = { added: 'text-ok', modified: 'text-changed', deleted: 'text-danger', renamed: 'text-accent' } as const
+export const STATUS_TONE = { added: 'text-ok', modified: 'text-changed', deleted: 'text-danger', renamed: 'text-changed' } as const
 
 /** The icon for a file, by its name. */
 export function fileIcon(name: string): FileIcon {

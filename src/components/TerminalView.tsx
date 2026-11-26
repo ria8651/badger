@@ -9,12 +9,12 @@ import { palette, type Palette } from '../theme.ts'
 /** ANSI colours tuned to sit on the palette in index.css; the rest of the theme comes from its variables. */
 const ANSI = {
   light: {
-    black: '#1b1a18', red: '#b5382c', green: '#3d7a4a', yellow: '#8a6a10', blue: '#2f5f9e', magenta: '#8a4a8f', cyan: '#2b7a7f', white: '#9a9892',
-    brightBlack: '#6f6d68', brightRed: '#c13a2e', brightGreen: '#4a8f57', brightYellow: '#a07d16', brightBlue: '#3b6fb6', brightMagenta: '#a05aa6', brightCyan: '#348e94', brightWhite: '#5f5d58',
+    black: '#1b1a18', red: '#a7463e', green: '#1d7d3e', yellow: '#905d00', blue: '#1f6cb0', magenta: '#9b467a', cyan: '#007d86', white: '#9a9892',
+    brightBlack: '#6f6d68', brightRed: '#c65a51', brightGreen: '#319751', brightYellow: '#ad7300', brightBlue: '#3284d0', brightMagenta: '#b95a93', brightCyan: '#0097a1', brightWhite: '#5f5d58',
   },
   dark: {
-    black: '#45443f', red: '#e26d5f', green: '#7cb08a', yellow: '#d9b866', blue: '#7aa2d9', magenta: '#c597d0', cyan: '#6fb8bb', white: '#c9c7c2',
-    brightBlack: '#6f6d68', brightRed: '#f08a7d', brightGreen: '#95c7a2', brightYellow: '#ebcb82', brightBlue: '#97b9e6', brightMagenta: '#d6b0df', brightCyan: '#8dcfd1', brightWhite: '#e9e7e2',
+    black: '#45443f', red: '#e6867b', green: '#69ba7c', yellow: '#cc9c42', blue: '#67aaed', magenta: '#da85b6', cyan: '#14bbc2', white: '#c9c7c2',
+    brightBlack: '#6f6d68', brightRed: '#feaba1', brightGreen: '#95d7a2', brightYellow: '#e6bd77', brightBlue: '#92c9ff', brightMagenta: '#f3aad3', brightCyan: '#6bd8de', brightWhite: '#e9e7e2',
   },
   // Phosphor-bright, so colour output still reads on green-on-black.
   terminal: {
@@ -24,6 +24,19 @@ const ANSI = {
 }
 const ansi: Record<Palette, ITheme> = { light: ANSI.light, dark: ANSI.dark, black: ANSI.dark, terminal: ANSI.terminal, oms: ANSI.light, win95: ANSI.light }
 
+/**
+ * Highlight, worked out to a colour xterm can take: it can't read system colours itself. The text keeps its own
+ * colour, as on the review's drawn selection: xterm fades an opaque Highlight, which HighlightText wouldn't read on.
+ */
+function systemSelection(): Pick<ITheme, 'selectionBackground'> {
+  const probe = document.createElement('span')
+  probe.style.cssText = 'position:absolute;visibility:hidden;background:Highlight'
+  document.documentElement.append(probe)
+  const selectionBackground = getComputedStyle(probe).backgroundColor
+  probe.remove()
+  return { selectionBackground }
+}
+
 function theme(): ITheme {
   const css = getComputedStyle(document.documentElement)
   const v = (name: string) => css.getPropertyValue(`--color-${name}`).trim()
@@ -32,8 +45,9 @@ function theme(): ITheme {
     foreground: v('fg'),
     cursor: v('fg'),
     cursorAccent: v('bg'),
+    // The system's selection, as everywhere else on the page.
+    ...systemSelection(),
     // xterm parses colours itself, so alpha goes on as hex rather than color-mix().
-    selectionBackground: v('accent') + '40',
     scrollbarSliderBackground: v('fg-3') + '4d',
     scrollbarSliderHoverBackground: v('fg-3') + '80',
     ...ansi[palette()],

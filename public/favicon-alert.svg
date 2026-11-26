@@ -18,5 +18,5 @@
     <circle cx="12" cy="14.6" r="1.75"/>
     <circle cx="20" cy="14.6" r="1.75"/>
   </g>
-  <circle cx="24.6" cy="8.2" r="6.2" fill="#d97757" stroke="#fafaf8" stroke-width="1.5"/>
+  <circle cx="24.6" cy="8.2" r="6.2" fill="#f48d3c" stroke="#fafaf8" stroke-width="1.5"/>
 </svg>

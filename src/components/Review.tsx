@@ -1169,7 +1169,7 @@ function HunkView(props: {
           ['del', '--color-danger'],
         ] as const
       ).map(([kind, colour]) => `<path d="${blobs(boxes[kind], 4)}" style="fill: var(${colour}); opacity: 0.28" />`),
-      selected.length ? `<path d="${blobs(selected, 4)}" style="fill: var(--color-selection); opacity: 0.3" />` : '',
+      selected.length ? `<path d="${blobs(selected, 4)}" style="fill: Highlight; opacity: 0.45" />` : '',
     ].join('')
   }
 
