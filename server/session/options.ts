@@ -64,7 +64,9 @@ export function sdkOptions(o: {
     // Newer models omit thinking text by default; ask for summaries so it can stream.
     thinking: { type: 'adaptive', display: 'summarized' },
     env: { ...streamEnv(), ...o.env },
-    ...(o.worktree !== undefined ? { extraArgs: { worktree: o.worktree || null } } : {}),
+    // Hook events show how setting up the worktree is going: a WorktreeCreate hook's only come with includeHookEvents.
+    // They keep coming for every hook after that, and are dropped.
+    ...(o.worktree !== undefined ? { extraArgs: { worktree: o.worktree || null }, includeHookEvents: true } : {}),
     hooks: {
       UserPromptSubmit: [
         {

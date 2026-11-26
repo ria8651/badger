@@ -253,6 +253,6 @@ export function terminalOps(terminals: Terminals): Op[] {
 }
 
 /** Colours, cursor movement and titles out; what's left reads like the screen. */
-function stripAnsi(s: string): string {
+export function stripAnsi(s: string): string {
   return s.replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-_]/g, '').replace(/\r(?!\n)/g, '\n')
 }

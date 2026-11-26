@@ -505,11 +505,25 @@ export interface QueuedMessage {
 /** Anything the SDK emits, or a transcript entry read back from disk. */
 export type WireMessage = { type: string; uuid?: string; [key: string]: unknown }
 
+/** One step of Claude Code setting up the worktree a chat starts in: making it, then each hook that runs before it's ready. */
+export interface WorktreeStep {
+  label: string
+  state: 'running' | 'done' | 'failed'
+  /** Ms since epoch. */
+  started: number
+  /** How long it took, in ms, once it's over. */
+  took?: number
+  /** A hook's latest line of output. */
+  output?: string
+}
+
 /** What a live chat's process is doing. cwd changes when the chat moves into a worktree. */
 export interface ChatStatus {
   running: boolean
   /** Claude Code is still making the worktree it was started in, so nothing's happening yet. */
   makingWorktree: boolean
+  /** While it's making the worktree, how far it's got. Older runners don't send it. */
+  worktreeSteps?: WorktreeStep[]
   /** When Claude Code started compacting the conversation, if it's doing that now. */
   compacting?: number
   mode: PermissionMode

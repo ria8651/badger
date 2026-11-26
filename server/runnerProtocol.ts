@@ -423,6 +423,18 @@ const queuedMessage = z.object({ id: z.string(), text: z.string(), pastes: z.arr
 const chatStatus = z.object({
   running: z.boolean(),
   makingWorktree: z.boolean(),
+  worktreeSteps: z
+    .array(
+      z.object({
+        label: z.string(),
+        state: z.enum(['running', 'done', 'failed']),
+        started: z.number(),
+        took: z.number().optional(),
+        output: z.string().optional(),
+      }),
+    )
+    .max(100)
+    .optional(),
   compacting: z.number().optional(),
   mode: z.enum(PERMISSION_MODES),
   model: z.string().optional(),

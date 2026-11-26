@@ -14,6 +14,7 @@ import {
   type ServerEvent,
   type StartAt,
   type WireMessage,
+  type WorktreeStep,
 } from '../shared/protocol.ts'
 import { socket } from './api.ts'
 
@@ -37,6 +38,8 @@ export interface ChatState {
   running: boolean
   /** Claude Code is still making the worktree it was started in, so nothing's happening yet. */
   makingWorktree: boolean
+  /** How far it's got with that worktree. */
+  worktreeSteps?: WorktreeStep[]
   /** When Claude Code started compacting the conversation, while it is. */
   compacting?: number
   mode: PermissionMode
@@ -79,6 +82,7 @@ function apply(state: ChatState, event: ServerEvent, stream: Stream): void {
       state.messages = event.messages
       state.running = event.running
       state.makingWorktree = !!event.makingWorktree
+      state.worktreeSteps = event.worktreeSteps
       state.compacting = event.compacting
       state.mode = event.mode
       state.model = event.model
@@ -113,6 +117,7 @@ function apply(state: ChatState, event: ServerEvent, stream: Stream): void {
     case 'status':
       state.running = event.running
       state.makingWorktree = event.makingWorktree
+      state.worktreeSteps = event.worktreeSteps
       state.compacting = event.compacting
       state.mode = event.mode
       if (event.model) state.model = event.model
@@ -271,6 +276,7 @@ export function agentChat(parent: Chat, agent: { toolUseId: string; running: () 
     running: agent.running,
     partial: () => null,
     makingWorktree: () => false,
+    worktreeSteps: () => undefined,
     compacting: () => undefined,
     queued: () => [],
     // Not the parent's: its context window and its errors.

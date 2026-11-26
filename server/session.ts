@@ -12,6 +12,7 @@ import { sdkOptions } from './session/options.ts'
 import { Outbox, publicQueued } from './session/outbox.ts'
 import { gitNote, markGit } from './session/gitNote.ts'
 import { Permissions } from './session/permissions.ts'
+import { WorktreeSetup } from './session/worktreeSetup.ts'
 import { sessionInfo } from './sessionInfo.ts'
 import { inaccessible } from './workspace.ts'
 
@@ -58,6 +59,8 @@ export class LiveSession {
   running = false
   /** Started with --worktree and Claude Code hasn't come up in it yet, e.g. a WorktreeCreate hook is still copying files. */
   makingWorktree: boolean
+  /** How far it's got with that worktree, while it's making it. */
+  private worktreeSetup?: WorktreeSetup
   /** When Claude Code started compacting the conversation, while it is. */
   compacting?: number
   /** Any background work is running, the subagents' own included; closing the process would kill it. */
@@ -114,6 +117,7 @@ export class LiveSession {
     this.mode = opts.mode
     this.model = opts.model
     this.makingWorktree = opts.worktree !== undefined
+    if (this.makingWorktree) this.worktreeSetup = new WorktreeSetup()
     this.tools = opts.tools
     this.onClose = opts.onClose
     this.onChange = opts.onChange
@@ -345,7 +349,10 @@ export class LiveSession {
       // A turn cut off before its result is still Claude's doing.
       if (this.running) this.gitMarked = markGit(this.id, this.cwd)
       this.queue.close()
+      // Ended before it was ready, so the steps go: a hook that failed stays in the chat, saying why.
+      for (const { hook, error } of this.worktreeSetup?.failures() ?? []) this.record({ type: 'hook_error', uuid: randomUUID(), hook, error, timestamp: new Date().toISOString() })
       this.makingWorktree = false
+      this.worktreeSetup = undefined
       this.compacting = undefined
       this.setRunning(false)
       this.onClose()
@@ -371,6 +378,7 @@ export class LiveSession {
       this.emit({ type: 'message', sessionId: this.id, message: wire })
       return
     }
+    if (this.worktreeSetup?.take(msg)) this.emitStatus()
     if (msg.type === 'system' && msg.subtype === 'permission_denied') this.checks.done(msg.tool_use_id)
     if (msg.type === 'assistant' && this.mode === 'auto') this.checks.start(wire)
     // With --worktree, Claude Code reports where it actually ended up. Later inits (one per
@@ -378,6 +386,7 @@ export class LiveSession {
     if (msg.type === 'system' && msg.subtype === 'init') {
       if (this.makingWorktree) {
         this.makingWorktree = false
+        this.worktreeSetup = undefined
         this.emitStatus()
       }
       if (this.awaitingInit) this.setCwd(msg.cwd)
@@ -519,7 +528,7 @@ export class LiveSession {
   }
 
   private status(): ChatStatus {
-    return { running: this.running, makingWorktree: this.makingWorktree, compacting: this.compacting, mode: this.mode, model: this.model, cwd: this.cwd }
+    return { running: this.running, makingWorktree: this.makingWorktree, worktreeSteps: this.worktreeSetup?.snapshot(), compacting: this.compacting, mode: this.mode, model: this.model, cwd: this.cwd }
   }
 
   private emitStatus(): void {

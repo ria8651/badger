@@ -1,5 +1,5 @@
 import { For, Show, createEffect, createMemo, createSignal, on, onMount, untrack, type Accessor, type JSX } from 'solid-js'
-import { FolderX, GitBranch, MonitorOff, Pencil, ScrollText, WifiOff, X } from '../icons'
+import { FolderX, MonitorOff, Pencil, ScrollText, WifiOff, X } from '../icons'
 import { NO_ATTACHMENTS, type DraftAttachments, type PermissionMode, type QueuedMessage, type StartAt } from '../../shared/protocol.ts'
 import { api, connected } from '../api.ts'
 import { cardWorktreeName, isScratch, worktreeOf } from '../folders.ts'
@@ -37,7 +37,7 @@ import { BtwPane } from './Btw.tsx'
 import { TranscriptIndex, createIndex } from '../transcript/context.ts'
 import { within, type Index } from '../transcript/model.ts'
 import { NestedPane } from './NestedPane.tsx'
-import { UserMessage, commentChip } from '../transcript/items.tsx'
+import { UserMessage, WorktreeProgress, commentChip } from '../transcript/items.tsx'
 import { splitComments } from '../../shared/comments.ts'
 import { Workspace, type ChatPanes } from './Workspace.tsx'
 import { Loading, Notice, PaneBar, Segmented, touch } from './ui.tsx'
@@ -676,10 +676,7 @@ export function Chat(props: {
                   )}
                 </Show>
                 <Show when={state.makingWorktree}>
-                  <div class="mt-4 flex h-6 items-center gap-2 text-ui text-fg-3">
-                    <GitBranch class="size-3.5 shrink-0 animate-pulse" /> Making worktree
-                    <Show when={worktreeName()}>{(name) => <span class="min-w-0 truncate font-mono text-xs">{name()}</span>}</Show>
-                  </div>
+                  <WorktreeProgress name={worktreeName()} steps={state.worktreeSteps} />
                 </Show>
                 {/* Made when the last turn went unread a while, for coming back to it; it goes once the chat's working again. */}
                 <Show when={!props.host && !working() && session()?.recap}>

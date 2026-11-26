@@ -1,9 +1,9 @@
-import { For, Show, createSignal, onCleanup, type JSX } from 'solid-js'
-import { BookOpen, Bot, ChevronRight, CircleAlert, Columns3, FileText, GitBranch, KeyRound, MessageSquare, Scissors, Webhook } from '../icons'
+import { For, Index, Show, createSignal, onCleanup, type JSX } from 'solid-js'
+import { BookOpen, Bot, Check, ChevronRight, CircleAlert, Columns3, FileText, GitBranch, KeyRound, MessageSquare, Scissors, Webhook, X } from '../icons'
 import { blockquote, type SentComment } from '../../shared/comments.ts'
 import type { CardContext } from '../../shared/cardContext.ts'
 import type { Move } from '../../shared/forkNote.ts'
-import type { CardStatus } from '../../shared/protocol.ts'
+import type { CardStatus, WorktreeStep } from '../../shared/protocol.ts'
 import { basename } from '../folders.ts'
 import type { ShownImage } from '../images.ts'
 import { Link } from '../router.tsx'
@@ -31,6 +31,49 @@ export function CompactingLine(props: { since: number; tokens?: number }) {
         Compacting{props.tokens ? ` ${compact(props.tokens)} tokens` : ''} · {duration(Math.max(0, Math.round((now() - props.since) / 1000)))}
       </span>
       <div class="h-px flex-1 bg-line" />
+    </div>
+  )
+}
+
+/**
+ * Claude Code making the worktree a chat starts in: each step so far, with how long it took or has been going, and a
+ * hook's latest output while it runs. Runners from before steps were sent show just the heading.
+ */
+export function WorktreeProgress(props: { name?: string; steps?: WorktreeStep[] }) {
+  const [now, setNow] = createSignal(Date.now())
+  const timer = setInterval(() => setNow(Date.now()), 1000)
+  onCleanup(() => clearInterval(timer))
+  const secs = (ms: number) => duration(Math.max(0, Math.round(ms / 1000)))
+  return (
+    <div class="mt-4 text-ui text-fg-3">
+      <div class="flex h-6 items-center gap-2">
+        <GitBranch class="size-3.5 shrink-0 animate-pulse" /> Making worktree
+        <Show when={props.name}>{(name) => <span class="min-w-0 truncate font-mono text-xs">{name()}</span>}</Show>
+        <Show when={props.steps?.[0]}>{(first) => <span class="ml-auto shrink-0 text-xs tabular-nums">{secs(now() - first().started)}</span>}</Show>
+      </div>
+      {/* By position: each update sends every step anew, and a running step's row shouldn't start over with it. */}
+      <Index each={props.steps}>
+        {(step) => (
+          <div class="pl-5.5">
+            <div class="flex h-6 items-center gap-2">
+              <span class="grid size-3.5 shrink-0 place-items-center">
+                <Show when={step().state === 'running'} fallback={step().state === 'failed' ? <X class="size-3.5 text-danger" /> : <Check class="size-3.5" />}>
+                  <LiveDot />
+                </Show>
+              </span>
+              <span class={`min-w-0 truncate ${step().state === 'running' ? 'text-fg-2' : step().state === 'failed' ? 'text-danger' : ''}`}>{step().label}</span>
+              <span class="ml-auto shrink-0 text-xs tabular-nums">{secs(step().took ?? now() - step().started)}</span>
+            </div>
+            <Show when={step().output}>
+              {(output) => (
+                <div class={`truncate pb-1 pl-5.5 font-mono text-xs ${step().state === 'failed' ? 'text-danger' : ''}`} title={output()}>
+                  {output()}
+                </div>
+              )}
+            </Show>
+          </div>
+        )}
+      </Index>
     </div>
   )
 }
