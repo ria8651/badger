@@ -24,6 +24,7 @@
  *   accent   only for "live" or "needs you": running chats, prompts
  *   danger   errors, destructive modes, removed lines
  *   ok       added lines in diffs
+ *   changed  modified and renamed files: unlike the accent and the diff's red and green
  *   black    the dimmed backdrop behind modals and the drawer, in both themes
  *   white    controls on the image viewer, which is black in every theme
  *
@@ -63,13 +64,11 @@
   --color-fg: #1b1a18;
   --color-fg-2: #5f5d58;
   --color-fg-3: #9a9892;
-  --color-accent: #c15f3c;
-  --color-danger: #c13a2e;
-  --color-ok: #3d7a4a;
-  /* What's selected in code, drawn as a shape: unlike both the accent and the diff's red and green. */
-  --color-selection: #3b74d9;
-  /* A file changed in place, beside the diff's red and green for taken out and put in: amber, as editors have it. */
-  --color-changed: #b5851f;
+  --color-accent: #d36614;
+  --color-danger: #c53732;
+  --color-ok: #348149;
+  /* A file changed in place, beside the diff's red and green for taken out and put in: blue, as JetBrains has it, so it's never taken for the accent. */
+  --color-changed: #2a75ba;
   --color-primary: #1b1a18;
   --color-on-primary: #fafaf8;
   --color-sidebar: #fafaf8;
@@ -157,12 +156,11 @@
   --color-fg: #1b1a18;
   --color-fg-2: #5f5d58;
   --color-fg-3: #9a9892;
-  --color-accent: #c15f3c;
-  --color-danger: #c13a2e;
-  --color-ok: #3d7a4a;
-  --color-selection: #3b74d9;
-  /* A file changed in place, beside the diff's red and green for taken out and put in: amber, as editors have it. */
-  --color-changed: #b5851f;
+  --color-accent: #d36614;
+  --color-danger: #c53732;
+  --color-ok: #348149;
+  /* A file changed in place, beside the diff's red and green for taken out and put in: blue, as JetBrains has it, so it's never taken for the accent. */
+  --color-changed: #2a75ba;
   --pane-ring: rgb(0 0 0 / 0.07);
   /* Open mSupply's size: its 2xl, at its roundness. */
   --radius-composer: 1.25rem;
@@ -177,11 +175,10 @@
   --color-fg: #ecebe6;
   --color-fg-2: #b0aea8;
   --color-fg-3: #7d7b76;
-  --color-accent: #d97757;
-  --color-danger: #e26d5f;
-  --color-ok: #7cb08a;
-  --color-changed: #d6b35c;
-  --color-selection: #5b8ff0;
+  --color-accent: #f48d3c;
+  --color-danger: #e76761;
+  --color-ok: #6fc082;
+  --color-changed: #70adea;
   --pane-ring: rgb(255 255 255 / 0.1);
   --radius-composer: 1.25rem;
 }
@@ -196,11 +193,10 @@
   --color-fg: #e9e7e2;
   --color-fg-2: #a3a19b;
   --color-fg-3: #6f6d68;
-  --color-accent: #d97757;
-  --color-danger: #e26d5f;
-  --color-ok: #7cb08a;
-  --color-changed: #d6b35c;
-  --color-selection: #5b8ff0;
+  --color-accent: #f48d3c;
+  --color-danger: #e76761;
+  --color-ok: #6fc082;
+  --color-changed: #70adea;
   --pane-ring: rgb(255 255 255 / 0.1);
 }
 /* Retro terminal: green phosphor on black, amber for what's live, square corners, glow and scanlines. */
@@ -218,7 +214,6 @@
   --color-danger: #ff5f4f;
   --color-ok: #b4ffc6;
   --color-changed: #ffd166;
-  --color-selection: #4d8dff;
   --pane-ring: rgb(107 255 143 / 0.18);
   --font-sans: var(--font-mono);
   --roundness: 0;
@@ -248,7 +243,6 @@
   --color-danger: #e63535;
   --color-ok: #2e7d32;
   --color-changed: #b26a00;
-  --color-selection: #3e7bfa;
   --font-sans: "Inter Variable", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --roundness: 1.25;
   --radius-pill: 9999px;
@@ -284,7 +278,6 @@
   --color-danger: #a00000;
   --color-ok: #006400;
   --color-changed: #808000;
-  --color-selection: #000080;
   --color-button-edge: transparent;
   --color-bar: #000080;
   --color-on-bar: #fff;
@@ -309,24 +302,24 @@
  */
 [data-palette] {
   --code-foreground: currentColor;
-  --code-token-keyword: #a0456e;
-  --code-token-string: #3d7a4a;
-  --code-token-string-expression: #3d7a4a;
-  --code-token-constant: #b35a1f;
-  --code-token-function: #2f5f9e;
-  --code-token-parameter: #7a5a2f;
+  --code-token-keyword: #9b3876;
+  --code-token-string: #317a45;
+  --code-token-string-expression: #317a45;
+  --code-token-constant: #be5a0a;
+  --code-token-function: #1666aa;
+  --code-token-parameter: #6f4fa1;
   --code-token-comment: var(--color-fg-3);
   --code-token-punctuation: var(--color-fg-3);
-  --code-token-link: #2f5f9e;
+  --code-token-link: #1666aa;
 }
 [data-palette="dark"], [data-palette="black"] {
-  --code-token-keyword: #d58bb4;
-  --code-token-string: #9cc28a;
-  --code-token-string-expression: #9cc28a;
-  --code-token-constant: #e3a36f;
-  --code-token-function: #85aee0;
-  --code-token-parameter: #d9c08a;
-  --code-token-link: #85aee0;
+  --code-token-keyword: #e791c2;
+  --code-token-string: #85cf95;
+  --code-token-string-expression: #85cf95;
+  --code-token-constant: #f6ab6b;
+  --code-token-function: #82b9f2;
+  --code-token-parameter: #bea6eb;
+  --code-token-link: #82b9f2;
 }
 /* Phosphor stays green: brighter for keywords, amber for literals. */
 [data-palette="terminal"] {
@@ -393,7 +386,6 @@
     scrollbar-width: thin;
     scrollbar-color: var(--color-edge) transparent;
   }
-  ::selection { background: color-mix(in srgb, var(--color-accent) 25%, transparent); }
   :focus-visible { outline: 1.5px solid var(--color-fg-3); outline-offset: 2px; }
   .lucide { stroke-width: 1.75; }
   .theme-switching, .theme-switching * { transition: none !important; }
