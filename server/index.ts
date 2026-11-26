@@ -11,7 +11,7 @@ import { boardOps } from './boardTools.ts'
 import { Board } from './board.ts'
 import { ChatMeta } from './chatMeta.ts'
 import { Database } from './db.ts'
-import { loadDotEnv, shellEnv } from './env.ts'
+import { REPO, loadDotEnv, shellEnv } from './env.ts'
 import { apiRoutes } from './hub/api.ts'
 import { serveBrowser } from './hub/browsers.ts'
 import { Chats } from './hub/chats.ts'
@@ -51,9 +51,9 @@ const RUNNER_PING_MS = 30 * 1000
 const PORT = Number(process.env.PORT ?? 3001)
 const HOST = process.env.HOST ?? '127.0.0.1'
 const WORKSPACE_DIR = resolve(process.env.WORKSPACE_DIR ?? process.cwd())
-const DIST = resolve('dist')
+const DIST = join(REPO, 'dist')
 const sourceMaps = new SourceMaps(DIST)
-const DATA_DIR = resolve(process.env.DATA_DIR ?? 'data')
+const DATA_DIR = resolve(REPO, process.env.DATA_DIR ?? 'data')
 // Folderless chats run here. Outside DATA_DIR, which defaults to inside this repo.
 const SCRATCH_DIR = resolve(process.env.SCRATCH_DIR || join(homedir(), '.badger', 'scratch'))
 // Bound to loopback, requests are checked to be for a local name too (see sameOrigin).

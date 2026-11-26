@@ -1,4 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+/** The checkout the server runs from, wherever it was started: its `.env`, `dist` and default `data` are here. */
+export const REPO = fileURLToPath(new URL('..', import.meta.url))
 
 /** Drops what running under pnpm and Badger adds, so terminals behave like the user's own. */
 export function shellEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -16,8 +21,9 @@ export function shellEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 /** Fills in what `.env` sets that the environment doesn't already. */
 export function loadDotEnv(): void {
-  if (!existsSync('.env')) return
-  for (const line of readFileSync('.env', 'utf8').split('\n')) {
+  const file = join(REPO, '.env')
+  if (!existsSync(file)) return
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/)
     if (m && m[2] && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '')
   }
