@@ -1,10 +1,10 @@
 name: Release
 
 # Run by hand from the Actions tab: picks the next version from the latest v* tag (0.1.0 if there's none), builds
-# Badger.app from the default branch, publishes it as a GitHub release, which tags that commit, then the Docker image
-# for the same commit (see image.yml). Tags are where versions live: nothing is committed, and package.json's
-# version is only set in the build. The app is signed with the SIGNING_CERT_P12 secret (see scripts/make-cert.sh), and
-# its update with TAURI_SIGNING_PRIVATE_KEY, which installed apps check latest.json for.
+# Badger.app and the Docker image (see image.yml) from the default branch side by side, then, if both built, publishes
+# the app as a GitHub release, which tags that commit. Tags are where versions live: nothing is committed, and
+# package.json's version is only set in the build. The app is signed with the SIGNING_CERT_P12 secret (see
+# scripts/make-cert.sh), and its update with TAURI_SIGNING_PRIVATE_KEY, which installed apps check latest.json for.
 
 on:
   workflow_dispatch:
@@ -134,8 +134,18 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # A tag pushed by this workflow's token wouldn't start image.yml, so it's called here instead, alongside the app.
+  # If the app fails, the image's version tag is left without a release, but no git tag is made either, so the next
+  # run picks the same version and replaces it.
+  image:
+    needs: version
+    uses: ./.github/workflows/image.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+    secrets: inherit
+
   publish:
-    needs: [version, macos]
+    needs: [version, macos, image]
     runs-on: ubuntu-24.04
     env:
       VERSION: ${{ needs.version.outputs.version }}
@@ -163,7 +173,7 @@ jobs:
           cat > notes.md <<'EOF'
           **macOS (Apple Silicon):** download the `.dmg` and drag Badger to Applications. It's self-signed, not notarised by Apple, so macOS won't open it the first time: open it once, then **System Settings → Privacy & Security → Open Anyway**. Once installed it updates itself, keeping what you've allowed it.
 
-          **Docker:** `ghcr.io/${{ github.repository_owner }}/badger:${{ env.VERSION }}`, once the image job below finishes.
+          **Docker:** `ghcr.io/${{ github.repository_owner }}/badger:${{ env.VERSION }}`
           EOF
           gh release create "v$VERSION" out/* \
             --repo "$GITHUB_REPOSITORY" \
@@ -173,11 +183,3 @@ jobs:
             --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # A tag pushed by this workflow's token doesn't start image.yml, so it's called here instead.
-  image:
-    needs: [version, publish]
-    uses: ./.github/workflows/image.yml
-    with:
-      version: ${{ needs.version.outputs.version }}
-    secrets: inherit
