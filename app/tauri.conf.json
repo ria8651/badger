@@ -23,7 +23,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVGQTRBNTUzOURGQzc4ODAKUldTQWVQeWRVNldrWDVPbERQMGlHRGNCb3huRmJtZWtod1k0K0M1YU5sbHZHMmRUeFdKd2dSZDEK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ0RTczQTlCMTQ4REM5M0EKUldRNnlZMFVtenJuUkF6TXRDRndHZVBDVFUxSjB5ckkydlBBaXZORWh0a0FTNU9KN0xDaFdlejQK",
       "endpoints": ["https://github.com/ria8651/badger/releases/latest/download/latest.json"]
     }
   }
