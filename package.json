@@ -1,12 +1,14 @@
 {
   "name": "badger",
-  "version": "1.0.0",
+  "version": "0.0.0",
   "scripts": {
     "dev": "concurrently -k --handle-input -n server,web -c blue,magenta \"node scripts/dev-server.mjs\" \"vite\"",
     "build": "vite build",
     "start": "NODE_ENV=production tsx server/index.ts",
     "remote": "tsx server/remote.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "app:dev": "tauri dev",
+    "app:build": "node scripts/build-app.mjs"
   },
   "type": "module",
   "dependencies": {
@@ -21,6 +23,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
+    "@tauri-apps/cli": "^2.12.6",
     "@tiptap/core": "^3.31.4",
     "@tiptap/extension-image": "^3.31.4",
     "@tiptap/extension-link": "^3.31.4",

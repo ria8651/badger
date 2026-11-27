@@ -58,6 +58,12 @@ pnpm dev               # server on :3001, Vite on :5173
 
 Production: `pnpm build && pnpm start`. Claude auth comes from `ANTHROPIC_API_KEY` if set, otherwise from the server user's `claude` login.
 
+### macOS app
+
+Download the `.dmg` from the [latest release](https://github.com/ria8651/badger/releases/latest) (Apple Silicon). It runs its own Badger on port 3001 (it says so if something else is using it), with its data in `~/Library/Application Support/com.ria8651.badger`. To open another instead, use Connection → Connect to a Hub…: a hub elsewhere, or `localhost:3001` for one running from a checkout, and tick "Run chats on this Mac too" to make this Mac one of its runners as well (with a token from the hub's Settings → Runners). It's self-signed, not notarised, so the first time macOS won't open it: open it once, then System Settings → Privacy & Security → Open Anyway. After that it updates itself: new releases download in the background and install when you quit it, or straight away from Badger → Restart to Update.
+
+To build it yourself: `pnpm app:build` (needs Rust), which signs it with the certificate `scripts/make-cert.sh` makes, or ad-hoc without one. Releases are made by running the Release workflow, which picks the next version, publishes the app and pushes the Docker image tagged with it.
+
 ### Runners on other machines
 
 Chats and terminals can run on other machines too, next to their files, while the board, chat list and terminals stay in the one Badger (the **hub**). In Settings (the gear in the sidebar) → Runners, click **Add runner** and run the command it shows from a Badger checkout on the other machine:

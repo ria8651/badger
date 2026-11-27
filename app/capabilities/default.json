@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What Badger's page may ask of the app, served by the app's own Badger. A hub gets the same at runtime (connection.rs).",
+  "windows": ["main-*"],
+  "remote": {
+    "urls": ["http://localhost:*/*", "http://127.0.0.1:*/*"]
+  },
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize",
+    "allow-set-badge",
+    "allow-notify",
+    "allow-place-traffic-lights",
+    "allow-update-ready",
+    "allow-restart-for-update"
+  ]
+}

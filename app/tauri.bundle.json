@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": {
+      "resources/badger": "badger",
+      "resources/node": "node"
+    }
+  }
+}
