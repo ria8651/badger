@@ -1,3 +1,5 @@
+import { createSignal } from 'solid-js'
+
 /**
  * The macOS app (app/ in this repo): what it offers the page, which app/inject.js puts on `window.badgerApp` before
  * the page loads. In a browser there's none of it, and the page carries on as a web page.
@@ -14,6 +16,12 @@ interface BadgerApp {
   toggleZoom(): void
   /** Puts the traffic lights in the sidebar's bar: in from its left edge, and centred on its middle, in points. */
   placeTrafficLights(left: number, middle: number): void
+  /** The version of an update that's downloaded and waiting to be installed, if there is one. */
+  updateReady(): Promise<string | null | undefined>
+  /** Calls `listener` once an update's downloaded. */
+  onUpdateReady(listener: (version: string) => void): void
+  /** Installs the waiting update and starts the app again, asking first if that would stop chats. */
+  restartToUpdate(): void
 }
 
 declare global {
@@ -23,6 +31,14 @@ declare global {
 }
 
 export const app = window.badgerApp
+
+/** The version of the app's update waiting to be installed: the sidebar offers to restart for it. */
+const [updateReady, setUpdateReady] = createSignal<string>()
+export { updateReady }
+if (app) {
+  void app.updateReady().then((version) => version && setUpdateReady(version))
+  app.onUpdateReady(setUpdateReady)
+}
 
 // ── Moving the window ──
 

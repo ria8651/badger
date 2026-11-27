@@ -16,7 +16,13 @@
     startDrag: () => invoke('plugin:window|start_dragging'),
     toggleZoom: () => invoke('plugin:window|internal_toggle_maximize'),
     placeTrafficLights: (left, middle) => invoke('place_traffic_lights', { left, middle }),
+    updateReady: () => invoke('update_ready'),
+    restartToUpdate: () => invoke('restart_for_update'),
+    onUpdateReady: (listener) => (updateListener = listener),
   }
+  let updateListener
+  // The app calls this once an update's downloaded.
+  window.__badgerUpdateReady = (version) => updateListener?.(version)
   // The app calls this once a notification is clicked or dismissed.
   window.__badgerNotification = (id, clicked) => {
     const onClick = clicks.get(id)

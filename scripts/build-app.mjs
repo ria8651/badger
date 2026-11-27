@@ -3,11 +3,13 @@
 //
 //   --dmg       also make a disk image, in app/target/release/bundle/dmg
 //   --release   fail rather than sign ad-hoc when the certificate's missing
+//   --updater   also pack the app for the updater, Badger.app.tar.gz, signed with the update key (see below)
 //
 // Anything else goes to `tauri build`.
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmodSync, cpSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 const STAGE = 'app/resources'
@@ -70,7 +72,7 @@ chmodSync(join(STAGE, 'node'), 0o755)
 // Tauri copies the resources next to the binary too, and can't copy over a read-only file an earlier build left.
 for (const name of ['badger', 'node']) rmSync(join('app/target/release', name), { recursive: true, force: true })
 
-run('pnpm', ['exec', 'tauri', 'build', '--config', 'app/tauri.bundle.json', ...args.filter((a) => !['--dmg', '--release'].includes(a))])
+run('pnpm', ['exec', 'tauri', 'build', '--config', 'app/tauri.bundle.json', ...args.filter((a) => !['--dmg', '--release', '--updater'].includes(a))])
 
 // Signed with the certificate, what you've allowed the app (like ~/Documents) carries over to the next build;
 // signed ad-hoc, it's asked again every time. --deep signs the Node and Claude binaries inside it too.
@@ -85,6 +87,19 @@ if (succeeds('security', ['find-certificate', '-c', IDENTITY])) {
   run('codesign', ['--force', '--deep', '--sign', '-', APP])
 }
 run('codesign', ['--verify', '--deep', '--strict', APP])
+
+// What the app's updater downloads, packed after signing so it's the signed app. The update key that signs it is
+// the TAURI_SIGNING_PRIVATE_KEY secret in CI, or ~/.tauri/badger-updater.key here; the app has its public half
+// (tauri.conf.json) and won't install anything else.
+if (flag('--updater')) {
+  const archive = join(BUNDLE, 'macos/Badger.app.tar.gz')
+  execFileSync('tar', ['-czf', archive, '-C', join(BUNDLE, 'macos'), 'Badger.app'], { stdio: 'inherit', env: { ...process.env, COPYFILE_DISABLE: '1' } })
+  const key = process.env.TAURI_SIGNING_PRIVATE_KEY ? [] : ['-f', join(homedir(), '.tauri/badger-updater.key')]
+  execFileSync('pnpm', ['exec', 'tauri', 'signer', 'sign', ...key, archive], {
+    stdio: 'inherit',
+    env: { TAURI_SIGNING_PRIVATE_KEY_PASSWORD: '', ...process.env },
+  })
+}
 
 // Made here rather than by Tauri, whose disk image scripts the Finder to lay its window out.
 if (flag('--dmg')) {

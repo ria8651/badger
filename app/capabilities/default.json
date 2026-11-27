@@ -12,6 +12,8 @@
     "core:window:allow-internal-toggle-maximize",
     "allow-set-badge",
     "allow-notify",
-    "allow-place-traffic-lights"
+    "allow-place-traffic-lights",
+    "allow-update-ready",
+    "allow-restart-for-update"
   ]
 }

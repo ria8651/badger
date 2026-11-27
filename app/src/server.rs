@@ -84,6 +84,25 @@ pub fn stop(app: &AppHandle) {
     }
 }
 
+/// How many chats are working on the app's Badger, as its machines say; 0 if it doesn't answer.
+pub fn running_chats(config: &Config) -> u64 {
+    let port = config.port.unwrap_or(DEFAULT_PORT);
+    let Ok(mut s) = TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_millis(500)) else {
+        return 0;
+    };
+    let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
+    // HTTP/1.0, so the answer comes whole rather than chunked, and ends when the connection does.
+    let origin = format!("localhost:{port}");
+    let request = format!("GET /api/machines HTTP/1.0\r\nHost: {origin}\r\nOrigin: http://{origin}\r\n\r\n");
+    let mut response = String::new();
+    if s.write_all(request.as_bytes()).is_err() || s.read_to_string(&mut response).is_err() {
+        return 0;
+    }
+    let body = response.split_once("\r\n\r\n").map_or("", |(_, body)| body);
+    let machines: Vec<serde_json::Value> = serde_json::from_str(body).unwrap_or_default();
+    machines.iter().filter_map(|m| m["running"].as_u64()).sum()
+}
+
 /// Whether a Badger answers on the port: its config endpoint, not just anything listening.
 fn answers(port: u16) -> bool {
     let Ok(mut s) = TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_millis(500)) else {

@@ -7,6 +7,7 @@ mod connection;
 mod node;
 mod runner;
 mod server;
+mod updater;
 mod window;
 
 use std::thread;
@@ -16,13 +17,17 @@ use tauri::{Manager, RunEvent, WebviewWindow, WindowEvent};
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(server::Server::default())
         .manage(runner::Runner::default())
         .manage(connection::State::default())
+        .manage(updater::Pending::default())
         .invoke_handler(tauri::generate_handler![
             set_badge,
             notify,
             window::place_traffic_lights,
+            updater::update_ready,
+            updater::restart_for_update,
             connection::loading_state,
             connection::has_token,
             connection::connect,
@@ -33,6 +38,7 @@ fn main() {
             let window = window::build(app.handle(), None, None)?;
             connection::remember_loading_page(app.handle(), window.url()?);
             connection::open(app.handle());
+            updater::start(app.handle());
             Ok(())
         })
         .on_menu_event(connection::on_menu)
@@ -51,6 +57,7 @@ fn main() {
         RunEvent::Exit => {
             runner::stop(app);
             server::stop(app);
+            updater::install(app);
         }
         _ => {}
     });

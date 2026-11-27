@@ -17,23 +17,25 @@ use std::{
 use serde::Serialize;
 use tauri::{
     ipc::CapabilityBuilder,
-    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
+    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, MenuItemKind, PredefinedMenuItem, Submenu},
     AppHandle, Manager, Runtime, Url,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 use crate::{
     config::{self, Config, Connection},
-    node, runner, server, window,
+    node, runner, server, updater, window,
 };
 
 /// What Badger's page may ask of the app, wherever it's served from (capabilities/default.json says so for localhost).
-const PAGE_PERMISSIONS: [&str; 5] = [
+const PAGE_PERMISSIONS: [&str; 7] = [
     "core:window:allow-start-dragging",
     "core:window:allow-internal-toggle-maximize",
     "allow-set-badge",
     "allow-notify",
     "allow-place-traffic-lights",
+    "allow-update-ready",
+    "allow-restart-for-update",
 ];
 /// How long a hub gets to answer before the window says it can't reach it.
 const REACH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -158,6 +160,11 @@ pub fn rebuild_menu(app: &AppHandle, config: &Config) {
     let build = || -> tauri::Result<Menu<_>> {
         let menu = Menu::default(app)?;
         menu.insert(&connection_menu(app, config)?, MENU_POSITION)?;
+        // Under About in the app's own menu, once an update's downloaded.
+        if let (Some(version), Some(MenuItemKind::Submenu(app_menu))) = (updater::version(app), menu.items()?.first()) {
+            let label = format!("Restart to Update to {version}…");
+            app_menu.insert(&MenuItem::with_id(app, "update", label, true, None::<&str>)?, 1)?;
+        }
         Ok(menu)
     };
     if let Ok(menu) = build() {
@@ -211,6 +218,7 @@ pub fn on_menu(app: &AppHandle, event: MenuEvent) {
                 }
             });
         }
+        "update" => updater::restart_to_update(app),
         "logs" => {
             if let Ok(dir) = node::log_path(app, "") {
                 let _ = Command::new("/usr/bin/open").arg(dir).spawn();

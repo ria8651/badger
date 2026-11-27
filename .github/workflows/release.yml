@@ -3,7 +3,8 @@ name: Release
 # Run by hand from the Actions tab: picks the next version from the latest v* tag (0.1.0 if there's none), builds
 # Badger.app from the default branch, publishes it as a GitHub release, which tags that commit, then the Docker image
 # for the same commit (see image.yml). Tags are where versions live: nothing is committed, and package.json's
-# version is only set in the build. The app is signed with the SIGNING_CERT_P12 secret (see scripts/make-cert.sh).
+# version is only set in the build. The app is signed with the SIGNING_CERT_P12 secret (see scripts/make-cert.sh), and
+# its update with TAURI_SIGNING_PRIVATE_KEY, which installed apps check latest.json for.
 
 on:
   workflow_dispatch:
@@ -97,7 +98,16 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
           rm -f "$RUNNER_TEMP/cert.p12"
 
-      - run: pnpm app:build --release --dmg
+      # The update key signs Badger.app.tar.gz, which installed apps download; they have its public half.
+      - name: Build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY isn't set (~/.tauri/badger-updater.key). Without it, installed apps can't update."
+            exit 1
+          fi
+          pnpm app:build --release --dmg --updater
 
       - name: Check it's signed with the certificate
         working-directory: app/target/release/bundle
@@ -108,12 +118,14 @@ jobs:
           fi
           codesign -d --requirements - macos/Badger.app 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Zip the app too
+      - name: Zip the app too, and gather what's released
         working-directory: app/target/release/bundle
         run: |
           mkdir -p "$RUNNER_TEMP/out"
           ditto -c -k --sequesterRsrc --keepParent macos/Badger.app "$RUNNER_TEMP/out/Badger_${VERSION}_aarch64.app.zip"
           cp dmg/*.dmg "$RUNNER_TEMP/out/"
+          cp macos/Badger.app.tar.gz "$RUNNER_TEMP/out/Badger_${VERSION}_aarch64.app.tar.gz"
+          cp macos/Badger.app.tar.gz.sig "$RUNNER_TEMP/out/Badger_${VERSION}_aarch64.app.tar.gz.sig"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -133,10 +145,23 @@ jobs:
           name: macos
           path: out
 
+      # What installed apps check (tauri.conf.json): this release's version, its update and that update's signature.
+      # The latest release's is at releases/latest/download/latest.json.
+      - name: Describe the update
+        run: |
+          jq -n \
+            --arg version "$VERSION" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg signature "$(cat "out/Badger_${VERSION}_aarch64.app.tar.gz.sig")" \
+            --arg url "https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION/Badger_${VERSION}_aarch64.app.tar.gz" \
+            '{version: $version, pub_date: $date, platforms: {"darwin-aarch64": {signature: $signature, url: $url}}}' \
+            > out/latest.json
+          cat out/latest.json
+
       - name: Publish the release, tagging the commit it was built from
         run: |
           cat > notes.md <<'EOF'
-          **macOS (Apple Silicon):** download the `.dmg` and drag Badger to Applications. It's self-signed, not notarised by Apple, so macOS won't open it the first time: open it once, then **System Settings → Privacy & Security → Open Anyway**. Updates keep what you've allowed it.
+          **macOS (Apple Silicon):** download the `.dmg` and drag Badger to Applications. It's self-signed, not notarised by Apple, so macOS won't open it the first time: open it once, then **System Settings → Privacy & Security → Open Anyway**. Once installed it updates itself, keeping what you've allowed it.
 
           **Docker:** `ghcr.io/${{ github.repository_owner }}/badger:${{ env.VERSION }}`, once the image job below finishes.
           EOF

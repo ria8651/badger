@@ -1,9 +1,9 @@
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, type Component, type JSX } from 'solid-js'
 import { Dynamic } from 'solid-js/web'
-import { Archive, ArchiveRestore, Bell, BellOff, Bot, ChevronDown, ChevronRight, Columns3, FolderInput, Loader2, MessagesSquare, Pencil, Plus, Radar as RadarIcon, Search, Settings as SettingsIcon, Trash2, X } from '../icons'
+import { Archive, ArchiveRestore, Bell, BellOff, Bot, ChevronDown, ChevronRight, CircleArrowUp, Columns3, FolderInput, Loader2, MessagesSquare, Pencil, Plus, Radar as RadarIcon, Search, Settings as SettingsIcon, Trash2, X } from '../icons'
 import type { Card, NestedChat, SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
-import { app } from '../app.ts'
+import { app, updateReady } from '../app.ts'
 import { createArchivedList } from '../archivedList.ts'
 import { attention, needsYou, notifications, toggleNotifications } from '../attention.ts'
 import { searchChats } from '../chatSearch.ts'
@@ -169,6 +169,19 @@ export function Sidebar(props: {
           <img src="/favicon.svg" alt="" class="size-5" />
           <span class="font-medium tracking-tight">Badger</span>
         </Show>
+        <span class="flex-1" />
+        <Show when={updateReady()}>
+          {(version) => (
+            <button
+              onClick={() => app?.restartToUpdate()}
+              title={`Badger ${version()} is ready: restart to update`}
+              class="flex h-7 items-center gap-1.5 rounded-button-md px-2 text-ui text-fg-2 transition-colors hover:bg-surface hover:text-fg pointer-coarse:h-10"
+            >
+              <CircleArrowUp class="size-4" />
+              Update
+            </button>
+          )}
+        </Show>
         <button
           onClick={toggleNotifications}
           disabled={notifications() === 'blocked'}
@@ -179,7 +192,7 @@ export function Sidebar(props: {
                 ? 'Notifications are blocked in this browser, or need https'
                 : 'Turn on notifications'
           }
-          class="ml-auto grid size-7 place-items-center rounded-button-md text-fg-3 transition-colors hover:bg-surface hover:text-fg disabled:opacity-40 pointer-coarse:size-10"
+          class="grid size-7 place-items-center rounded-button-md text-fg-3 transition-colors hover:bg-surface hover:text-fg disabled:opacity-40 pointer-coarse:size-10"
         >
           <Show when={notifications() === 'on'} fallback={<BellOff class="size-4" />}>
             <Bell class="size-4" />
