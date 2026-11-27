@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>Badger runs Claude, git and your terminals in the repos you open, including ones in Documents.</string>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>Badger runs Claude, git and your terminals in the repos you open, including ones on the Desktop.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>Badger runs Claude, git and your terminals in the folders you open, including ones in Downloads.</string>
+  <key>NSRemovableVolumesUsageDescription</key>
+  <string>Badger runs Claude, git and your terminals in the folders you open, including ones on external drives.</string>
+  <key>NSNetworkVolumesUsageDescription</key>
+  <string>Badger runs Claude, git and your terminals in the folders you open, including ones on network drives.</string>
+</dict>
+</plist>

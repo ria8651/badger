@@ -496,7 +496,7 @@ export function Workspace(props: {
     const focused = () => current() === g().id
     return (
       <div class="pane absolute flex flex-col" style={place(boxOf(g().id)!)} onPointerDown={() => focusLeaf(g().id)}>
-        <div class="flex shrink-0 items-center gap-0.5 px-1.5" style={{ height: `${BAR}px` }}>
+        <div data-drag-window class="flex shrink-0 items-center gap-0.5 px-1.5" style={{ height: `${BAR}px` }}>
           {/* A mouse wheel only scrolls vertically, so turn that into scrolling along the tabs. */}
           <div
             data-tabs={g().id}

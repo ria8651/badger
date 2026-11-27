@@ -1,6 +1,7 @@
 import { createMemo, createRoot, createSignal } from 'solid-js'
 import type { AttentionState } from '../shared/protocol.ts'
 import { track } from './activity.ts'
+import { app } from './app.ts'
 import { socket } from './api.ts'
 import { sessions } from './stores/sessions.ts'
 
@@ -42,12 +43,13 @@ addEventListener('blur', look)
 document.addEventListener('visibilitychange', look)
 export { looking }
 
-// ── Browser notifications ──
+// ── Notifications: the browser's, or the macOS app's, which needs no permission from the page ──
 
 const NOTIFY_KEY = 'badger.notify'
 const supported = typeof Notification !== 'undefined'
+const currentPermission = (): NotificationPermission => (app ? 'granted' : supported ? Notification.permission : 'denied')
 
-const [permission, setPermission] = createSignal<NotificationPermission>(supported ? Notification.permission : 'denied')
+const [permission, setPermission] = createSignal(currentPermission())
 const [wanted, setWanted] = createSignal(localStorage.getItem(NOTIFY_KEY) === '1')
 
 /** On, off, or blocked: unsupported here (needs https or localhost) or refused in the browser's settings. */
@@ -60,8 +62,7 @@ export async function toggleNotifications(): Promise<void> {
     localStorage.removeItem(NOTIFY_KEY)
     return
   }
-  if (!supported) return
-  setPermission(Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission)
+  setPermission(currentPermission() === 'default' ? await Notification.requestPermission() : currentPermission())
   if (permission() !== 'granted') return
   setWanted(true)
   localStorage.setItem(NOTIFY_KEY, '1')
@@ -74,12 +75,16 @@ export async function toggleNotifications(): Promise<void> {
  */
 export function notify(sessionId: string, title: string, body: string, onClick: () => void): void {
   if (notifications() !== 'on' || looking()) return
-  const n = new Notification(title, { body, tag: sessionId })
   track('notification.shown', sessionId)
-  n.onclick = () => {
+  const clicked = () => {
     track('notification.clicked', sessionId)
-    focus()
     onClick()
+  }
+  if (app) return app.notify(title, body, clicked)
+  const n = new Notification(title, { body, tag: sessionId })
+  n.onclick = () => {
+    focus()
+    clicked()
     n.close()
   }
 }

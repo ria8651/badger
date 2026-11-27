@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "local",
+  "description": "What the app's own loading page, with the hub form, may ask of it.",
+  "windows": ["main-*"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize",
+    "allow-loading-state",
+    "allow-has-token",
+    "allow-connect",
+    "allow-reopen"
+  ]
+}

@@ -3,6 +3,7 @@ import { Dynamic } from 'solid-js/web'
 import { Archive, ArchiveRestore, Bell, BellOff, Bot, ChevronDown, ChevronRight, Columns3, FolderInput, Loader2, MessagesSquare, Pencil, Plus, Radar as RadarIcon, Search, Settings as SettingsIcon, Trash2, X } from '../icons'
 import type { Card, NestedChat, SessionSummary } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
+import { app } from '../app.ts'
 import { createArchivedList } from '../archivedList.ts'
 import { attention, needsYou, notifications, toggleNotifications } from '../attention.ts'
 import { searchChats } from '../chatSearch.ts'
@@ -163,8 +164,11 @@ export function Sidebar(props: {
   return (
     <>
       <div class="bar flex h-12 shrink-0 items-center gap-2 px-4">
-        <img src="/favicon.svg" alt="" class="size-5" />
-        <span class="font-medium tracking-tight">Badger</span>
+        {/* In the app, the traffic lights take this spot and the Dock shows which app it is. */}
+        <Show when={!app}>
+          <img src="/favicon.svg" alt="" class="size-5" />
+          <span class="font-medium tracking-tight">Badger</span>
+        </Show>
         <button
           onClick={toggleNotifications}
           disabled={notifications() === 'blocked'}
