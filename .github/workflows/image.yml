@@ -1,7 +1,8 @@
 name: Image
 
 # Builds the Docker image and pushes it to ghcr.io/<owner>/badger:
-# `latest` and `sha-…` from the default branch, `1.2.3` / `1.2` from `v*` tags.
+# `latest` and `sha-…` from the default branch, `1.2.3` / `1.2` from `v*` tags,
+# or from the version release.yml passes when it calls this.
 # Each arch builds on its own native runner (QEMU emulation is slow), then a
 # manifest list joins them.
 
@@ -11,13 +12,20 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: The release's version, e.g. 1.2.3, for when the commit isn't checked out from its tag
+        type: string
+        required: true
 
 permissions:
   contents: read
   packages: write
 
+# A release's build has a group of its own, so a push meanwhile doesn't cancel it.
 concurrency:
-  group: image-${{ github.ref }}
+  group: image-${{ github.ref }}${{ inputs.version && format('-v{0}', inputs.version) || '' }}
   cancel-in-progress: true
 
 env:
@@ -118,8 +126,8 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=${{ inputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
 
       - name: Push the manifest list
         working-directory: /tmp/digests

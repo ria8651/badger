@@ -1,6 +1,6 @@
 {
   "name": "badger",
-  "version": "1.0.0",
+  "version": "0.0.0",
   "scripts": {
     "dev": "concurrently -k --handle-input -n server,web -c blue,magenta \"node scripts/dev-server.mjs\" \"vite\"",
     "build": "vite build",
