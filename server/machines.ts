@@ -273,6 +273,19 @@ export class Machines {
       .run(machine, path, now, now)
   }
 
+  /** A folder moved: it and those inside it are listed, or hidden, where they are now. */
+  moveFolder(machine: string, from: string, to: string): void {
+    const rows = this.db
+      .prepare('SELECT path, added_at, hidden_at FROM machine_folders WHERE machine = ? AND (path = ? OR substr(path, 1, ?) = ?)')
+      .all(machine, from, from.length + 1, `${from}/`) as { path: string; added_at: number; hidden_at: number | null }[]
+    for (const r of rows) {
+      this.db.prepare('DELETE FROM machine_folders WHERE machine = ? AND path = ?').run(machine, r.path)
+      this.db
+        .prepare('INSERT OR REPLACE INTO machine_folders (machine, path, added_at, hidden_at) VALUES (?, ?, ?, ?)')
+        .run(machine, to + r.path.slice(from.length), r.added_at, r.hidden_at)
+    }
+  }
+
   /** Which machine a runner's token is for, if any. */
   byToken(token: string): string | undefined {
     const row = this.db.prepare('SELECT id FROM machines WHERE token_hash = ?').get(hash(token)) as { id: string } | undefined

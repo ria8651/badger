@@ -34,6 +34,8 @@ export function FileBrowser(props: {
   start?: string
   onClose: () => void
   onPickFolder?: (path: string) => void | Promise<void>
+  /** What picking a folder is called; "Add this folder" if not given. */
+  pickLabel?: string
   onPickFiles?: (paths: string[]) => void
   /** Offered in files mode, to pick from this device instead. */
   onUpload?: () => void
@@ -249,7 +251,7 @@ export function FileBrowser(props: {
             <>
               <span class="min-w-0 flex-1 truncate text-left font-mono text-meta text-fg-3 [direction:rtl]">{ltr(current())}</span>
               <Button primary disabled={busy() || !listing.latest} onClick={() => pickFolder(current())}>
-                Add this folder
+                {props.pickLabel ?? 'Add this folder'}
               </Button>
             </>
           }

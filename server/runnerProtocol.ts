@@ -18,6 +18,7 @@ import type {
   Listing,
   LiveState,
   ModelOption,
+  MovedFolder,
   NestedChat,
   PermissionMode,
   QueuedMessage,
@@ -40,7 +41,7 @@ import type { CreateSpec } from './ptyProtocol.ts'
  * Runners and the hub are updated separately, so bump this when either side
  * would misread the other; the hub turns away runners on another version.
  */
-export const RUNNER_PROTOCOL = 11
+export const RUNNER_PROTOCOL = 12
 
 /** Header a runner sends its protocol version in, so a mismatch is caught before the upgrade. */
 export const PROTOCOL_HEADER = 'x-badger-protocol'
@@ -199,6 +200,8 @@ export interface RunnerApi {
   /** The folders new chats can start in: these, from where its chats ran and what was added by hand, less the hidden ones. */
   listFolders(used: [string, number][], added: [string, number][], hidden: string[]): Promise<Folder[]>
   folderSize(path: string): Promise<number>
+  /** Moves `from` to `to`, or catches up with it moved there already, for these of its chats (see moveFolder). Refused while anything runs in it. */
+  moveFolder(from: string, to: string, chats: string[]): Promise<MovedFolder>
   listDir(path: string | undefined, hidden: boolean): Promise<Listing>
   makeDir(path: string): Promise<string>
   readFile(path: string): Promise<FileData>
@@ -239,6 +242,7 @@ export const RUNNER_METHODS = [
   'removeWorktree',
   'listFolders',
   'folderSize',
+  'moveFolder',
   'listDir',
   'makeDir',
   'readFile',

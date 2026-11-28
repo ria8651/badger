@@ -79,6 +79,8 @@ export class LiveSession {
   private idleTimer: NodeJS.Timeout | null = null
   private bash: BashStreams
   private onClose: () => void
+  /** Settles once its process has ended and it has left the registry, e.g. after close(). */
+  readonly ended: Promise<void>
   /** Its cwd changed or it started or finished working. */
   private onChange: () => void
   private onTurnEnd: () => void
@@ -167,7 +169,7 @@ export class LiveSession {
         },
       }),
     })
-    void this.pump()
+    this.ended = this.pump()
   }
 
   subscribe(listener: Listener): () => void {

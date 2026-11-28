@@ -21,6 +21,15 @@ export async function sessionInfo(sessionId: string): Promise<SDKSessionInfo | u
   return { sessionId, summary: '', lastModified: Math.floor(mtimeMs), fileSize: size, ...info, cwd: found.cwd }
 }
 
+/** Where a chat's transcript is on this machine: Claude Code finds it in whichever project folder it's in, and so does this. */
+export async function transcriptPath(sessionId: string): Promise<string | undefined> {
+  for (const project of await readdir(projectsDir()).catch(() => [] as string[])) {
+    const path = join(projectsDir(), project, `${sessionId}.jsonl`)
+    if (await stat(path).then((s) => s.isFile(), () => false)) return path
+  }
+  return undefined
+}
+
 /** The folder in the first transcript line that has one, and the transcript it's in. */
 async function transcriptCwd(sessionId: string): Promise<{ cwd: string; path: string } | undefined> {
   for (const project of await readdir(projectsDir()).catch(() => [] as string[])) {

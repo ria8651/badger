@@ -199,6 +199,18 @@ export class ChatMeta {
     this.db.sql.prepare('UPDATE forks SET note = NULL WHERE session_id = ?').run(sessionId)
   }
 
+  /** A folder on a machine moved: drafts set to start in or inside it, and forks yet to, start where it is now. */
+  moveFolder(machine: string, from: string, to: string): void {
+    const inside = 'cwd = ? OR substr(cwd, 1, ?) = ?'
+    const args = [from, from.length + 1, `${from}/`]
+    this.db.transaction(() => {
+      this.db.sql.prepare(`UPDATE session_drafts SET cwd = ? || substr(cwd, ?) WHERE machine = ? AND (${inside})`).run(to, from.length + 1, machine, ...args)
+      this.db.sql
+        .prepare(`UPDATE forks SET cwd = ? || substr(cwd, ?) WHERE session_id IN (SELECT session_id FROM chat_machines WHERE machine = ?) AND (${inside})`)
+        .run(to, from.length + 1, machine, ...args)
+    })
+  }
+
   removeFork(sessionId: string): void {
     this.db.sql.prepare('DELETE FROM forks WHERE session_id = ?').run(sessionId)
   }
