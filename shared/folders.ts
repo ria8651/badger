@@ -12,3 +12,6 @@ export function folderLabelOf(cwd: string, scratch: boolean): string {
   const wt = worktreeOf(cwd)
   return wt ? `${basename(wt.repo)} · ${wt.name}` : basename(cwd)
 }
+
+/** Whether `path` is `dir` or inside it. */
+export const within = (path: string, dir: string) => path === dir || path.startsWith(`${dir}/`)

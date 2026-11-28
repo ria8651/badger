@@ -275,15 +275,10 @@ export class Machines {
 
   /** A folder moved: it and those inside it are listed, or hidden, where they are now. */
   moveFolder(machine: string, from: string, to: string): void {
-    const rows = this.db
-      .prepare('SELECT path, added_at, hidden_at FROM machine_folders WHERE machine = ? AND (path = ? OR substr(path, 1, ?) = ?)')
-      .all(machine, from, from.length + 1, `${from}/`) as { path: string; added_at: number; hidden_at: number | null }[]
-    for (const r of rows) {
-      this.db.prepare('DELETE FROM machine_folders WHERE machine = ? AND path = ?').run(machine, r.path)
-      this.db
-        .prepare('INSERT OR REPLACE INTO machine_folders (machine, path, added_at, hidden_at) VALUES (?, ?, ?, ?)')
-        .run(machine, to + r.path.slice(from.length), r.added_at, r.hidden_at)
-    }
+    // In SQL's own counting of characters, which a path with an emoji in it would throw out in JavaScript's.
+    this.db
+      .prepare('UPDATE OR REPLACE machine_folders SET path = ?1 || substr(path, length(?2) + 1) WHERE machine = ?3 AND (path = ?2 OR substr(path, 1, length(?2) + 1) = ?2 || \'/\')')
+      .run(to, from, machine)
   }
 
   /** Which machine a runner's token is for, if any. */

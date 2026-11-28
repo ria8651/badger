@@ -2,19 +2,37 @@ import { existsSync, statSync } from 'node:fs'
 import { appendFile, mkdir, readdir, rename } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { MovedFolder } from '../shared/protocol.ts'
+import { within } from '../shared/folders.ts'
+import { message } from './errors.ts'
 import { git } from './repo.ts'
 import { sessionInfo, transcriptPath } from './sessionInfo.ts'
 import { projectsDir } from './sync.ts'
 import { inaccessible } from './workspace.ts'
-
-/** Whether `path` is `dir` or inside it. */
-export const within = (path: string, dir: string) => path === dir || path.startsWith(`${dir}/`)
 
 /** Where `path`, in or inside `from`, is once `from` is at `to`. */
 const moved = (path: string, from: string, to: string) => to + path.slice(from.length)
 
 /** Claude Code's project folder for a directory: its transcripts and memory. */
 const projectOf = (dir: string) => join(projectsDir(), dir.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 200))
+
+/**
+ * Whether moving `from` to `to` can go ahead, asked before anything is done
+ * towards it: true if it's to be moved, false if it has been already.
+ */
+export function checkMove(from: string, to: string): boolean {
+  if (from === to) throw new Error("That's where it is already")
+  if (within(to, from)) throw new Error("A folder can't go inside itself")
+  if (inaccessible(from)) {
+    if (inaccessible(to)) throw new Error(`Neither ${from} nor ${to} is there`)
+    return false
+  }
+  // On a disk that ignores case, renaming Foo to foo finds foo there already: it's the same folder.
+  const there = statSync(to, { throwIfNoEntry: false })
+  const self = statSync(from)
+  if (there && !(there.dev === self.dev && there.ino === self.ino)) throw new Error(`${to} is there already`)
+  if (!statSync(dirname(to), { throwIfNoEntry: false })?.isDirectory()) throw new Error(`${dirname(to)} isn't a folder`)
+  return true
+}
 
 /**
  * Moves or renames a folder chats ran in, or catches up with one already moved
@@ -25,20 +43,16 @@ const projectOf = (dir: string) => join(projectsDir(), dir.replace(/[^a-zA-Z0-9]
  * line on the end of its transcript, which it and the SDK take as the chat's
  * folder from then on), so nothing in them is rewritten and a new folder at
  * the old path is left alone. Whether anything is working there is the
- * caller's to check first.
+ * caller's to check first. Once it has moved, what can't be caught up is
+ * logged rather than thrown, so the caller still hears where it went; moving
+ * it there again finishes the job.
  */
 export async function moveFolder(from: string, to: string, chats: string[]): Promise<MovedFolder & { stamped: string[] }> {
-  if (from === to) throw new Error("That's where it is already")
-  if (within(to, from)) throw new Error("A folder can't go inside itself")
-  const there = !inaccessible(from)
+  const there = checkMove(from, to)
   if (there) {
-    if (existsSync(to)) throw new Error(`${to} is there already`)
-    if (!statSync(dirname(to), { throwIfNoEntry: false })?.isDirectory()) throw new Error(`${dirname(to)} isn't a folder`)
     await rename(from, to).catch((err: NodeJS.ErrnoException) => {
       throw err.code === 'EXDEV' ? new Error(`${dirname(to)} is on another disk, and a folder can only be moved within one`) : err
     })
-  } else if (inaccessible(to)) {
-    throw new Error(`Neither ${from} nor ${to} is there`)
   }
 
   // A repo moved, or folders of them: each is looked at, and the folders right inside it.
@@ -51,8 +65,11 @@ export async function moveFolder(from: string, to: string, chats: string[]): Pro
     const cwd = (await sessionInfo(id))?.cwd
     const path = cwd && within(cwd, from) && (await transcriptPath(id))
     if (!path) continue
-    await appendFile(path, `${JSON.stringify({ type: 'relocated', sessionId: id, relocatedCwd: moved(cwd, from, to) })}\n`)
-    stamped.push(id)
+    const stamp = `${JSON.stringify({ type: 'relocated', sessionId: id, relocatedCwd: moved(cwd, from, to) })}\n`
+    await appendFile(path, stamp).then(
+      () => stamped.push(id),
+      (err) => console.error(`Pointing chat ${id} at ${to} failed:`, message(err)),
+    )
   }
 
   // Claude Code keeps memory by the folder of the repo it's for, so the same folders are looked at as for worktrees.
@@ -62,8 +79,11 @@ export async function moveFolder(from: string, to: string, chats: string[]): Pro
     const now = join(projectOf(dir), 'memory')
     if (!existsSync(old) || existsSync(now)) continue
     await mkdir(dirname(now), { recursive: true })
-    await rename(old, now)
-    memory++
+      .then(() => rename(old, now))
+      .then(
+        () => memory++,
+        (err) => console.error(`Moving Claude Code's memory for ${dir} failed:`, message(err)),
+      )
   }
 
   return { moved: there, chats: stamped.length, worktrees, memory, stamped }

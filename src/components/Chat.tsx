@@ -755,7 +755,10 @@ export function Chat(props: {
                     pickLabel="It's here"
                     machine={machine()}
                     onClose={() => setFinding(false)}
-                    onPickFolder={async (to) => void (await api.moveFolder(from(), to, machine()))}
+                    onPickFolder={async (to) => {
+                      // Kept open to say so, rather than closing on a chat that's still gone.
+                      if (!(await api.moveFolder(from(), to, machine())).chats) throw new Error(`No chats ran in ${from()}, so none were pointed here`)
+                    }}
                   />
                 )}
               </Show>

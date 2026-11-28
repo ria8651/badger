@@ -2,6 +2,7 @@ import { mkdir, readFile, stat } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { extname, isAbsolute, join } from 'node:path'
 import { renameSession } from '@anthropic-ai/claude-agent-sdk'
+import { within } from '../shared/folders.ts'
 import { IMAGE_EXTENSIONS, IMAGE_TYPES, type ChatCommand, type ChatCommandReply, type ImageAttachment, type MovedFolder, type ReviewScope } from '../shared/protocol.ts'
 import { BOARD_INSTRUCTIONS, BOARD_SERVER, boardOps } from './boardTools.ts'
 import { Children } from './children.ts'
@@ -10,7 +11,7 @@ import { checkoutFiles, findFiles, listCommands } from './completions.ts'
 import { BadRequest, absolutePath, badRequest } from './errors.ts'
 import { folderSize, forgetSize, listDir, listFolders } from './folders.ts'
 import { MERGE_TOOL, mergeTool } from './merge.ts'
-import { moveFolder, within } from './moveFolder.ts'
+import { checkMove, moveFolder } from './moveFolder.ts'
 import { OpError, forwarded, mcpServer, toolName, type Op } from './ops.ts'
 import { Later, Peer, remote, type Link, type Remote } from './peer.ts'
 import { bridgeOps, openPreviewOp, previewInstructions } from './previewTools.ts'
@@ -381,13 +382,21 @@ export class Runner implements RunnerApi {
     if ([process.cwd(), this.opts.workspaceDir, this.opts.scratchDir, this.opts.dataDir, projectsDir()].some(inside)) {
       throw new BadRequest(`Badger keeps its own things in ${from}, so it can't move it`)
     }
-    const live = this.manager.all().filter((s) => inside(s.cwd))
-    if (live.some((s) => s.working)) throw new BadRequest('A chat is working in it. Wait for it to finish, or stop it, first.')
-    if (this.terminals.terminals.some((t) => t.running && (inside(t.cwd) || inside(t.root)))) {
-      throw new BadRequest('A terminal is running in it. Stop it first.')
+    try {
+      checkMove(from, to)
+    } catch (err) {
+      badRequest(err)
     }
+    const busy = () => {
+      if (this.manager.all().some((s) => inside(s.cwd) && s.working)) throw new BadRequest('A chat is working in it. Wait for it to finish, or stop it, first.')
+      if (this.terminals.terminals.some((t) => t.running && (inside(t.cwd) || inside(t.root)))) throw new BadRequest('A terminal is running in it. Stop it first.')
+    }
+    busy()
     // Idle ones start again from their transcripts, in the new place.
-    await Promise.all(live.map((s) => (s.close(), s.ended)))
+    await Promise.all(this.manager.all().flatMap((s) => (inside(s.cwd) ? [(s.close(), s.ended)] : [])))
+    // Something may have started there meanwhile.
+    busy()
+    if (this.manager.all().some((s) => inside(s.cwd))) throw new BadRequest('A chat started in it just now. Try again once it has finished.')
     const { stamped, ...done } = await moveFolder(from, to, chats).catch(badRequest)
     // So the hub has where they are now before it answers, and shows them there.
     await this.sync.flush(...stamped)

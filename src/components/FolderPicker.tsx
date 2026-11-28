@@ -3,6 +3,7 @@ import { Check, Folder as FolderIcon, FolderGit2, FolderInput, FolderPlus, GitBr
 import type { Checkout, Folder } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { basename, scratchDir } from '../folders.ts'
+import { within } from '../../shared/folders.ts'
 import { machineOf, machines, severalMachines } from '../machines.ts'
 import { FileBrowser, formatBytes } from './FileBrowser.tsx'
 import { GitSummaryButton } from './GitSummary.tsx'
@@ -110,7 +111,7 @@ export function FolderPicker(props: {
       return showError("Couldn't move it", (e as Error).message, button)
     }
     const cwd = props.selected
-    if (cwd && props.machine === machine && (cwd === folder.path || cwd.startsWith(`${folder.path}/`))) pick(to + cwd.slice(folder.path.length), props.worktree)
+    if (cwd && props.machine === machine && within(cwd, folder.path)) pick(to + cwd.slice(folder.path.length), props.worktree)
     await refetch()
   }
   const removeWorktree = async (folder: Folder, c: Checkout, button: Element) => {

@@ -106,10 +106,10 @@ export class TranscriptSync {
   }
 
   /** Sends what's new in these chats' transcripts now, settling once the hub has it (or the connection's gone). */
-  flush(...sessionIds: string[]): Promise<void> {
+  async flush(...sessionIds: string[]): Promise<void> {
     for (const id of sessionIds) this.dirty.add(id)
-    // A pass already going takes them too: it runs until the queue's empty.
-    return this.drain()
+    // A pass already going takes them too, unless it's just past looking: then it's another pass.
+    while (this.connected && sessionIds.some((id) => this.dirty.has(id))) await this.drain()
   }
 
   /** Queues every chat whose transcript isn't the size the hub has, and the live ones. */

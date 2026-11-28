@@ -3,7 +3,7 @@ import type { WebSocket } from 'ws'
 import { commentsMessage, splitComments } from '../../shared/comments.ts'
 import { chatMatches, searchWords } from '../../shared/chatSearch.ts'
 import { projectOf } from '../../shared/cardTree.ts'
-import { folderLabelOf } from '../../shared/folders.ts'
+import { folderLabelOf, within } from '../../shared/folders.ts'
 import { SIDE_NOTE, renderMoveNote } from '../../shared/forkNote.ts'
 import {
   LOCAL_MACHINE,
@@ -247,7 +247,7 @@ export class Chats {
     const where = placement.machinesOf(infos.map((s) => s.sessionId))
     return infos.flatMap((s) => {
       const cwd = machines.live(s.sessionId)?.cwd ?? s.cwd
-      return (where.get(s.sessionId) ?? LOCAL_MACHINE) === machine && cwd && (cwd === dir || cwd.startsWith(`${dir}/`)) ? [s.sessionId] : []
+      return (where.get(s.sessionId) ?? LOCAL_MACHINE) === machine && cwd && within(cwd, dir) ? [s.sessionId] : []
     })
   }
 

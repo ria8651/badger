@@ -201,13 +201,11 @@ export class ChatMeta {
 
   /** A folder on a machine moved: drafts set to start in or inside it, and forks yet to, start where it is now. */
   moveFolder(machine: string, from: string, to: string): void {
-    const inside = 'cwd = ? OR substr(cwd, 1, ?) = ?'
-    const args = [from, from.length + 1, `${from}/`]
+    // In SQL's own counting of characters, as Machines.moveFolder does.
+    const moved = "cwd = ?1 || substr(cwd, length(?2) + 1) WHERE (cwd = ?2 OR substr(cwd, 1, length(?2) + 1) = ?2 || '/')"
     this.db.transaction(() => {
-      this.db.sql.prepare(`UPDATE session_drafts SET cwd = ? || substr(cwd, ?) WHERE machine = ? AND (${inside})`).run(to, from.length + 1, machine, ...args)
-      this.db.sql
-        .prepare(`UPDATE forks SET cwd = ? || substr(cwd, ?) WHERE session_id IN (SELECT session_id FROM chat_machines WHERE machine = ?) AND (${inside})`)
-        .run(to, from.length + 1, machine, ...args)
+      this.db.sql.prepare(`UPDATE session_drafts SET ${moved} AND machine = ?3`).run(to, from, machine)
+      this.db.sql.prepare(`UPDATE forks SET ${moved} AND session_id IN (SELECT session_id FROM chat_machines WHERE machine = ?3)`).run(to, from, machine)
     })
   }
 
