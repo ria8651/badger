@@ -31,6 +31,8 @@ declare global {
 }
 
 export const app = window.badgerApp
+// For what's styled differently in the app (src/index.css).
+if (app) document.documentElement.dataset.app = ''
 
 /** The version of the app's update waiting to be installed: the sidebar offers to restart for it. */
 const [updateReady, setUpdateReady] = createSignal<string>()

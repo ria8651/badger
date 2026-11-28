@@ -159,12 +159,25 @@ fn error_dialog(app: &AppHandle, message: &str) {
 pub fn rebuild_menu(app: &AppHandle, config: &Config) {
     let build = || -> tauri::Result<Menu<_>> {
         let menu = Menu::default(app)?;
-        menu.insert(&connection_menu(app, config)?, MENU_POSITION)?;
-        // Under About in the app's own menu, once an update's downloaded.
-        if let (Some(version), Some(MenuItemKind::Submenu(app_menu))) = (updater::version(app), menu.items()?.first()) {
-            let label = format!("Restart to Update to {version}…");
-            app_menu.insert(&MenuItem::with_id(app, "update", label, true, None::<&str>)?, 1)?;
+        let items = menu.items()?;
+        // Under About in the app's own menu: Restart to Update once an update's downloaded, till then a check.
+        if let Some(MenuItemKind::Submenu(app_menu)) = items.first() {
+            let item = match updater::version(app) {
+                Some(version) => MenuItem::with_id(app, "update", format!("Restart to Update to {version}…"), true, None::<&str>)?,
+                None => MenuItem::with_id(app, "check-update", "Check for Updates…", true, None::<&str>)?,
+            };
+            app_menu.insert(&item, 1)?;
         }
+        // At the top of View: loads the page again, say after the hub it's from has been updated.
+        let view_menu = items.iter().find_map(|item| match item {
+            MenuItemKind::Submenu(menu) if menu.text().is_ok_and(|text| text == "View") => Some(menu),
+            _ => None,
+        });
+        if let Some(view_menu) = view_menu {
+            view_menu.insert(&MenuItem::with_id(app, "reload", "Reload", true, Some("CmdOrCtrl+R"))?, 0)?;
+            view_menu.insert(&PredefinedMenuItem::separator(app)?, 1)?;
+        }
+        menu.insert(&connection_menu(app, config)?, MENU_POSITION)?;
         Ok(menu)
     };
     if let Ok(menu) = build() {
@@ -219,6 +232,12 @@ pub fn on_menu(app: &AppHandle, event: MenuEvent) {
             });
         }
         "update" => updater::restart_to_update(app),
+        "check-update" => updater::check_now(app),
+        "reload" => {
+            if let Some(window) = window::main(app) {
+                let _ = window.eval("location.reload()");
+            }
+        }
         "logs" => {
             if let Ok(dir) = node::log_path(app, "") {
                 let _ = Command::new("/usr/bin/open").arg(dir).spawn();

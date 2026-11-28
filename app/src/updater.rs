@@ -1,11 +1,19 @@
-//! Updates from the GitHub releases (.github/workflows/release.yml publishes latest.json): checked at start and every
-//! few hours, downloaded in the background, and installed when the app quits, or now from "Restart to Update".
+//! Updates from the GitHub releases (.github/workflows/release.yml publishes latest.json): checked at start, every few
+//! hours and from "Check for Updates…", downloaded in the background, and installed when the app quits, or now from
+//! "Restart to Update".
 //! Restarting stops the app's Badger and runner, and their chats with them, so it's never done unasked.
 
-use std::{sync::Mutex, thread, time::Duration};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
+    thread,
+    time::Duration,
+};
 
 use tauri::{AppHandle, Manager};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 use crate::{config::Config, connection, runner, server, window};
@@ -13,6 +21,11 @@ use crate::{config::Config, connection, runner, server, window};
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 /// The version builds made outside a release have (releases set theirs): they don't update.
 const UNRELEASED: &str = "0.0.0";
+
+/// Whether a check is under way, so two don't download the same update.
+static CHECKING: AtomicBool = AtomicBool::new(false);
+/// Whether the menu's check is under way, so clicking again doesn't start a second one.
+static CHECKING_NOW: AtomicBool = AtomicBool::new(false);
 
 /// An update downloaded and waiting to be installed.
 #[derive(Default)]
@@ -26,23 +39,77 @@ pub fn start(app: &AppHandle) {
     let app = app.clone();
     thread::spawn(move || loop {
         if version(&app).is_none() {
-            match tauri::async_runtime::block_on(fetch(&app)) {
-                Ok(Some(update)) => {
-                    let version = update.0.version.clone();
-                    *app.state::<Pending>().0.lock().unwrap() = Some(update);
-                    let handle = app.clone();
-                    let _ = app.run_on_main_thread(move || connection::rebuild_menu(&handle, &Config::read(&handle)));
-                    // The page shows a button for it too (src/app.ts).
-                    if let Some(window) = window::main(&app) {
-                        let _ = window.eval(format!("window.__badgerUpdateReady?.({})", serde_json::json!(version)));
-                    }
-                }
-                Ok(None) => {}
-                Err(e) => eprintln!("checking for an update failed: {e}"),
+            if let Err(e) = check(&app) {
+                eprintln!("checking for an update failed: {e}");
             }
         }
         thread::sleep(CHECK_EVERY);
     });
+}
+
+/// From the menu: looks for an update now, and says what it found.
+pub fn check_now(app: &AppHandle) {
+    if CHECKING_NOW.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    thread::spawn(move || {
+        check_and_say(&app);
+        CHECKING_NOW.store(false, Ordering::SeqCst);
+    });
+}
+
+fn check_and_say(app: &AppHandle) {
+    let current = app.package_info().version.to_string();
+    let say = |title: &str, message: String, kind| {
+        app.dialog().message(message).title(title).kind(kind).blocking_show();
+    };
+    if current == UNRELEASED {
+        return say("Badger", "This Badger wasn't built for a release, so it doesn't update.".into(), MessageDialogKind::Info);
+    }
+    match check(app) {
+        Ok(true) => {
+            let Some(version) = version(app) else { return };
+            let now = app
+                .dialog()
+                .message("It'll be installed when Badger quits, or you can restart to update now.")
+                .title(format!("Badger {version} is ready"))
+                .buttons(MessageDialogButtons::OkCancelCustom("Restart to Update".into(), "Later".into()))
+                .blocking_show();
+            if now {
+                restart_to_update(app);
+            }
+        }
+        Ok(false) => say("You're up to date", format!("Badger {current} is the newest version."), MessageDialogKind::Info),
+        Err(e) => say("Couldn't check for updates", e.to_string(), MessageDialogKind::Error),
+    }
+}
+
+/// Downloads an update if there is one and keeps it for installing; true once one's waiting, found now or before.
+/// While another check is under way, waits for it first: if that one found an update, this one needn't fetch it.
+fn check(app: &AppHandle) -> tauri_plugin_updater::Result<bool> {
+    while CHECKING.swap(true, Ordering::SeqCst) {
+        thread::sleep(Duration::from_millis(200));
+    }
+    let fetched = if version(app).is_some() { Ok(None) } else { tauri::async_runtime::block_on(fetch(app)) };
+    let found = fetched.map(|update| {
+        update.map(|update| {
+            let version = update.0.version.clone();
+            *app.state::<Pending>().0.lock().unwrap() = Some(update);
+            version
+        })
+    });
+    // Only once it's kept, so a check waiting on this one finds it.
+    CHECKING.store(false, Ordering::SeqCst);
+    if let Some(version) = found? {
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || connection::rebuild_menu(&handle, &Config::read(&handle)));
+        // The page shows a button for it too (src/app.ts).
+        if let Some(window) = window::main(app) {
+            let _ = window.eval(format!("window.__badgerUpdateReady?.({})", serde_json::json!(version)));
+        }
+    }
+    Ok(version(app).is_some())
 }
 
 async fn fetch(app: &AppHandle) -> tauri_plugin_updater::Result<Option<(Update, Vec<u8>)>> {
@@ -65,7 +132,7 @@ pub fn install(app: &AppHandle) {
     }
 }
 
-/// From the menu: installs the update and starts again, after asking if that would stop chats.
+/// From the menu or the page: installs the update and starts again, after asking if that would stop chats.
 pub fn restart_to_update(app: &AppHandle) {
     let Some(version) = version(app) else { return };
     let app = app.clone();
