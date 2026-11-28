@@ -273,6 +273,14 @@ export class Machines {
       .run(machine, path, now, now)
   }
 
+  /** A folder moved: it and those inside it are listed, or hidden, where they are now. */
+  moveFolder(machine: string, from: string, to: string): void {
+    // In SQL's own counting of characters, which a path with an emoji in it would throw out in JavaScript's.
+    this.db
+      .prepare('UPDATE OR REPLACE machine_folders SET path = ?1 || substr(path, length(?2) + 1) WHERE machine = ?3 AND (path = ?2 OR substr(path, 1, length(?2) + 1) = ?2 || \'/\')')
+      .run(to, from, machine)
+  }
+
   /** Which machine a runner's token is for, if any. */
   byToken(token: string): string | undefined {
     const row = this.db.prepare('SELECT id FROM machines WHERE token_hash = ?').get(hash(token)) as { id: string } | undefined

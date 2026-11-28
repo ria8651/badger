@@ -1,12 +1,13 @@
 import { For, Show, createMemo, createResource, createSignal, type JSX } from 'solid-js'
-import { Check, Folder as FolderIcon, FolderGit2, FolderPlus, GitBranch, Loader2, MessageSquare, Plus, Trash2, X } from '../icons'
+import { Check, Folder as FolderIcon, FolderGit2, FolderInput, FolderPlus, GitBranch, Loader2, MessageSquare, Plus, Trash2, X } from '../icons'
 import type { Checkout, Folder } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { basename, scratchDir } from '../folders.ts'
+import { within } from '../../shared/folders.ts'
 import { machineOf, machines, severalMachines } from '../machines.ts'
 import { FileBrowser, formatBytes } from './FileBrowser.tsx'
 import { GitSummaryButton } from './GitSummary.tsx'
-import { confirmBy, showError } from './Popover.tsx'
+import { askBy, confirmBy, showError } from './Popover.tsx'
 import { ltr, plural } from './ui.tsx'
 import { removalNotes } from '../worktreeCleanup.ts'
 import { UPDATING, gitState, sizeState } from '../folderState.ts'
@@ -97,6 +98,21 @@ export function FolderPicker(props: {
 
   const hide = (folder: Folder, button: Element) => {
     api.hideFolder(folder.path, props.machine).then(refetch, (e: Error) => showError("Couldn't take it off the list", e.message, button))
+  }
+  /** A bare name renames it where it is; a path moves it there. Its chats, and the selection, go with it. */
+  const move = async (folder: Folder, button: Element) => {
+    const typed = (await askBy(button, { label: 'Move or rename it to', value: folder.path, action: 'Move' }))?.trim()
+    if (!typed || typed === folder.path) return
+    const to = typed.startsWith('/') ? typed : `${folder.path.slice(0, folder.path.lastIndexOf('/'))}/${typed}`
+    const machine = props.machine
+    try {
+      await api.moveFolder(folder.path, to, machine)
+    } catch (e) {
+      return showError("Couldn't move it", (e as Error).message, button)
+    }
+    const cwd = props.selected
+    if (cwd && props.machine === machine && within(cwd, folder.path)) pick(to + cwd.slice(folder.path.length), props.worktree)
+    await refetch()
   }
   const removeWorktree = async (folder: Folder, c: Checkout, button: Element) => {
     const notes = [
@@ -193,7 +209,7 @@ export function FolderPicker(props: {
               fallback={
                 <Row selected={isSelected(folder, folder.path, true)} onClick={() => pick(folder.path, false)}>
                   <FolderIcon class="size-4 shrink-0 text-fg-3" />
-                  <FolderName folder={folder} onHide={(button) => hide(folder, button)} />
+                  <FolderName folder={folder} onHide={(button) => hide(folder, button)} onMove={(button) => move(folder, button)} />
                   <Size path={folder.path} machine={props.machine} />
                 </Row>
               }
@@ -209,7 +225,7 @@ export function FolderPicker(props: {
                             <FolderGit2 class="size-4 shrink-0 text-fg-3" />
                             {/* The status drops under the name when the row's too narrow for both. */}
                             <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3">
-                              <FolderName folder={folder} onHide={(button) => hide(folder, button)} />
+                              <FolderName folder={folder} onHide={(button) => hide(folder, button)} onMove={(button) => move(folder, button)} />
                               <span class="flex shrink-0 items-center gap-2">
                                 {/* What's shown is the last list, while its git status is read again. */}
                                 <Show when={updating()}>
@@ -354,12 +370,23 @@ function Row(props: { selected: boolean; indent?: boolean; disabled?: boolean; o
   )
 }
 
-/** A folder's name and path, and a way to take it off the list. */
-function FolderName(props: { folder: Folder; onHide: (button: Element) => void }) {
+/** A folder's name and path, and ways to move it and to take it off the list. */
+function FolderName(props: { folder: Folder; onHide: (button: Element) => void; onMove: (button: Element) => void }) {
   return (
     <div class="min-w-32 flex-1">
       <div class="flex items-center gap-1">
         <span class="truncate text-ui text-fg">{basename(props.folder.path)}</span>
+        <button
+          type="button"
+          title="Move or rename (its chats go with it)"
+          onClick={(e) => {
+            e.stopPropagation()
+            props.onMove(e.currentTarget)
+          }}
+          class="grid size-5 shrink-0 place-items-center rounded-button-sm text-fg-3 opacity-0 transition group-hover/card:opacity-100 hover:bg-bg hover:text-fg focus-visible:opacity-100 pointer-coarse:hidden"
+        >
+          <FolderInput class="size-3" />
+        </button>
         <button
           type="button"
           title="Take off this list (nothing on disk changes)"

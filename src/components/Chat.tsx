@@ -5,6 +5,7 @@ import { api, connected } from '../api.ts'
 import { cardWorktreeName, isScratch, worktreeOf } from '../folders.ts'
 import { diffView, filesView, openFile, openFiles, openTerminal, openView, planView, setFileMode, setFilesMode, viewKey, viewShown, wide } from '../layout.ts'
 import { OpenFile, expandHome, useOpenFile } from '../fileLinks.ts'
+import { FileBrowser } from './FileBrowser.tsx'
 import { FileView, openingMode } from './FileView.tsx'
 import { Files } from './Files.tsx'
 import { QuoteSelection } from './QuoteSelection.tsx'
@@ -526,6 +527,8 @@ export function Chat(props: {
 
   /** The end of the turn being forked from, while picking where the fork goes. */
   const [forking, setForking] = createSignal<string>()
+  /** Picking where this chat's folder went, once it's gone. */
+  const [finding, setFinding] = createSignal(false)
   const openChat = (id: string) => navigate({ kind: 'chat', id })
 
   const body = (
@@ -758,7 +761,26 @@ export function Chat(props: {
                   <span class="flex-1">
                     This chat's folder is gone or can't be opened, so it can't take messages. <span class="text-fg-3 break-all">{cwd()}</span>
                   </span>
+                  <button onClick={() => setFinding(true)} class="shrink-0 opacity-70 hover:opacity-100" title="If it was moved or renamed, show where it is now">
+                    Find it
+                  </button>
                 </Notice>
+              </Show>
+              {/* Its other chats there come along too; this one's snapshot comes again once its transcript says where. */}
+              <Show when={finding() && cwd()}>
+                {(from) => (
+                  <FileBrowser
+                    mode="folder"
+                    title="Where is this chat's folder now?"
+                    pickLabel="It's here"
+                    machine={machine()}
+                    onClose={() => setFinding(false)}
+                    onPickFolder={async (to) => {
+                      // Kept open to say so, rather than closing on a chat that's still gone.
+                      if (!(await api.moveFolder(from(), to, machine())).chats) throw new Error(`No chats ran in ${from()}, so none were pointed here`)
+                    }}
+                  />
+                )}
               </Show>
               <Show when={state.loaded && stranded()}>
                 <Notice icon={MonitorOff}>

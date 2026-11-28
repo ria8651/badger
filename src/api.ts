@@ -14,6 +14,7 @@ import type {
   Listing,
   Machine,
   ModelOption,
+  MovedFolder,
   PermissionMode,
   QuickAction,
   ReviewDiff,
@@ -99,6 +100,8 @@ export const api = {
   folders: (machine?: string) => get<Folder[]>(`/api/folders?${on(machine)}`),
   addFolder: (path: string, machine?: string) => request<void>('POST', '/api/folders', { path, machine }),
   hideFolder: (path: string, machine?: string) => request<void>('DELETE', `/api/folders?${on(machine, { path })}`),
+  /** Moves or renames a folder, or catches its chats up with it moved by hand already. */
+  moveFolder: (from: string, to: string, machine?: string) => request<MovedFolder>('POST', '/api/folders/move', { from, to, machine }),
   folderSize: (path: string, machine?: string) => get<{ bytes: number }>(`/api/folders/size?${on(machine, { path })}`),
   listDir: (path: string | undefined, hidden: boolean, machine?: string) =>
     get<Listing>(`/api/fs?${on(machine, { ...(path ? { path } : {}), ...(hidden ? { hidden: '1' } : {}) })}`),

@@ -3,7 +3,7 @@ import type { WebSocket } from 'ws'
 import { commentsMessage, splitComments } from '../../shared/comments.ts'
 import { chatMatches, searchWords } from '../../shared/chatSearch.ts'
 import { projectOf } from '../../shared/cardTree.ts'
-import { folderLabelOf } from '../../shared/folders.ts'
+import { folderLabelOf, within } from '../../shared/folders.ts'
 import { SIDE_NOTE, renderMoveNote } from '../../shared/forkNote.ts'
 import {
   LOCAL_MACHINE,
@@ -18,6 +18,7 @@ import {
   type DraftChange,
   type DraftComment,
   type ImageAttachment,
+  type MovedFolder,
   type PermissionMode,
   type ServerEvent,
   type ArchivedPage,
@@ -220,6 +221,34 @@ export class Chats {
     const gone = await this.goneFolders([...used.keys()].map((cwd) => ({ machine, cwd })))
     for (const cwd of gone.get(machine) ?? []) used.delete(cwd)
     return used
+  }
+
+  /**
+   * Moves a folder on a machine, or catches up with one moved by hand (see moveFolder): its chats are pointed at where
+   * it is now, as are the folder list, drafts and forks that were to start there.
+   */
+  async moveFolder(runner: Connection, from: string, to: string): Promise<MovedFolder> {
+    const chats = await this.chatsIn(runner.id, from)
+    const done = await runner.remote.moveFolder(from, to, chats)
+    this.d.machines.moveFolder(runner.id, from, to)
+    this.d.meta.moveFolder(runner.id, from, to)
+    this.forgetFolder(runner.id, from)
+    this.soonListChanged()
+    // Their transcripts say where they are now, but those that had a process may not have been sent them again.
+    for (const id of chats) if (this.d.viewers.of(id).length) this.stale.add(id)
+    this.resendStale()
+    return done
+  }
+
+  /** The chats on a machine, child chats included, that ran in a folder or inside it, as far as the hub knows. */
+  async chatsIn(machine: string, dir: string): Promise<string[]> {
+    const { machines, placement } = this.d
+    const infos = await this.d.transcripts.list(() => false)
+    const where = placement.machinesOf(infos.map((s) => s.sessionId))
+    return infos.flatMap((s) => {
+      const cwd = machines.live(s.sessionId)?.cwd ?? s.cwd
+      return (where.get(s.sessionId) ?? LOCAL_MACHINE) === machine && cwd && within(cwd, dir) ? [s.sessionId] : []
+    })
   }
 
   /** Every chat with a transcript, newest first, less those left out and child chats, which show inside the chat that started them. */
@@ -449,10 +478,13 @@ export class Chats {
     const [history, info] = machine ? await Promise.all([transcripts.transcript(sessionId), transcripts.info(sessionId)]) : [[], undefined]
     const runner = machine ? machines.get(machine) : undefined
     const base = { type: 'snapshot' as const, sessionId, machine, draft, children, ...(parent ? { parent } : {}) }
-    const done = (live: LiveSnapshot | null, gone: boolean) => {
+    /** Folders that are gone of those it may be in: its transcript's, and its process's as last heard, which may have just closed. */
+    let goneDirs: string[] = []
+    const gone = (cwd?: string) => !!cwd && goneDirs.includes(cwd)
+    const done = (live: LiveSnapshot | null) => {
       if (asked.get(sessionId) !== n) return
       if (!live) {
-        return viewers.send(ws, { ...IDLE, ...base, messages: externalizeImages(sessionId, history), model: transcriptModel(history), cwd: info?.cwd, gone })
+        return viewers.send(ws, { ...IDLE, ...base, messages: externalizeImages(sessionId, history), model: transcriptModel(history), cwd: info?.cwd, gone: gone(info?.cwd) })
       }
       // History holds earlier processes' turns; the live list holds this process's, in order. Of those, the ones
       // already copied here came as just their ids.
@@ -462,17 +494,20 @@ export class Chats {
       const messages = [...history.filter((m) => !seen.has(m.uuid) && !seen.has(m.after_uuid as string)), ...own]
       // The runner's answer goes first, so it can't say which chat this is.
       // The process's newest messages may not have been copied here yet, and their images can't be served until they are.
-      viewers.send(ws, { ...live, ...base, messages: externalizeImages(sessionId, messages, (uuid) => transcripts.hasImageEntry(sessionId, uuid)) })
+      // An idle process's folder can go from under it too, e.g. moved by hand; one that's working is left to say so itself.
+      const idleGone = !live.running && gone(live.cwd) ? { gone: true } : {}
+      viewers.send(ws, { ...live, ...base, ...idleGone, messages: externalizeImages(sessionId, messages, (uuid) => transcripts.hasImageEntry(sessionId, uuid)) })
     }
-    if (!runner) return done(null, false)
-    const gone = info?.cwd ? (await runner.within(QUICK_TIMEOUT_MS).inaccessible([info.cwd]).catch(() => [])).length > 0 : false
+    if (!runner) return done(null)
+    const dirs = [...new Set([info?.cwd, machines.live(sessionId)?.cwd].filter((d): d is string => !!d))]
+    if (dirs.length) goneDirs = await runner.within(QUICK_TIMEOUT_MS).inaccessible(dirs).catch(() => [])
     // A runner slow to answer doesn't hold up the history; its answer, when it comes, puts the live part right.
     let shown = false
-    const slow = setTimeout(() => ((shown = true), done(null, gone)), QUICK_TIMEOUT_MS)
+    const slow = setTimeout(() => ((shown = true), done(null)), QUICK_TIMEOUT_MS)
     runner.liveSnapshot(sessionId, history.flatMap((m) => (m.uuid ? [m.uuid] : [])), (err, live) => {
       clearTimeout(slow)
-      if (!err) done(live ?? null, gone)
-      else if (!shown) done(null, gone)
+      if (!err) done(live ?? null)
+      else if (!shown) done(null)
     })
   }
 

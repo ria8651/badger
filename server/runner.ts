@@ -2,7 +2,8 @@ import { mkdir, readFile, stat } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { extname, isAbsolute, join } from 'node:path'
 import { renameSession } from '@anthropic-ai/claude-agent-sdk'
-import { IMAGE_EXTENSIONS, IMAGE_TYPES, type ChatCommand, type ChatCommandReply, type ImageAttachment, type ReviewScope } from '../shared/protocol.ts'
+import { within } from '../shared/folders.ts'
+import { IMAGE_EXTENSIONS, IMAGE_TYPES, type ChatCommand, type ChatCommandReply, type ImageAttachment, type MovedFolder, type ReviewScope } from '../shared/protocol.ts'
 import { BOARD_INSTRUCTIONS, BOARD_SERVER, boardOps } from './boardTools.ts'
 import { Children } from './children.ts'
 import { listModels } from './claudeProbe.ts'
@@ -10,6 +11,7 @@ import { checkoutFiles, findFiles, listCommands } from './completions.ts'
 import { BadRequest, absolutePath, badRequest } from './errors.ts'
 import { folderSize, forgetSize, listDir, listFolders } from './folders.ts'
 import { MERGE_TOOL, mergeTool } from './merge.ts'
+import { checkMove, moveFolder } from './moveFolder.ts'
 import { OpError, forwarded, mcpServer, toolName, type Op } from './ops.ts'
 import { Later, Peer, remote, type Link, type Remote } from './peer.ts'
 import { bridgeOps, openPreviewOp, previewInstructions } from './previewTools.ts'
@@ -32,7 +34,7 @@ import {
 } from './runnerProtocol.ts'
 import { scriptOp } from './scripts.ts'
 import { SessionManager } from './session.ts'
-import { TranscriptSync, writeTranscript } from './sync.ts'
+import { TranscriptSync, projectsDir, writeTranscript } from './sync.ts'
 import { TERMINAL_INSTRUCTIONS, TERMINAL_SERVER, terminalOps } from './terminalTools.ts'
 import { Terminals } from './terminals.ts'
 import { ContextReader, readAccount } from './usage.ts'
@@ -370,6 +372,36 @@ export class Runner implements RunnerApi {
 
   folderSize(path: string) {
     return folderSize(absolutePath(path))
+  }
+
+  async moveFolder(fromPath: string, toPath: string, chats: string[]): Promise<MovedFolder> {
+    const from = absolutePath(fromPath)
+    const to = absolutePath(toPath)
+    const inside = (path: string) => within(path, from)
+    // What Badger itself runs from, and where it starts chats, would be gone from under it.
+    if ([process.cwd(), this.opts.workspaceDir, this.opts.scratchDir, this.opts.dataDir, projectsDir()].some(inside)) {
+      throw new BadRequest(`Badger keeps its own things in ${from}, so it can't move it`)
+    }
+    try {
+      checkMove(from, to)
+    } catch (err) {
+      badRequest(err)
+    }
+    const busy = () => {
+      if (this.manager.all().some((s) => inside(s.cwd) && s.working)) throw new BadRequest('A chat is working in it. Wait for it to finish, or stop it, first.')
+      if (this.terminals.terminals.some((t) => t.running && (inside(t.cwd) || inside(t.root)))) throw new BadRequest('A terminal is running in it. Stop it first.')
+    }
+    busy()
+    // Idle ones start again from their transcripts, in the new place.
+    await Promise.all(this.manager.all().flatMap((s) => (inside(s.cwd) ? [(s.close(), s.ended)] : [])))
+    // Something may have started there meanwhile.
+    busy()
+    if (this.manager.all().some((s) => inside(s.cwd))) throw new BadRequest('A chat started in it just now. Try again once it has finished.')
+    const { stamped, ...done } = await moveFolder(from, to, chats).catch(badRequest)
+    // So the hub has where they are now before it answers, and shows them there.
+    await this.sync.flush(...stamped)
+    forgetSize(from)
+    return done
   }
 
   listDir(path: string | undefined, hidden: boolean) {

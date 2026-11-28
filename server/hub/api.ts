@@ -256,6 +256,16 @@ function machineFileRoutes({ machines, chats, listChanged }: ApiDeps): Route[] {
         return [204, null]
       },
     ],
+    // Moves or renames it, or, if it's been moved already, catches its chats up.
+    [
+      'POST',
+      '/api/folders/move',
+      async ({ json }) => {
+        const body = await json()
+        const runner = machines.fromRequest(body.machine)
+        return [200, await chats.moveFolder(runner, absolutePath(body.from), absolutePath(body.to))]
+      },
+    ],
     // Hiding needs no runner, so it works while the machine is offline.
     ['DELETE', '/api/folders', ({ url }) => (machines.hideFolder(url.searchParams.get('machine') || LOCAL_MACHINE, absolutePath(url.searchParams.get('path'))), [204, null])],
     [

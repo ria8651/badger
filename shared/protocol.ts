@@ -343,6 +343,18 @@ export interface Folder {
   checkouts?: Checkout[]
 }
 
+/** What moving a folder did, or catching up with one moved by hand. */
+export interface MovedFolder {
+  /** Whether Badger moved it; otherwise it was moved already. */
+  moved: boolean
+  /** Chats that ran in or inside it, now pointed at where it is. */
+  chats: number
+  /** Worktrees linked up with their repo again. */
+  worktrees: number
+  /** Claude Code memory folders that went with it. */
+  memory: number
+}
+
 /** One working tree of a repo. */
 export interface Checkout {
   path: string

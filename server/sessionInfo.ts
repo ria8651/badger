@@ -21,23 +21,31 @@ export async function sessionInfo(sessionId: string): Promise<SDKSessionInfo | u
   return { sessionId, summary: '', lastModified: Math.floor(mtimeMs), fileSize: size, ...info, cwd: found.cwd }
 }
 
-/** The folder in the first transcript line that has one, and the transcript it's in. */
-async function transcriptCwd(sessionId: string): Promise<{ cwd: string; path: string } | undefined> {
+/** Where a chat's transcript is on this machine: Claude Code finds it in whichever project folder it's in, and so does this. */
+export async function transcriptPath(sessionId: string): Promise<string | undefined> {
   for (const project of await readdir(projectsDir()).catch(() => [] as string[])) {
     const path = join(projectsDir(), project, `${sessionId}.jsonl`)
-    const stream = createReadStream(path, 'utf8')
-    const opened = await new Promise<boolean>((resolve) => stream.once('open', () => resolve(true)).once('error', () => resolve(false)))
-    if (!opened) continue
-    const lines = createInterface({ input: stream, crlfDelay: Infinity })
-    try {
-      for await (const line of lines) {
-        const cwd = parseCwd(line)
-        if (cwd) return { cwd, path }
-      }
-    } finally {
-      lines.close()
-      stream.destroy()
+    if (await stat(path).then((s) => s.isFile(), () => false)) return path
+  }
+  return undefined
+}
+
+/** The folder in the first transcript line that has one, and the transcript it's in. */
+async function transcriptCwd(sessionId: string): Promise<{ cwd: string; path: string } | undefined> {
+  const path = await transcriptPath(sessionId)
+  if (!path) return undefined
+  const stream = createReadStream(path, 'utf8')
+  const lines = createInterface({ input: stream, crlfDelay: Infinity })
+  try {
+    for await (const line of lines) {
+      const cwd = parseCwd(line)
+      if (cwd) return { cwd, path }
     }
+  } catch {
+    // Gone since it was found.
+  } finally {
+    lines.close()
+    stream.destroy()
   }
   return undefined
 }
