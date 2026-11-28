@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal, on, onMount, untrack, type Accessor, type JSX } from 'solid-js'
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack, type Accessor, type JSX } from 'solid-js'
 import { FolderX, MonitorOff, Pencil, ScrollText, WifiOff, X } from '../icons'
 import { NO_ATTACHMENTS, type DraftAttachments, type PermissionMode, type QueuedMessage, type StartAt } from '../../shared/protocol.ts'
 import { api, connected } from '../api.ts'
@@ -160,7 +160,18 @@ export function Chat(props: {
     if (!touch.matches) composer?.focus()
     sticky.follow(content, bottom, scroller)
     props.onReady?.(() => composer?.focus())
+    // While Claude works the transcript only grows: a tool call's input folds away as it finishes and the next one
+    // opens, and at the bottom each fold would pull everything above it down and back. What it would have given back
+    // is left blank for what comes next, and given back once the turn's over. Only once it overflows: till then it's
+    // stretched to the pane, and holding that would leave a gap when the pane gets shorter.
+    const held = new ResizeObserver(() => {
+      if (!working()) return
+      content.style.minHeight = scroller.scrollHeight > scroller.clientHeight + 1 ? `${content.getBoundingClientRect().height}px` : ''
+    })
+    held.observe(content)
+    onCleanup(() => held.disconnect())
   })
+  createEffect(() => working() || (content.style.minHeight = ''))
   // Back where it was left, once there's a transcript to scroll; one left at the bottom just stays stuck there.
   let restored = false
   createEffect(() => {
@@ -244,7 +255,10 @@ export function Chat(props: {
           if (on.kind === 'diff') return w && openView(w, diffView(props.sessionId))
           const anchor = on.kind === 'reply' ? on.reply : planAnchor(on.request)
           const el = document.querySelector(`[data-comments-on="${CSS.escape(anchor)}"]`)
-          if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+          if (el) {
+            sticky.unpin()
+            el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+          }
           else if (on.kind === 'plan' && w) openView(w, planView(props.sessionId))
         },
       })
@@ -562,6 +576,9 @@ export function Chat(props: {
           </Show>
         </Show>
       </Show>
+      {/* The transcript scrolls; the composer's below it, not in it, so scrolling never moves it. A size container, so
+          prompts above the composer can fit this pane rather than the window. */}
+      <div class={`flex min-h-0 flex-1 flex-col [container-type:size] ${reviewing() && !props.embedded ? 'hidden' : ''}`}>
       <div
         ref={(el) => {
           scroller = el
@@ -569,11 +586,11 @@ export function Chat(props: {
         }}
         onScroll={sticky.onScroll}
         onWheel={sticky.onWheel}
-        // A size container, so prompts above the composer can fit this pane rather than the window.
-        class={`min-h-0 flex-1 overflow-y-auto [container-type:size] [overflow-anchor:none] ${reviewing() && !props.embedded ? 'hidden' : ''}`}
+        // A gutter each side keeps its column over the composer's, which has no scrollbar beside it.
+        class="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none] [scrollbar-gutter:stable_both-edges]"
       >
-        {/* One column for the transcript and the composer. Its padding leaves room for your messages and the
-            composer to hang out by their own padding, so the text in them lines up with Claude's. */}
+        {/* The same column as the composer's. Its padding leaves room for your messages and the composer to hang out
+            by their own padding, so the text in them lines up with Claude's. */}
         <div class="mx-auto flex min-h-full max-w-[50rem] flex-col px-6 md:px-9">
           <div ref={content} class="relative flex-1 py-8">
             <QuoteSelection
@@ -690,12 +707,15 @@ export function Chat(props: {
               </Show>
             </Show>
           </div>
+        </div>
+      </div>
 
-          {/* Stuck to the bottom of the column and as wide as it, padding included, so the transcript fades out as it
-              scrolls under even where the composer hangs into the padding. It leaves room for that fade even when full, and prompts give way first. */}
+        <div class="mx-auto w-full max-w-[50rem] shrink-0 px-6 md:px-9">
+          {/* As wide as the column, padding included, so the transcript fades out above it even where the composer hangs
+              into the padding. It leaves room for that fade even when full, and prompts give way first. */}
           <div
             ref={bottom}
-            class="sticky bottom-0 flex max-h-[calc(100cqh-2rem)] flex-col -mx-6 bg-bg px-6 pb-5 md:-mx-9 md:px-9 before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-bg"
+            class="relative flex max-h-[calc(100cqh-2rem)] flex-col -mx-6 bg-bg px-6 pb-5 md:-mx-9 md:px-9 before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-bg"
           >
             {/* Laid out like the transcript's own messages, since that's where they're headed. */}
             <For each={state.queued}>{(m) => <Queued message={m} onEdit={() => unqueue(m.id, true)} onRemove={() => unqueue(m.id)} />}</For>
