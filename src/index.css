@@ -372,6 +372,10 @@
 
 @layer base {
   html, body, #root { height: 100%; }
+  /* The app never scrolls as a whole, so it shouldn't bounce either: Safari rubber-bands the page when a pane's
+     scrolling runs out, and can leave the whole app stuck partway off screen. Up and down only: sideways is the
+     trackpad's swipe back and forward. */
+  html, body { overscroll-behavior-y: none; }
   body {
     @apply bg-bg text-fg text-sm antialiased;
     font-feature-settings: "cv11", "ss01";

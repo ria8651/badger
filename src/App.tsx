@@ -201,14 +201,17 @@ export function App() {
       >
         <Sidebar current={current()} onSettings={() => openSettings()} onNewChat={newHomeChat} />
       </aside>
-      {/* The gutter beside the sidebar, between the panes' outlines, grown a little each way so a thin one is easy to catch. */}
+      {/* The gutter beside the sidebar, between the panes' outlines, grown a little each way so a thin one is easy to catch.
+          The growth is an element, not ::after: Safari doesn't show a pseudo-element's cursor. */}
       <div
         onPointerDown={startSidebarDrag}
         onDblClick={() => setSidebarWidth(SIDEBAR_DEFAULT)}
         title="Drag to resize; double-click to reset"
         data-lit={sidebarLit() || undefined}
-        class="gutter-handle absolute inset-y-(--pane-margin) left-[calc(var(--pane-margin)+var(--sidebar-w)+var(--pane-outline))] z-10 hidden w-[calc(var(--pane-gutter)-2*var(--pane-outline))] cursor-col-resize after:absolute after:inset-y-0 after:-inset-x-[calc(4px+var(--pane-outline))] after:content-[''] md:block"
-      />
+        class="gutter-handle absolute inset-y-(--pane-margin) left-[calc(var(--pane-margin)+var(--sidebar-w)+var(--pane-outline))] z-10 hidden w-[calc(var(--pane-gutter)-2*var(--pane-outline))] cursor-col-resize md:block"
+      >
+        <span class="absolute inset-y-0 -inset-x-[calc(4px+var(--pane-outline))]" />
+      </div>
 
       <div class="flex min-w-0 flex-1 flex-col gap-(--pane-gutter)">
         <Show when={!current()}>

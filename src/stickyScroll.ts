@@ -11,20 +11,27 @@ export function createStickyScroll(key?: string, when: () => boolean = () => tru
   let scroller!: HTMLElement
   let pinned = true
   let lastTop = 0
+  let lastHeight = 0
 
   const fromBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
   const toBottom = () => {
     scroller.scrollTop = scroller.scrollHeight
     lastTop = scroller.scrollTop
+    lastHeight = scroller.scrollHeight
   }
 
   return {
     ref: (el: HTMLElement) => (scroller = el),
-    // Any upward move unsticks; reaching the bottom again resticks. Content
-    // shrinking clamps scrollTop down too, but leaves us at the bottom.
+    // Any upward move unsticks; reaching the bottom again resticks.
     onScroll: () => {
       const top = scroller.scrollTop
+      const shrunk = scroller.scrollHeight < lastHeight - 0.5
+      lastHeight = scroller.scrollHeight
       if (top < lastTop - 0.5) {
+        // Content shrinking pulls scrollTop in to the new bottom, a thought folding up or the composer emptying on
+        // send. By the scroll event what comes next may have grown it again, short of the bottom: WebKit sends the
+        // event before the resize that would have followed. So moving up as it shrank isn't the reader's doing.
+        if (pinned && shrunk && when()) return toBottom()
         if (fromBottom() > 1) pinned = false
       } else if (fromBottom() < 24) pinned = true
       lastTop = top

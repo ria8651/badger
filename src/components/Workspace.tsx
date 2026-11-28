@@ -701,19 +701,22 @@ export function Workspace(props: {
         }}
       </For>
 
-      {/* The gutters are the handles, between the panes' outlines, grown a little each way so a thin one is easy to catch. */}
+      {/* The gutters are the handles, between the panes' outlines, grown a little each way so a thin one is easy to catch.
+          The growth is an element, not ::after: Safari doesn't show a pseudo-element's cursor. */}
       <Index each={measured().dividers}>
         {(d) => (
           <div
             onPointerDown={(e) => startResize(e, [d()])}
-            class={`gutter-handle absolute z-10 after:absolute after:content-[""] ${
-              d().dir === 'row'
-                ? 'cursor-col-resize after:inset-y-0 after:-inset-x-[calc(4px+var(--pane-outline))]'
-                : 'cursor-row-resize after:inset-x-0 after:-inset-y-[calc(4px+var(--pane-outline))]'
-            }`}
+            class={`gutter-handle absolute z-10 ${d().dir === 'row' ? 'cursor-col-resize' : 'cursor-row-resize'}`}
             data-lit={lit(keyOf(d())) || undefined}
             style={placeGutter(d().gutter, d().dir)}
-          />
+          >
+            <span
+              class={`absolute ${
+                d().dir === 'row' ? 'inset-y-0 -inset-x-[calc(4px+var(--pane-outline))]' : 'inset-x-0 -inset-y-[calc(4px+var(--pane-outline))]'
+              }`}
+            />
+          </div>
         )}
       </Index>
       <Index each={measured().junctions}>
