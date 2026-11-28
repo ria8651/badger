@@ -1,4 +1,5 @@
 import { createEffect } from 'solid-js'
+import { app } from './app.ts'
 import { needsYou } from './attention.ts'
 
 /**
@@ -12,4 +13,6 @@ export function useDocumentTitle(page: () => string) {
   createEffect(() => {
     document.querySelector<HTMLLinkElement>('link[rel=icon]')!.href = needsYou() ? '/favicon-alert.svg' : '/favicon.svg'
   })
+  // In the macOS app, the count goes on the Dock icon too.
+  createEffect(() => app?.setBadge(needsYou()))
 }

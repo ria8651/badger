@@ -22,7 +22,7 @@ export interface CreateSpec {
 
 /** Methods the host serves. */
 export interface PtyHostApi {
-  create(spec: CreateSpec): TerminalInfo
+  create(spec: CreateSpec): Promise<TerminalInfo>
   /** Kills its process, keeping the terminal and its output. */
   stop(id: string): Promise<TerminalInfo>
   restart(id: string): Promise<TerminalInfo>

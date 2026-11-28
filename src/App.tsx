@@ -189,7 +189,7 @@ export function App() {
   )
 
   return (
-    <div class="relative flex h-full gap-(--pane-gutter) bg-canvas p-(--pane-margin)" style={{ '--sidebar-w': `${sidebarWidth()}px` }}>
+    <div data-drag-canvas class="relative flex h-full gap-(--pane-gutter) bg-canvas p-(--pane-margin)" style={{ '--sidebar-w': `${sidebarWidth()}px` }}>
       <Show when={drawer()}>
         <div onClick={() => setDrawer(false)} class="fixed inset-0 z-30 animate-[fade-in_150ms_ease-out] bg-black/40 md:hidden" />
       </Show>

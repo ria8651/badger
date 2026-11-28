@@ -1,0 +1,232 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Badger</title>
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: #1b1a18;
+        color: #a8a59c;
+        font: 13px -apple-system, system-ui, sans-serif;
+        -webkit-user-select: none;
+        cursor: default;
+      }
+      body {
+        display: grid;
+        place-items: center;
+      }
+      main {
+        width: 100%;
+        max-width: 440px;
+        padding: 24px;
+        box-sizing: border-box;
+        text-align: center;
+      }
+      img {
+        width: 72px;
+        height: 72px;
+        opacity: 0.9;
+      }
+      section {
+        display: none;
+      }
+      body[data-view='status'] #status,
+      body[data-view='error'] #error,
+      body[data-view='connect'] #connect {
+        display: block;
+      }
+      #error pre {
+        color: #e5806b;
+        white-space: pre-wrap;
+        text-align: left;
+        font: 12px ui-monospace, monospace;
+        -webkit-user-select: text;
+        max-height: 40vh;
+        overflow: auto;
+      }
+      form {
+        text-align: left;
+        display: grid;
+        gap: 12px;
+      }
+      h1 {
+        font-size: 15px;
+        font-weight: 600;
+        color: #ecebe6;
+        margin: 0 0 4px;
+        text-align: center;
+      }
+      label {
+        display: grid;
+        gap: 6px;
+        color: #ecebe6;
+      }
+      label.check {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      small {
+        color: #8a877f;
+        line-height: 1.4;
+      }
+      input[type='text'],
+      input[type='password'] {
+        font: inherit;
+        color: #ecebe6;
+        background: #2a2925;
+        border: 1px solid #3b3a35;
+        border-radius: 6px;
+        padding: 7px 9px;
+        outline: none;
+      }
+      input:focus {
+        border-color: #7b7a74;
+      }
+      #token-field[hidden] {
+        display: none;
+      }
+      .problem {
+        color: #e5806b;
+        min-height: 1em;
+        margin: 0;
+      }
+      .buttons {
+        display: flex;
+        justify-content: center;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      form .buttons {
+        justify-content: flex-end;
+      }
+      button {
+        font: inherit;
+        color: #ecebe6;
+        background: #2a2925;
+        border: 1px solid #3b3a35;
+        border-radius: 6px;
+        padding: 6px 14px;
+      }
+      button.primary {
+        background: #ecebe6;
+        color: #1b1a18;
+        border-color: #ecebe6;
+      }
+      button:disabled {
+        opacity: 0.5;
+      }
+    </style>
+  </head>
+  <body data-view="status">
+    <main>
+      <section id="status">
+        <img src="icon.svg" alt="" />
+        <p id="status-text">Starting Badger…</p>
+      </section>
+
+      <section id="error">
+        <img src="icon.svg" alt="" />
+        <pre id="error-text"></pre>
+        <div class="buttons">
+          <button type="button" id="settings">Connection…</button>
+          <button type="button" class="primary" id="retry">Try Again</button>
+        </div>
+      </section>
+
+      <section id="connect">
+        <form id="form">
+          <h1>Connect to a Hub</h1>
+          <label>
+            Address
+            <input type="text" id="hub" placeholder="badger.example.com, or localhost:3001" required autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="check">
+            <input type="checkbox" id="runner" />
+            Run chats on this Mac too
+          </label>
+          <small>Chats you start in this Mac's folders run here, next to their files, while the board stays on the hub.</small>
+          <label id="token-field" hidden>
+            Runner token
+            <input type="password" id="token" placeholder="badger_…" autocomplete="off" />
+            <small id="token-help">From the hub's Settings → Runners → Add runner. It's kept in your Keychain.</small>
+          </label>
+          <p class="problem" id="problem"></p>
+          <div class="buttons">
+            <button type="button" id="cancel">Cancel</button>
+            <button type="submit" class="primary" id="submit">Connect</button>
+          </div>
+        </form>
+      </section>
+    </main>
+    <script>
+      const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args)
+      const $ = (id) => document.getElementById(id)
+      let status = { text: '', error: null }
+      let hasToken = false
+
+      // The app calls this as it finds or starts Badger; it's also asked for on load (loading_state).
+      window.__badgerStatus = (next) => {
+        status = next
+        if (document.body.dataset.view !== 'connect') render()
+      }
+      function render() {
+        const connect = location.hash.startsWith('#connect')
+        document.body.dataset.view = connect ? 'connect' : status.error ? 'error' : 'status'
+        $('status-text').textContent = status.text || 'Starting Badger…'
+        $('error-text').textContent = status.error ?? ''
+      }
+
+      // The token box shows while running chats here is ticked, empty when the Keychain has one already.
+      function showToken() {
+        $('token-field').hidden = !$('runner').checked
+        $('token').placeholder = hasToken ? 'Kept in your Keychain' : 'badger_…'
+        $('token-help').textContent = hasToken
+          ? 'Leave it empty to keep the one in your Keychain, or paste a new one.'
+          : "From the hub's Settings → Runners → Add runner. It's kept in your Keychain."
+      }
+      $('runner').addEventListener('change', showToken)
+      $('hub').addEventListener('change', async () => {
+        hasToken = await invoke('has_token', { hub: $('hub').value })
+        showToken()
+      })
+
+      $('form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        $('problem').textContent = ''
+        $('submit').disabled = true
+        try {
+          await invoke('connect', { hub: $('hub').value, runner: $('runner').checked, token: $('token').value })
+        } catch (err) {
+          $('problem').textContent = String(err)
+          $('submit').disabled = false
+        }
+      })
+      const reopen = () => invoke('reopen')
+      $('cancel').addEventListener('click', reopen)
+      $('retry').addEventListener('click', reopen)
+      $('settings').addEventListener('click', () => (location.hash = 'connect'))
+      addEventListener('hashchange', render)
+      // No title bar here either: anywhere that isn't a control moves the window, as in src/app.ts.
+      addEventListener('mousedown', (e) => {
+        if (e.button !== 0 || e.target.closest('button, input, label, pre')) return
+        e.preventDefault()
+        if (e.detail === 2) window.badgerApp?.toggleZoom()
+        else window.badgerApp?.startDrag()
+      })
+
+      invoke('loading_state').then((s) => {
+        status = s.status
+        hasToken = s.hasToken
+        $('hub').value = s.hub ?? ''
+        $('runner').checked = s.runner || location.hash === '#connect-runner'
+        showToken()
+        render()
+        if (location.hash.startsWith('#connect')) ($('runner').checked && s.hub ? $('token') : $('hub')).focus()
+      })
+    </script>
+  </body>
+</html>

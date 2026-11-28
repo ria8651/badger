@@ -171,7 +171,7 @@ export interface RunnerApi {
   importTranscript(sessionId: string, cwd: string, file: ImportedFile): Promise<void>
   /** Which of these folders Claude Code can't run in. */
   inaccessible(dirs: string[]): string[]
-  workspaceRoot(cwd: string): string
+  workspaceRoot(cwd: string): Promise<string>
   /** The slash commands and skills a chat in `cwd` can run, with where each is from. */
   commands(cwd: string): Promise<CommandInfo[]>
   /** Files and folders under `cwd` matching what's typed after `@`, relative to it, best first. */

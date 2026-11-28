@@ -75,14 +75,14 @@ function changed(): void {
   }, 100)
 }
 
-function create(spec: CreateSpec): TerminalInfo {
+async function create(spec: CreateSpec): Promise<TerminalInfo> {
   if (!existsSync(spec.cwd) || !statSync(spec.cwd).isDirectory()) throw new Error(`No such directory: ${spec.cwd}`)
   const cols = clamp(spec.cols ?? 120, 2, 1000)
   const rows = clamp(spec.rows ?? 30, 2, 500)
   const screen = new Terminal({ cols, rows, scrollback: SCROLLBACK, allowProposedApi: true })
   const serializer = new SerializeAddon()
   screen.loadAddon(serializer)
-  const root = workspaceRoot(spec.cwd)
+  const root = await workspaceRoot(spec.cwd)
   const t: Term = {
     info: {
       id: randomBytes(4).toString('hex'),
