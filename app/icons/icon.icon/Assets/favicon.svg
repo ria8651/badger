@@ -1,8 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0.4 1.2 31.2 31.2">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-3.6 -2.8 39.2 39.2">
   <g fill="#fafaf8">
     <circle cx="6.4" cy="6.8" r="5.2"/>
     <circle cx="25.6" cy="6.8" r="5.2"/>
     <path d="M16 29.6C11.5 29.6 4.6 21 3.9 14.2 3.4 8.6 8.2 4.6 16 4.6s12.6 4 12.1 9.6C27.4 21 20.5 29.6 16 29.6z" stroke="#fafaf8" stroke-width="4.8"/>
+    <!-- Under the stroke at the chin, so the art's bottom is a shape's: Icon Composer clips to shapes, not strokes -->
+    <circle cx="16" cy="29.6" r="2.4"/>
   </g>
   <g fill="#1b1a18">
     <circle cx="6.4" cy="6.8" r="3.8"/>
